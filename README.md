@@ -184,33 +184,133 @@ No steering vs follow-up distinction. One pending queue, consumed at two points:
 
 The LLM decides how to handle new messages — not hardcoded policy.
 
-### File-Based Communication
+### Workspace / Core Separation
 
-The file system is the message bus between Frontend and Backend. Each task gets its own directory:
+Agent core state and workspace are fully separated:
 
 ```
-.agent/
-├── tasks/
-│   ├── t_abc/                ← current task
-│   │   ├── task.md           ← instructions (Frontend writes)
-│   │   ├── progress.md       ← progress (Backend writes)
-│   │   ├── result.md         ← final output (Backend writes)
-│   │   ├── status.json       ← machine-readable state
-│   │   └── signal            ← control signal (abort/steer)
-│   ├── t_def/                ← completed task (archived in place)
-│   └── t_ghi/                ← another completed task
+~/.picoagent/                     ← core (agent doesn't touch directly)
+├── config.yaml                   ← global config (hot reload)
+├── tasks/                        ← task state
+│   └── {task_id}/
+│       ├── task.md               ← instructions + status (frontmatter)
+│       ├── progress.md           ← live progress (user-facing)
+│       ├── result.md             ← final output
+│       ├── session.jsonl         ← LLM conversation history
+│       └── signal                ← control signal (consumed then deleted)
+├── traces/                       ← audit logs
+│   └── {trace_id}.jsonl
+└── agents/                       ← agent runtime
+    └── frontend/
+        └── session.jsonl
+
+~/workspace/                      ← workspace (agent reads/writes freely)
+├── AGENTS.md                     ← behavior instructions
+├── SOUL.md                       ← persona
 ├── memory/
-│   ├── memory.md             ← core memory (injected into system prompt)
-│   └── {topic}.md            ← topic memories (scan/load on demand)
-└── traces/
-    └── {trace_id}.jsonl      ← audit logs
+│   ├── memory.md                 ← core memory (injected into system prompt)
+│   └── {topic}.md                ← topic memories (scan/load on demand)
+├── skills/
+│   └── {skill-name}/SKILL.md
+└── (user's project files)
 ```
 
-**Why files?**
-- Zero infrastructure — no queues, no IPC, no sockets
-- Naturally persistent — survives crashes
-- Debuggable — `cat .agent/tasks/t_abc/progress.md`
-- The Backend already has file tools — no new capabilities needed
+**Benefits:**
+- Agent can freely modify workspace (memory, skills) but not its own runtime config
+- Task state lives in core — crash recovery by reading task.md status
+- config.yaml is hot-reloaded — change models/params without restart
+- Workspace can be any directory; multiple agents can share one
+
+### Task Directory
+
+Each task is a self-contained directory. One Backend = one task directory.
+
+```
+tasks/t_001/
+├── task.md          ← definition + metadata
+├── progress.md      ← live progress (user-facing emit channel)
+├── result.md        ← final deliverable
+├── session.jsonl    ← full LLM conversation history
+└── signal           ← ephemeral control (deleted after consumed)
+```
+
+**task.md** — definition + status (frontmatter follows the universal pattern):
+
+```yaml
+---
+id: t_001
+name: "refactor main.rs"
+description: "Extract repeated functions into separate modules while keeping API stable"
+status: running          # pending → running → completed / failed / aborted
+created: 2024-02-08T14:02:00Z
+started: 2024-02-08T14:02:01Z
+completed: null
+model: claude-sonnet
+tags: [refactoring, backend]
+trace_id: t_abc
+---
+
+## Instructions
+Refactor main.rs, extract duplicated functions into independent modules.
+
+## Constraints
+- Do not change the public API
+- Ensure all tests pass
+```
+
+Frontend writes the instructions + constraints. Backend only updates status fields in frontmatter.
+
+**progress.md** — the emit channel:
+
+progress.md IS the event stream. Backend writes here knowing the user will see it. Frontend watches the file for changes and forwards new content to the user.
+
+```markdown
+## Plan
+- [x] Read source file
+- [x] Identify extractable functions
+- [ ] Extract handleAuth → auth.rs
+- [ ] Run tests
+
+## Log
+14:02 Read main.rs (2347 lines)
+14:03 Found 5 extractable functions
+14:03 Extracting handleAuth (3 call sites to update)
+
+## Decisions
+- Skipping parseConfig: depends on globalState, needs larger refactor
+```
+
+Backend's system prompt rule for progress tracking:
+
+> After each significant step, update `progress.md`:
+> 1. **Plan first** — start with a checkbox TODO list
+> 2. **Check off as you go** — mark items `[x]` when completed
+> 3. **Log key events** — append timestamped one-liners
+> 4. **Record decisions** — explain WHY when you skip or change approach
+
+**result.md** — final deliverable (written on completion):
+
+```yaml
+---
+summary: "Refactored main.rs, extracted 4 functions into modules"
+files_changed: 5
+tokens_used: 15000
+duration_s: 45
+---
+(detailed results)
+```
+
+**signal** — ephemeral control. Contents: `abort` or `steer`. Consumed then deleted by Backend.
+
+### Three Levels of Observability
+
+| File | Granularity | Audience | Content |
+|------|------------|----------|---------|
+| `progress.md` | Key milestones | User / Frontend | `14:03 Found 5 extractable functions` |
+| `traces/*.jsonl` | Every tool call, every LLM call | Machine / benchmark | `{"event":"tool_start","tool":"read_file"}` |
+| `session.jsonl` | Full conversation | Developer debug | Raw messages array |
+
+No duplication — each file serves a different consumer at a different granularity.
 
 ### Progressive Disclosure (Universal Pattern)
 
