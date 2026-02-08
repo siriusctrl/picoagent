@@ -15,70 +15,91 @@ Existing agent frameworks (OpenClaw, etc.) are powerful but complex — 50+ modu
 
 ## Architecture
 
-### Dual-Agent Design
+### Agent Hierarchy
+
+picoagent has a unified agent model with two relationship types:
 
 ```
-┌─────────────────────────────────────────┐
-│              Frontend Agent              │
-│         (lightweight, fast model)        │
-│                                          │
-│  ✦ Always responsive — never blocks      │
-│  ✦ Triages user messages                 │
-│  ✦ Simple questions → answers directly   │
-│  ✦ Complex tasks → dispatches to Backend │
-│  ✦ Controls Backend via tools            │
-│                                          │
-│  Tools:                                  │
-│    dispatch(task) — start a Backend task  │
-│    steer(msg)     — redirect Backend      │
-│    abort()        — cancel Backend task   │
-│    scan(dir)      — search by frontmatter │
-│    load(path)     — read full content     │
+Frontend ──async──→ Backend₁ ──sync──→ Subagent
+         ──async──→ Backend₂ ──sync──→ Subagent
+         ──async──→ Backend₃
+```
+
+| Relationship | Caller | Worker | Sync | Result Delivery |
+|-------------|--------|--------|------|-----------------|
+| Frontend → Backend | Frontend | Backend | **async** (don't wait) | Files (progress.md / result.md) |
+| Backend → Subagent | Backend | Subagent | **sync** (wait) | Return value |
+
+- **Frontend** is the orchestrator — dispatches multiple Backends, routes user messages, handles ambiguity
+- **Backend** is the worker — runs tool-calling loops, can spawn sync subagents for subtasks
+- **Subagent** is a child worker — executes a focused subtask and returns the result
+
+```
+┌──────────────────────────────────────────┐
+│              Frontend Agent               │
+│         (lightweight, fast model)         │
+│                                           │
+│  ✦ Always responsive — never blocks       │
+│  ✦ Dispatches multiple Backends in parallel│
+│  ✦ Routes steer/abort to correct Backend  │
+│  ✦ Disambiguates when needed              │
+│  ✦ Simple questions → answers directly    │
+│                                           │
+│  Tools:                                   │
+│    dispatch(task) — start a Backend task   │
+│    steer(id, msg) — redirect a Backend    │
+│    abort(id)      — cancel a Backend task  │
+│    scan(dir)      — search by frontmatter  │
+│    load(path)     — read full content      │
 ├──────────────────────────────────────────┤
-│         File System (the "bus")           │
-│                                          │
-│  .agent/                                 │
-│  ├── tasks/{task_id}/                    │
-│  │   ├── task.md        ← instructions   │
-│  │   ├── progress.md    ← live progress   │
-│  │   ├── result.md      ← final output   │
-│  │   ├── status.json    ← machine state   │
-│  │   └── signal         ← control signal  │
-│  ├── memory/                             │
-│  │   ├── memory.md      ← core memory    │
-│  │   └── {topic}.md     ← topic memories │
-│  └── traces/                             │
-│      └── {trace_id}.jsonl                │
+│         File System (the "bus")            │
+│                                           │
+│  .agent/                                  │
+│  ├── tasks/                               │
+│  │   ├── t_001/        ← Backend₁ running │
+│  │   ├── t_002/        ← Backend₂ running │
+│  │   ├── t_003/        ← completed        │
+│  │   Each task dir contains:              │
+│  │     task.md       ← instructions       │
+│  │     progress.md   ← live progress      │
+│  │     result.md     ← final output       │
+│  │     status.json   ← machine state      │
+│  │     signal        ← control signal     │
+│  ├── memory/                              │
+│  │   ├── memory.md   ← core (in prompt)   │
+│  │   └── {topic}.md  ← on-demand          │
+│  └── traces/                              │
+│      └── {trace_id}.jsonl                 │
 ├──────────────────────────────────────────┤
-│              Backend Agent               │
-│         (powerful model + tools)         │
-│                                          │
-│  ✦ Runs tool-calling loop                │
-│  ✦ Updates progress.md after each step   │
-│  ✦ Checks signal file between tools      │
-│  ✦ Can spawn sub-agents for subtasks     │
-│  ✦ Never talks to user directly          │
-│                                          │
-│  Tools:                                  │
-│    shell(cmd)        — execute commands   │
-│    read_file(path)   — read files         │
-│    write_file(path)  — write files        │
-│    scan(dir)         — search by metadata │
-│    load(path)        — read full content  │
-│    + skill-provided tools                │
+│            Backend Agent (×N)             │
+│         (powerful model + tools)          │
+│                                           │
+│  ✦ Runs tool-calling loop                 │
+│  ✦ Updates progress.md after each step    │
+│  ✦ Checks signal file between tools       │
+│  ✦ Can spawn sync sub-agents for subtasks │
+│  ✦ Never talks to user directly           │
+│                                           │
+│  Tools:                                   │
+│    shell(cmd)        — execute commands    │
+│    read_file(path)   — read files          │
+│    write_file(path)  — write files         │
+│    scan(dir)         — search by metadata  │
+│    load(path)        — read full content   │
+│    + skill-provided tools                 │
 └──────────────────────────────────────────┘
 ```
 
 ### Frontend is Optional
 
 Without Frontend, picoagent is a single-agent CLI tool (stdin → Backend → stdout).
-With Frontend, it becomes a responsive assistant that handles multiple messages gracefully.
+With Frontend, it becomes a responsive multi-task assistant.
 
 ```
 # Single-agent mode (no Frontend)
 echo "refactor main.rs" | picoagent
 
-# Dual-agent mode (with Frontend)
+# Multi-agent mode (with Frontend)
 picoagent --frontend
 ```
 
@@ -96,14 +117,36 @@ Main/Subagent:
 
 Frontend/Backend:
   User: "refactor main.rs"
-  Frontend: → dispatch → "On it!"   ← instant
+  Frontend: → dispatch(Backend₁) → "On it!"       ← instant
   User: "also fix utils.rs"
-  Frontend: → queue → "Queued"       ← instant
+  Frontend: → dispatch(Backend₂) → "Started too!"  ← instant, parallel
   User: "are you done yet?"
-  Frontend: → reads progress.md      ← instant
+  Frontend: → scan active tasks → "Backend₁ is 3/7 done, Backend₂ just started"
 ```
 
-The Frontend never blocks because it doesn't do heavy work.
+The Frontend never blocks because it doesn't do heavy work. And it can run **multiple Backends simultaneously**.
+
+### Smart Routing & Disambiguation
+
+The Frontend uses LLM intelligence to route messages to the right Backend:
+
+```
+# Clear target — route directly
+User: "stop the refactoring"
+Frontend: scan(tasks/, {status: "running"}) → only one refactor task → abort(t_001)
+
+# Ambiguous — ask the user
+User: "stop the refactoring"
+Frontend: scan(tasks/, {status: "running"}) → two refactor tasks found
+Frontend: "I have two refactoring tasks running:
+           1. t_001: refactor main.rs (5/7 done)
+           2. t_002: refactor auth module (2/4 done)
+           Which one should I stop? Or both?"
+
+# Unrelated to any Backend — answer directly
+User: "what time is it?"
+Frontend: "It's 3:48 PM"   ← no Backend involved
+```
 
 ## Core Concepts
 
