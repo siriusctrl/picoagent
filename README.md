@@ -11,6 +11,7 @@ Existing agent frameworks (OpenClaw, etc.) are powerful but complex — 50+ modu
 - **File-based communication** between agents (no message queues, no event buses)
 - **JSONL tracing** for full observability
 - **Extensible via tools and skills**, not code changes
+- **Everything is a markdown file with frontmatter** — one pattern for all discovery and retrieval
 
 ## Architecture
 
@@ -31,18 +32,21 @@ Existing agent frameworks (OpenClaw, etc.) are powerful but complex — 50+ modu
 │    dispatch(task) — start a Backend task  │
 │    steer(msg)     — redirect Backend      │
 │    abort()        — cancel Backend task   │
-│    read_file()    — read progress/status  │
+│    scan(dir)      — search by frontmatter │
+│    load(path)     — read full content     │
 ├──────────────────────────────────────────┤
 │         File System (the "bus")           │
 │                                          │
 │  .agent/                                 │
-│  ├── control/                            │
-│  │   ├── task.md     ← Frontend writes   │
-│  │   └── signal      ← abort/steer       │
-│  ├── state/                              │
-│  │   ├── status.json ← machine-readable  │
-│  │   └── progress.md ← human-readable    │
-│  ├── result.md       ← final output      │
+│  ├── tasks/{task_id}/                    │
+│  │   ├── task.md        ← instructions   │
+│  │   ├── progress.md    ← live progress   │
+│  │   ├── result.md      ← final output   │
+│  │   ├── status.json    ← machine state   │
+│  │   └── signal         ← control signal  │
+│  ├── memory/                             │
+│  │   ├── memory.md      ← core memory    │
+│  │   └── {topic}.md     ← topic memories │
 │  └── traces/                             │
 │      └── {trace_id}.jsonl                │
 ├──────────────────────────────────────────┤
@@ -59,6 +63,8 @@ Existing agent frameworks (OpenClaw, etc.) are powerful but complex — 50+ modu
 │    shell(cmd)        — execute commands   │
 │    read_file(path)   — read files         │
 │    write_file(path)  — write files        │
+│    scan(dir)         — search by metadata │
+│    load(path)        — read full content  │
 │    + skill-provided tools                │
 └──────────────────────────────────────────┘
 ```
@@ -137,21 +143,86 @@ The LLM decides how to handle new messages — not hardcoded policy.
 
 ### File-Based Communication
 
-The file system is the message bus between Frontend and Backend.
+The file system is the message bus between Frontend and Backend. Each task gets its own directory:
 
-| File | Writer | Reader | Purpose |
-|------|--------|--------|---------|
-| `control/task.md` | Frontend | Backend | Task instructions |
-| `control/signal` | Frontend | Backend | Control signals (abort/steer) |
-| `state/status.json` | Backend | Frontend | Machine-readable state |
-| `state/progress.md` | Backend | Frontend | Human/LLM-readable progress |
-| `result.md` | Backend | Frontend | Final output |
+```
+.agent/
+├── tasks/
+│   ├── t_abc/                ← current task
+│   │   ├── task.md           ← instructions (Frontend writes)
+│   │   ├── progress.md       ← progress (Backend writes)
+│   │   ├── result.md         ← final output (Backend writes)
+│   │   ├── status.json       ← machine-readable state
+│   │   └── signal            ← control signal (abort/steer)
+│   ├── t_def/                ← completed task (archived in place)
+│   └── t_ghi/                ← another completed task
+├── memory/
+│   ├── memory.md             ← core memory (injected into system prompt)
+│   └── {topic}.md            ← topic memories (scan/load on demand)
+└── traces/
+    └── {trace_id}.jsonl      ← audit logs
+```
 
 **Why files?**
 - Zero infrastructure — no queues, no IPC, no sockets
 - Naturally persistent — survives crashes
-- Debuggable — `cat .agent/state/progress.md`
+- Debuggable — `cat .agent/tasks/t_abc/progress.md`
 - The Backend already has file tools — no new capabilities needed
+
+### Progressive Disclosure (Universal Pattern)
+
+**Everything in picoagent is a markdown file with YAML frontmatter.** This creates a universal discovery protocol:
+
+```markdown
+---
+name: "refactor main.rs"
+status: completed
+created: 2024-02-08T14:02:00Z
+tags: [refactoring, backend]
+---
+
+(detailed content, loaded on demand)
+```
+
+The same pattern applies everywhere:
+
+| Entity | Frontmatter Fields | Body |
+|--------|-------------------|------|
+| **Skill** | name, description | Usage instructions |
+| **Task** | name, status, created, tags | Detailed plan + progress |
+| **Memory** | topic, tags, updated, importance | Knowledge content |
+
+**Two tools power all retrieval:**
+
+```typescript
+// scan: narrow candidates, returns frontmatter only
+scan(dir: string, pattern?: Record<string, string>): DocMeta[]
+
+// load: read full content of a specific file
+load(path: string): { frontmatter, body }
+```
+
+`scan` supports pattern matching on frontmatter fields to reduce candidates:
+
+```
+scan("tasks/")                              → 200 frontmatter entries
+scan("tasks/", { tags: "*refactor*" })      → 12 entries
+scan("tasks/", { status: "completed" })     → 150 entries
+
+# LLM reviews narrowed results, then selectively loads:
+load("tasks/t_abc/task.md")                 → full content
+```
+
+**What goes where:**
+
+| Content | Strategy | Reason |
+|---------|----------|--------|
+| `memory.md` (core) | System prompt | Always needed |
+| Skill descriptions | System prompt | Always needed for triggering |
+| Large task history | `scan` → `load` | Too many for context |
+| Accumulated memories | `scan` → `load` | Grows over time |
+
+Small + essential = inject into system prompt. Large + accumulated = scan/load on demand.
 
 ### Tracing
 
@@ -161,21 +232,29 @@ Every task gets a JSONL trace file for observability and benchmarking:
 .agent/traces/{trace_id}.jsonl
 ```
 
-Each line is a structured event:
+Each line is a structured event with `parent_span` for call stack reconstruction:
 
 ```jsonl
-{"ts":1707368520,"trace_id":"t_abc","span_id":"s_1","agent":"backend","event":"task_start","task":"refactor main.rs"}
-{"ts":1707368521,"trace_id":"t_abc","span_id":"s_1","agent":"backend","event":"llm_call","model":"sonnet","tokens_in":1200}
-{"ts":1707368523,"trace_id":"t_abc","span_id":"s_1","agent":"backend","event":"tool_start","tool":"read_file","args":{"path":"main.rs"}}
-{"ts":1707368523,"trace_id":"t_abc","span_id":"s_1","agent":"backend","event":"tool_end","tool":"read_file","duration_ms":50}
-{"ts":1707368525,"trace_id":"t_abc","span_id":"s_1","agent":"backend","event":"subagent_spawn","child_span":"s_2","task":"extract auth module"}
-{"ts":1707368530,"trace_id":"t_abc","span_id":"s_2","agent":"subagent","event":"task_end","result":"done"}
-{"ts":1707368535,"trace_id":"t_abc","span_id":"s_1","agent":"backend","event":"task_end","result":"refactoring complete"}
+{"ts":1707368520,"trace_id":"t_abc","span_id":"s_1","parent_span":null,"agent":"backend","event":"task_start","task":"refactor main.rs"}
+{"ts":1707368521,"trace_id":"t_abc","span_id":"s_1","parent_span":null,"event":"llm_call","model":"sonnet","tokens_in":1200}
+{"ts":1707368523,"trace_id":"t_abc","span_id":"s_1","parent_span":null,"event":"tool_start","tool":"read_file"}
+{"ts":1707368525,"trace_id":"t_abc","span_id":"s_1","parent_span":null,"event":"subagent_spawn","child_span":"s_2","task":"extract auth module"}
+{"ts":1707368525,"trace_id":"t_abc","span_id":"s_2","parent_span":"s_1","agent":"subagent","event":"task_start","task":"extract auth module"}
+{"ts":1707368530,"trace_id":"t_abc","span_id":"s_2","parent_span":"s_1","event":"task_end","result":"done"}
+{"ts":1707368535,"trace_id":"t_abc","span_id":"s_1","parent_span":null,"event":"task_end","result":"refactoring complete"}
 ```
 
-- `trace_id` correlates all events across agents (including sub-agents)
-- `span_id` identifies individual agent runs
-- Analyze with `jq`, build dashboards, or feed into benchmarking tools
+Reconstruct the full call stack:
+
+```
+s_1: backend "refactor main.rs"
+├── tool: read_file
+├── tool: write_file
+├── s_2: subagent "extract auth module"
+│   ├── tool: read_file
+│   └── tool: write_file
+└── tool: shell("npm test")
+```
 
 ### Tools
 
@@ -201,7 +280,7 @@ Built-in tools and skill-provided tools use the same interface. Adding a tool ne
 
 ### Skills
 
-Skills are modular extensions that provide domain knowledge + tools. Following the SKILL.md convention:
+Skills are modular extensions that provide domain knowledge + tools. They follow the same frontmatter convention as everything else:
 
 ```
 skills/
@@ -230,9 +309,9 @@ Use `search` tool for queries, `fetch` tool for page content.
 ```
 
 **Three-level progressive loading:**
-1. **Metadata** (name + description) — always in context (~100 tokens)
+1. **Metadata** (name + description) — always in system prompt (~100 tokens)
 2. **SKILL.md body** — loaded when skill triggers
-3. **References/scripts** — loaded on demand
+3. **References/scripts** — loaded on demand by the agent
 
 The Core discovers skills by scanning the skills directory. Adding a skill = adding a folder. No code changes.
 
@@ -240,12 +319,12 @@ The Core discovers skills by scanning the skills directory. Adding a skill = add
 
 ```
 src/
-├── core/                  ← ~500 lines, stable
+├── core/                  ← ~500 lines, stable after v1
 │   ├── agent-loop.ts      ← tool-calling loop
 │   ├── llm.ts             ← LLM API calls
-│   ├── loader.ts          ← tool/skill discovery
+│   ├── scanner.ts         ← frontmatter scan/load (universal)
 │   ├── trace.ts           ← JSONL tracing
-│   ├── types.ts           ← Tool/Skill interfaces
+│   ├── types.ts           ← Tool/Skill/DocMeta interfaces
 │   └── bridge.ts          ← Frontend↔Backend file protocol
 │
 ├── frontend/              ← optional
@@ -268,8 +347,8 @@ src/
 
 - [ ] **v0.1** — Backend only, stdin/stdout, 3 tools (shell, read, write)
 - [ ] **v0.2** — Tool-calling loop + JSONL tracing
-- [ ] **v0.3** — Skill loading system
-- [ ] **v0.4** — File-based progress tracking
+- [ ] **v0.3** — Skill loading system + scan/load
+- [ ] **v0.4** — File-based task tracking + memory
 - [ ] **v0.5** — Frontend agent (optional dual-agent mode)
 - [ ] **v0.6** — Sub-agent support (Backend can fork child agents)
 - [ ] **v0.7** — Channel integration (single channel, TBD)
@@ -279,7 +358,6 @@ src/
 Inspired by studying the architectures of:
 - [OpenClaw](https://github.com/openclaw/openclaw) — comprehensive agent framework
 - [NanoClaw](https://github.com/gavrielc/nanoclaw) — minimal Claude agent with container isolation
-- [pi-agent-core](https://github.com/nicobrinkkemper/pi-agent-core) — the agent loop that powers OpenClaw
 
 ## License
 
