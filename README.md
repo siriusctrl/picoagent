@@ -190,12 +190,14 @@ Main Agent and Workers get different context:
 |---------|-----------|--------|
 | SOUL.md | ✅ (persona) | ❌ |
 | USER.md | ✅ (preferences) | ❌ |
-| AGENTS.md | ✅ (Main section) | ✅ (Worker section) |
-| memory.md | ✅ (always loaded) | Selected subset |
-| Skill descriptions | ✅ (frontmatter, for routing) | ✅ (full body, for execution) |
-| Task state | All active tasks | Own task only |
+| AGENTS.md | ✅ | ❌ |
+| memory.md | ✅ (always loaded) | ❌ |
+| Skill frontmatter | ✅ (for routing) | ✅ (same as Main) |
+| Skill body | On demand | On demand |
+| task.md | ❌ | ✅ (own task only) |
+| Task state | All active tasks (scan) | Own task only |
 
-Main Agent curates what context each Worker receives at dispatch time — relevant memory, triggered skills, task instructions. Workers stay focused and token-efficient.
+Workers get **task.md + skills**. That's it. No persona, no user preferences, no memory — Main Agent curates everything the Worker needs into `task.md` at dispatch time. If a Worker needs specific context (memory snippets, constraints), Main Agent writes it into the task instructions.
 
 ### Task Directory
 
@@ -315,6 +317,109 @@ Main: "3:48 PM" (no Worker needed)
 | `sessions/*.jsonl` | Full conversation | Developer debug | Raw LLM messages |
 
 Traces include `trace_id`, `span_id`, and `parent_span` for call stack reconstruction across Workers and sub-workers.
+
+### Compaction
+
+Long sessions accumulate context. Compaction keeps agents within their context window by summarizing old messages and truncating oversized tool results.
+
+#### Two-Layer Defense
+
+**Layer 1: Tool Result Truncation** — prevents a single tool call from blowing up context.
+
+```typescript
+const MAX_TOOL_RESULT_CHARS = 32_000; // ~8K tokens
+
+function truncateToolResult(result: string): string {
+  if (result.length <= MAX_TOOL_RESULT_CHARS) return result;
+
+  // Head + tail — command output often has key info at the end
+  const head = result.slice(0, 24_000);
+  const tail = result.slice(-6_000);
+  return `${head}\n\n... (${result.length} chars total, middle truncated) ...\n\n${tail}`;
+}
+```
+
+Applied at tool execution time, before the result enters the session. Every tool result goes through this gate.
+
+**Layer 2: Session Compaction** — summarizes old conversation history when context grows too large.
+
+```
+Trigger: estimatedTokens > contextWindow * 3/4
+         (i.e., only 1/4 of context window remaining)
+
+1. Find cut point — keep recent ~1/4 context window of messages
+2. Summarize everything before the cut point
+3. Replace old messages with summary
+4. Append programmatically-extracted file lists
+```
+
+#### Unified Compaction Prompt
+
+Same prompt for Main Agent and Workers. The LLM adapts naturally based on what's in context (task.md for Workers, general conversation for Main Agent):
+
+```
+Summarize this conversation as a context checkpoint
+for another LLM to continue the work.
+
+If a task definition file (task.md) exists in context,
+reference it instead of restating the goal.
+
+## Goal
+[What is being accomplished? Reference task.md if present.]
+
+## Key Decisions
+- [Decision]: [Why]
+
+## Context
+[Essential details needed to continue — error messages,
+ constraints discovered, approaches tried/rejected]
+
+Preserve exact file paths, function names, and error messages.
+Keep it concise.
+```
+
+Why so minimal? Because picoagent externalizes state into files:
+- **Progress** → `progress.md` (no need to summarize what's already written)
+- **Files touched** → extracted programmatically from tool call history (more reliable than LLM extraction)
+- **Task definition** → `task.md` (just reference it)
+
+The LLM summary only captures what *isn't* in files: intent, reasoning, and soft context.
+
+#### File Operations Extraction
+
+Appended to every compaction summary automatically:
+
+```typescript
+// Extracted from tool call history, not LLM-generated
+function extractFileOps(messages: Message[]): { read: Set<string>, modified: Set<string> } {
+  const ops = { read: new Set<string>(), modified: new Set<string>() };
+  for (const msg of messages) {
+    if (msg.role !== 'toolResult') continue;
+    if (msg.toolName === 'read' || msg.toolName === 'load') ops.read.add(msg.args.path);
+    if (msg.toolName === 'write' || msg.toolName === 'edit') ops.modified.add(msg.args.path);
+    if (msg.toolName === 'shell') { /* parse common patterns: cat, sed, etc. */ }
+  }
+  return ops;
+}
+```
+
+#### Incremental Updates
+
+When a previous compaction summary exists, use an update prompt instead of regenerating from scratch:
+
+```
+The messages above are NEW conversation messages.
+Update the existing summary (provided in <previous-summary> tags)
+with new information.
+
+Rules:
+- PRESERVE existing information
+- ADD new decisions and context
+- REMOVE anything no longer relevant
+- Use the same format as the original summary
+```
+
+This keeps the summary accurate as the session grows through multiple compaction cycles.
 
 ### Tools
 
