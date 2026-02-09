@@ -23,8 +23,12 @@ export const dispatchTool: Tool<typeof DispatchParams> = {
       tags: args.tags
     });
 
+    if (context.onTaskCreated) {
+      context.onTaskCreated(taskInfo.dir);
+    }
+
     return {
-      content: `Task ${taskInfo.id} created: ${taskInfo.name}. Worker spawning not yet implemented (v0.5).`
+      content: `Task ${taskInfo.id} dispatched: ${taskInfo.name}. Worker started.`
     };
   }
 };

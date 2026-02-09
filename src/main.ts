@@ -1,7 +1,6 @@
 import { createInterface } from 'readline';
 import { homedir } from 'os';
 import { join } from 'path';
-import { runAgentLoopStreaming } from './core/agent-loop.js';
 import { shellTool } from './tools/shell.js';
 import { readFileTool } from './tools/read-file.js';
 import { writeFileTool } from './tools/write-file.js';
@@ -10,10 +9,10 @@ import { loadTool } from './tools/load.js';
 import { dispatchTool } from './tools/dispatch.js';
 import { steerTool } from './tools/steer.js';
 import { abortTool } from './tools/abort.js';
-import { Message, ToolContext } from './core/types.js';
+import { ToolContext } from './core/types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
-import { Tracer } from './core/trace.js';
 import { scan } from './core/scanner.js';
+import { Runtime } from './core/runtime.js';
 
 const apiKey = process.env.ANTHROPIC_API_KEY;
 if (!apiKey) {
@@ -54,12 +53,16 @@ const provider = new AnthropicProvider({
   systemPrompt
 });
 
-const tools = [
-  shellTool, 
-  readFileTool, 
-  writeFileTool, 
-  scanTool, 
-  loadTool,
+const workerTools = [
+  shellTool,
+  readFileTool,
+  writeFileTool,
+  scanTool,
+  loadTool
+];
+
+const mainTools = [
+  ...workerTools,
   dispatchTool,
   steerTool,
   abortTool
@@ -70,14 +73,26 @@ const context: ToolContext = {
   tasksRoot: join(process.cwd(), ".tasks")
 };
 
-const messages: Message[] = [];
+const traceDir = join(homedir(), '.picoagent', 'traces');
+
+const runtime = new Runtime(
+  provider,
+  mainTools,
+  workerTools,
+  context,
+  systemPrompt,
+  traceDir
+);
+
+// Set callback
+context.onTaskCreated = (taskDir) => runtime.spawnWorker(taskDir);
 
 const rl = createInterface({
   input: process.stdin,
   output: process.stdout
 });
 
-console.log('picoagent v0.4');
+console.log('picoagent v0.5');
 console.log('Type "exit" to quit');
 
 function ask() {
@@ -88,22 +103,8 @@ function ask() {
     }
 
     try {
-      messages.push({ role: 'user', content: input });
-      
-      const traceDir = join(homedir(), '.picoagent', 'traces');
-      const tracer = new Tracer(traceDir);
-
-      const response = await runAgentLoopStreaming(
-        messages,
-        tools,
-        provider,
-        context,
-        undefined,
-        (text) => process.stdout.write(text),
-        tracer
-      );
-
-      console.log(); // Add a newline after the streamed response
+      await runtime.onUserMessage(input, (text) => process.stdout.write(text));
+      console.log(); 
     } catch (error: any) {
       console.error('Error:', error.message || error);
     }

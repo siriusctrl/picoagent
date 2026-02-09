@@ -77,5 +77,27 @@ Status flow: `pending` → `running` → `completed` | `failed` | `aborted`
 - `steer(id, message)`: Redirect a running task.
 - `abort(id)`: Stop a running task.
 
-Workers (v0.5) will pick up pending tasks, update status to running, and consume signals.
+## Workers & Runtime (v0.5)
+
+### Worker Implementation
+- One worker per task directory
+- Runs `src/core/worker.ts` async
+- Reads instructions from `task.md`
+- Updates status: `pending` → `running` → `completed` | `failed`
+- Writes logs to `progress.md`
+- Writes final output to `result.md`
+- System prompt includes task context but NO user profile or personality
+- Uses blocking `runAgentLoop` internally
+
+### Runtime Coordination
+- `src/core/runtime.ts` manages the main loop
+- Spawns workers via `spawnWorker(taskDir)`
+- Tracks active workers in memory
+- Injects completion notifications into the main agent stream via `onUserMessage`
+- Main agent wakes up to handle worker results
+
+### Tool Context
+- `onTaskCreated` callback added to `ToolContext`
+- `dispatch` tool triggers this callback to spawn workers immediately
+
 

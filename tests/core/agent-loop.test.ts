@@ -20,7 +20,7 @@ const errorTool: Tool<any> = {
 };
 
 const mockTools = [mockTool, errorTool];
-const mockContext = { cwd: process.cwd() };
+const mockContext: ToolContext = { cwd: process.cwd(), tasksRoot: process.cwd() };
 
 class MockProvider implements Provider {
     model = 'mock-model';

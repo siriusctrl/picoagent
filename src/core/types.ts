@@ -46,6 +46,7 @@ export interface ToolDefinition {
 export interface ToolContext {
   cwd: string;
   tasksRoot: string;
+  onTaskCreated?: (taskDir: string) => void;
 }
 
 export interface ToolResult {
