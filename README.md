@@ -349,10 +349,43 @@ src/
 │   ├── scan.ts / load.ts
 │   └── dispatch.ts / steer.ts / abort.ts
 │
-└── main.ts                    ← REPL entry point
+├── main.ts                    ← REPL entry point
+└── server.ts                  ← HTTP server entry point (SSE streaming)
 ```
 
 **Design principle:** `core/` is the kernel — 4 files that stabilize after v1. Everything else builds on top.
+
+## Usage
+
+### REPL
+
+```bash
+ANTHROPIC_API_KEY=sk-... npm run dev
+```
+
+### HTTP Server
+
+```bash
+ANTHROPIC_API_KEY=sk-... npm run dev:server
+# listening on http://localhost:3000
+```
+
+Endpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/chat` | Send message, SSE streaming response |
+| `GET` | `/tasks` | List all tasks |
+| `GET` | `/tasks/:id` | Task details + progress + result |
+| `POST` | `/tasks/:id/steer` | Redirect a running worker |
+| `POST` | `/tasks/:id/abort` | Cancel a running worker |
+
+**Chat SSE events:**
+```
+data: {"type":"delta","text":"Hello"}    ← streaming token
+data: {"type":"done","text":"Hello..."}  ← final response
+data: {"type":"error","error":"..."}     ← on failure
+```
 
 ## TODO
 
@@ -360,7 +393,7 @@ src/
 
 ## Stats
 
-- **2616 lines** across 33 files
+- **2878 lines** across 34 files
 - **39 tests**, all passing under strict mode
 
 ## Acknowledgments
