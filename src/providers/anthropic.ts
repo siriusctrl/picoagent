@@ -7,7 +7,7 @@ import {
   ToolCall,
   ToolDefinition
 } from '../core/types.js';
-import { Provider, ProviderConfig } from '../core/provider.js';
+import { Provider, ProviderConfig, StreamEvent } from '../core/provider.js';
 
 // === Response validation schemas (trust boundary: API response) ===
 
@@ -112,5 +112,90 @@ export class AnthropicProvider implements Provider {
     });
 
     return { role: 'assistant', content };
+  }
+
+  async *stream(
+    messages: Message[],
+    tools: ToolDefinition[],
+    systemPrompt?: string
+  ): AsyncIterable<StreamEvent> {
+    const system = systemPrompt || this.config.systemPrompt;
+
+    const anthropicMessages: Anthropic.MessageParam[] = [];
+
+    for (const m of messages) {
+      if (m.role === 'user') {
+        anthropicMessages.push({ role: 'user', content: m.content });
+      } else if (m.role === 'assistant') {
+        anthropicMessages.push({
+          role: 'assistant',
+          content: m.content.map(c =>
+            c.type === 'text'
+              ? { type: 'text' as const, text: c.text }
+              : { type: 'tool_use' as const, id: c.id, name: c.name, input: c.arguments }
+          )
+        });
+      } else if (m.role === 'toolResult') {
+        const block = {
+          type: 'tool_result' as const,
+          tool_use_id: m.toolCallId,
+          content: m.content,
+          is_error: m.isError
+        };
+
+        // Anthropic expects consecutive tool results grouped in a single user message
+        const last = anthropicMessages[anthropicMessages.length - 1];
+        if (last?.role === 'user' && Array.isArray(last.content)
+            && (last.content[0] as any)?.type === 'tool_result') {
+          (last.content as any[]).push(block);
+        } else {
+          anthropicMessages.push({ role: 'user', content: [block] });
+        }
+      }
+    }
+
+    const anthropicTools: Anthropic.Tool[] = tools.map(t => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.parameters as Anthropic.Tool.InputSchema
+    }));
+
+    const stream = this.client.messages.stream({
+      model: this.config.model,
+      max_tokens: this.config.maxTokens || 4096,
+      system,
+      messages: anthropicMessages,
+      tools: anthropicTools,
+    });
+
+    for await (const event of stream) {
+      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+        yield { type: 'text_delta', text: event.delta.text };
+      } else if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+        yield { type: 'tool_start', toolCall: { id: event.content_block.id, name: event.content_block.name } };
+      }
+    }
+
+    const finalMessage = await stream.finalMessage();
+
+    // Validate API response at trust boundary
+    const validated = ResponseSchema.parse({
+      role: finalMessage.role,
+      content: finalMessage.content
+    });
+
+    const content: (TextContent | ToolCall)[] = validated.content.map(block => {
+      if (block.type === 'text') {
+        return { type: 'text' as const, text: block.text };
+      }
+      return {
+        type: 'toolCall' as const,
+        id: block.id,
+        name: block.name,
+        arguments: block.input as Record<string, unknown>
+      };
+    });
+
+    yield { type: 'done', message: { role: 'assistant', content } };
   }
 }

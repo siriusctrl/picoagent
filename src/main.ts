@@ -1,5 +1,5 @@
 import { createInterface } from 'readline';
-import { runAgentLoop } from './core/agent-loop.js';
+import { runAgentLoopStreaming } from './core/agent-loop.js';
 import { shellTool } from './tools/shell.js';
 import { readFileTool } from './tools/read-file.js';
 import { writeFileTool } from './tools/write-file.js';
@@ -46,13 +46,16 @@ function ask() {
     try {
       messages.push({ role: 'user', content: input });
       
-      const response = await runAgentLoop(messages, tools, provider, context);
+      const response = await runAgentLoopStreaming(
+        messages,
+        tools,
+        provider,
+        context,
+        undefined,
+        (text) => process.stdout.write(text)
+      );
 
-      for (const block of response.content) {
-        if (block.type === 'text') {
-          console.log(block.text);
-        }
-      }
+      console.log(); // Add a newline after the streamed response
     } catch (error: any) {
       console.error('Error:', error.message || error);
     }

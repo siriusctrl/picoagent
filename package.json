@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "test": "node --import tsx --test tests/**/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
@@ -12,6 +13,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.2.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

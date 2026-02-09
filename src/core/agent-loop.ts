@@ -18,6 +18,48 @@ function toToolDefinitions(tools: Tool[]): ToolDefinition[] {
   }));
 }
 
+export function truncateOutput(content: string): string {
+  if (content.length > 32000) {
+    const head = content.substring(0, 24000);
+    const tail = content.substring(content.length - 6000);
+    return `${head}\n... [${content.length - 30000} chars truncated] ...\n${tail}`;
+  }
+  return content;
+}
+
+async function executeTool(
+    toolCall: import('./types.js').ToolCall,
+    tools: Tool[],
+    context: ToolContext
+): Promise<ToolResultMessage> {
+      const tool = tools.find(t => t.name === toolCall.name);
+      let resultContent = 'Tool not found';
+      let isError = true;
+
+      if (tool) {
+        try {
+          // Validate LLM-generated args through Zod schema
+          const validatedArgs = tool.parameters.parse(toolCall.arguments);
+          const result = await tool.execute(validatedArgs, context);
+          resultContent = result.content;
+          isError = result.isError || false;
+        } catch (error: unknown) {
+          if (error instanceof z.ZodError) {
+            resultContent = `Invalid arguments: ${error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ')}`;
+          } else {
+            resultContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
+      }
+      
+      return {
+        role: 'toolResult',
+        toolCallId: toolCall.id,
+        content: truncateOutput(resultContent),
+        isError
+      };
+}
+
 export async function runAgentLoop(
   messages: Message[],
   tools: Tool[],
@@ -40,40 +82,50 @@ export async function runAgentLoop(
     }
 
     for (const toolCall of toolCalls) {
-      const tool = tools.find(t => t.name === toolCall.name);
-      let resultContent = 'Tool not found';
-      let isError = true;
+      const toolResult = await executeTool(toolCall, tools, context);
+      messages.push(toolResult);
+    }
+  }
+}
 
-      if (tool) {
-        try {
-          // Validate LLM-generated args through Zod schema
-          const validatedArgs = tool.parameters.parse(toolCall.arguments);
-          const result = await tool.execute(validatedArgs, context);
-          resultContent = result.content;
-          isError = result.isError || false;
-        } catch (error: unknown) {
-          if (error instanceof z.ZodError) {
-            resultContent = `Invalid arguments: ${error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ')}`;
-          } else {
-            resultContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
-          }
+export async function runAgentLoopStreaming(
+  messages: Message[],
+  tools: Tool[],
+  provider: Provider,
+  context: ToolContext,
+  systemPrompt?: string,
+  onTextDelta?: (text: string) => void
+): Promise<AssistantMessage> {
+  const toolDefs = toToolDefinitions(tools);
+
+  while (true) {
+    let response: AssistantMessage | undefined;
+    const stream = provider.stream(messages, toolDefs, systemPrompt);
+    
+    for await (const event of stream) {
+        if (event.type === 'text_delta' && event.text) {
+            onTextDelta?.(event.text);
+        } else if (event.type === 'done' && event.message) {
+            response = event.message;
         }
-      }
+    }
+    
+    if (!response) {
+        throw new Error("Stream ended without a final message");
+    }
 
-      // Truncate result if too long (head + tail)
-      if (resultContent.length > 32000) {
-        const head = resultContent.substring(0, 24000);
-        const tail = resultContent.substring(resultContent.length - 6000);
-        resultContent = `${head}\n... [${resultContent.length - 30000} chars truncated] ...\n${tail}`;
-      }
+    messages.push(response);
 
-      const toolResult: ToolResultMessage = {
-        role: 'toolResult',
-        toolCallId: toolCall.id,
-        content: resultContent,
-        isError
-      };
+    const toolCalls = response.content.filter(
+      (block): block is import('./types.js').ToolCall => block.type === 'toolCall'
+    );
 
+    if (toolCalls.length === 0) {
+      return response;
+    }
+
+    for (const toolCall of toolCalls) {
+      const toolResult = await executeTool(toolCall, tools, context);
       messages.push(toolResult);
     }
   }
