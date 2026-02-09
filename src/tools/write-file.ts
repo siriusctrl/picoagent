@@ -1,36 +1,25 @@
+import { z } from 'zod';
 import { Tool, ToolContext, ToolResult } from '../core/types.js';
 import fs from 'fs/promises';
 import path from 'path';
 
-export const writeFileTool: Tool = {
+const WriteFileParams = z.object({
+  path: z.string().describe('Path to file'),
+  content: z.string().describe('File content')
+});
+
+export const writeFileTool: Tool<typeof WriteFileParams> = {
   name: 'write_file',
   description: 'Write/create files',
-  parameters: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'Path to file' },
-      content: { type: 'string', description: 'File content' }
-    },
-    required: ['path', 'content']
-  },
-  async execute(args: Record<string, unknown>, { cwd }: ToolContext): Promise<ToolResult> {
-    const filePath = args.path;
-    const content = args.content;
-    
-    if (typeof filePath !== 'string') {
-      return { content: 'Error: path must be a string', isError: true };
-    }
-    if (typeof content !== 'string') {
-      return { content: 'Error: content must be a string', isError: true };
-    }
-
+  parameters: WriteFileParams,
+  async execute(args, { cwd }: ToolContext): Promise<ToolResult> {
     try {
-      const fullPath = path.resolve(cwd, filePath);
+      const fullPath = path.resolve(cwd, args.path);
       await fs.mkdir(path.dirname(fullPath), { recursive: true });
-      await fs.writeFile(fullPath, content, 'utf-8');
+      await fs.writeFile(fullPath, args.content, 'utf-8');
       return { content: `Successfully wrote to ${fullPath}` };
-    } catch (error: any) {
-      return { content: `Error writing file: ${error.message}`, isError: true };
+    } catch (error: unknown) {
+      return { content: `Error writing file: ${error instanceof Error ? error.message : String(error)}`, isError: true };
     }
   }
 };

@@ -1,11 +1,22 @@
+import { z } from 'zod';
 import { Provider } from './provider.js';
 import {
   AssistantMessage,
   Message,
   Tool,
   ToolContext,
+  ToolDefinition,
   ToolResultMessage
 } from './types.js';
+
+/** Convert Tool[] (Zod schemas) to ToolDefinition[] (JSON Schema) for the provider */
+function toToolDefinitions(tools: Tool[]): ToolDefinition[] {
+  return tools.map(t => ({
+    name: t.name,
+    description: t.description,
+    parameters: z.toJSONSchema(t.parameters) as Record<string, unknown>
+  }));
+}
 
 export async function runAgentLoop(
   messages: Message[],
@@ -14,10 +25,10 @@ export async function runAgentLoop(
   context: ToolContext,
   systemPrompt?: string
 ): Promise<AssistantMessage> {
-  // Note: messages array is mutated to maintain history
+  const toolDefs = toToolDefinitions(tools);
 
   while (true) {
-    const response = await provider.complete(messages, tools, systemPrompt);
+    const response = await provider.complete(messages, toolDefs, systemPrompt);
     messages.push(response);
 
     const toolCalls = response.content.filter(
@@ -35,11 +46,17 @@ export async function runAgentLoop(
 
       if (tool) {
         try {
-          const result = await tool.execute(toolCall.arguments, context);
+          // Validate LLM-generated args through Zod schema
+          const validatedArgs = tool.parameters.parse(toolCall.arguments);
+          const result = await tool.execute(validatedArgs, context);
           resultContent = result.content;
           isError = result.isError || false;
-        } catch (error: any) {
-          resultContent = `Error: ${error.message}`;
+        } catch (error: unknown) {
+          if (error instanceof z.ZodError) {
+            resultContent = `Invalid arguments: ${error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ')}`;
+          } else {
+            resultContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+          }
         }
       }
 
@@ -56,7 +73,7 @@ export async function runAgentLoop(
         content: resultContent,
         isError
       };
-      
+
       messages.push(toolResult);
     }
   }

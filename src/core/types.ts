@@ -1,3 +1,7 @@
+import type { z } from "zod";
+
+// === Internal message types (plain interfaces, no runtime validation) ===
+
 export interface TextContent {
   type: "text";
   text: string;
@@ -29,11 +33,15 @@ export interface ToolResultMessage {
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 
+// === Tool definition (JSON Schema version, for Provider interface) ===
+
 export interface ToolDefinition {
   name: string;
   description: string;
   parameters: Record<string, unknown>;  // JSON Schema
 }
+
+// === Tool (Zod version, for agent loop) ===
 
 export interface ToolContext {
   cwd: string;
@@ -44,6 +52,9 @@ export interface ToolResult {
   isError?: boolean;
 }
 
-export interface Tool extends ToolDefinition {
-  execute: (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResult>;
+export interface Tool<T extends z.ZodType = z.ZodType> {
+  name: string;
+  description: string;
+  parameters: T;
+  execute: (args: z.infer<T>, context: ToolContext) => Promise<ToolResult>;
 }

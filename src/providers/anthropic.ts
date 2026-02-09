@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
 import {
   AssistantMessage,
   Message,
@@ -7,6 +8,27 @@ import {
   ToolDefinition
 } from '../core/types.js';
 import { Provider, ProviderConfig } from '../core/provider.js';
+
+// === Response validation schemas (trust boundary: API response) ===
+
+const TextBlockSchema = z.object({
+  type: z.literal('text'),
+  text: z.string()
+});
+
+const ToolUseBlockSchema = z.object({
+  type: z.literal('tool_use'),
+  id: z.string(),
+  name: z.string(),
+  input: z.record(z.string(), z.unknown())
+});
+
+const ContentBlockSchema = z.union([TextBlockSchema, ToolUseBlockSchema]);
+
+const ResponseSchema = z.object({
+  role: z.literal('assistant'),
+  content: z.array(ContentBlockSchema)
+});
 
 export class AnthropicProvider implements Provider {
   private client: Anthropic;
@@ -71,24 +93,24 @@ export class AnthropicProvider implements Provider {
       tools: anthropicTools,
     });
 
-    const content: (TextContent | ToolCall)[] = response.content.map(block => {
-      if (block.type === 'text') {
-        return { type: 'text', text: block.text };
-      }
-      if (block.type === 'tool_use') {
-        return {
-          type: 'toolCall',
-          id: block.id,
-          name: block.name,
-          arguments: block.input as Record<string, unknown>
-        };
-      }
-      throw new Error(`Unknown block type: ${block.type}`);
+    // Validate API response at trust boundary
+    const validated = ResponseSchema.parse({
+      role: response.role,
+      content: response.content
     });
 
-    return {
-      role: 'assistant',
-      content
-    };
+    const content: (TextContent | ToolCall)[] = validated.content.map(block => {
+      if (block.type === 'text') {
+        return { type: 'text' as const, text: block.text };
+      }
+      return {
+        type: 'toolCall' as const,
+        id: block.id,
+        name: block.name,
+        arguments: block.input as Record<string, unknown>
+      };
+    });
+
+    return { role: 'assistant', content };
   }
 }
