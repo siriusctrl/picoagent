@@ -13,6 +13,7 @@ import { ToolContext } from './core/types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { scan } from './core/scanner.js';
 import { Runtime } from './core/runtime.js';
+import { DEFAULT_CONFIG } from './core/compaction.js';
 
 const apiKey = process.env.ANTHROPIC_API_KEY;
 if (!apiKey) {
@@ -75,13 +76,17 @@ const context: ToolContext = {
 
 const traceDir = join(homedir(), '.picoagent', 'traces');
 
+const contextWindow = parseInt(process.env.PICOAGENT_CONTEXT_WINDOW || '200000', 10);
+const compactionConfig = { ...DEFAULT_CONFIG, contextWindow };
+
 const runtime = new Runtime(
   provider,
   mainTools,
   workerTools,
   context,
   systemPrompt,
-  traceDir
+  traceDir,
+  compactionConfig
 );
 
 // Set callback

@@ -5,8 +5,8 @@ import { runWorker, WorkerResult } from './worker.js';
 import { Tracer } from './trace.js';
 import { WorkerControl, createWorkerControlHooks } from './worker-control.js';
 import { createTraceHooks } from './trace-hooks.js';
-import { combineHooks } from './hooks.js';
-import { AgentHooks } from './hooks.js';
+import { AgentHooks, combineHooks } from './hooks.js';
+import { CompactionConfig, createCompactionHooks, DEFAULT_CONFIG } from './compaction.js';
 
 export class Runtime {
   private mainMessages: Message[] = [];
@@ -18,7 +18,8 @@ export class Runtime {
     private workerTools: Tool[],
     private context: ToolContext,
     private systemPrompt?: string,
-    private traceDir?: string
+    private traceDir?: string,
+    private compactionConfig: CompactionConfig = DEFAULT_CONFIG
   ) {}
 
   async onUserMessage(
@@ -27,10 +28,11 @@ export class Runtime {
   ): Promise<AssistantMessage> {
     this.mainMessages.push({ role: 'user', content: input });
 
-    let hooks: AgentHooks = {};
+    let hooks: AgentHooks = createCompactionHooks(this.provider, this.compactionConfig);
+
     if (this.traceDir) {
         const tracer = new Tracer(this.traceDir);
-        hooks = createTraceHooks(tracer, this.provider.model);
+        hooks = combineHooks(hooks, createTraceHooks(tracer, this.provider.model));
     }
 
     if (onTextDelta) {
@@ -60,6 +62,9 @@ export class Runtime {
     
     // Setup hooks for worker
     let hooks = createWorkerControlHooks(control, taskId);
+    
+    // Add compaction hooks
+    hooks = combineHooks(hooks, createCompactionHooks(this.provider, this.compactionConfig));
     
     if (this.traceDir) {
         const tracer = new Tracer(this.traceDir); 

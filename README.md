@@ -372,9 +372,8 @@ tests/                         ← mirrors src/ structure, strict mode
 - [x] **v0.4** — Task directories + dispatch/steer/abort tools
 - [x] **v0.5** — Async Workers + Runtime
 - [x] **v0.5.1** — Hook system (tracer, worker control, streaming as composable hooks)
-- [ ] **v0.6** — Compaction (two-layer defense)
-- [ ] **v0.7** — Sync sub-workers (Worker can fork child workers)
-- [ ] **v0.8** — Channel integration (single channel, TBD)
+- [x] **v0.6** — Compaction (hook-based, two-layer defense)
+- [ ] TODO — Channel integration
 
 ## Stats
 

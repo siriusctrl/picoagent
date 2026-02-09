@@ -38,6 +38,13 @@ picoagent is a minimal AI agent framework in TypeScript. Read README.md for arch
 - `combineHooks()` merges multiple hook sets
 - `trace-hooks.ts` implements tracing via hooks
 - `worker-control.ts` implements task steering/aborting via hooks
+- `compaction.ts` implements message compaction via hooks
+
+### Compaction
+- Use `createCompactionHooks` to enable automatic message history compaction.
+- Configured via `CompactionConfig` (context window, trigger ratio).
+- Runs on `onTurnEnd`, summarizing history when threshold is reached.
+- Preserves recent messages and extracts file operations into the summary.
 
 ### File Organization
 - src/core/ — stable foundation, minimize changes
