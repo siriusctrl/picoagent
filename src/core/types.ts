@@ -45,6 +45,7 @@ export interface ToolDefinition {
 
 export interface ToolContext {
   cwd: string;
+  tasksRoot: string;
 }
 
 export interface ToolResult {

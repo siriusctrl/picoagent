@@ -7,6 +7,9 @@ import { readFileTool } from './tools/read-file.js';
 import { writeFileTool } from './tools/write-file.js';
 import { scanTool } from './tools/scan.js';
 import { loadTool } from './tools/load.js';
+import { dispatchTool } from './tools/dispatch.js';
+import { steerTool } from './tools/steer.js';
+import { abortTool } from './tools/abort.js';
 import { Message, ToolContext } from './core/types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { Tracer } from './core/trace.js';
@@ -51,10 +54,20 @@ const provider = new AnthropicProvider({
   systemPrompt
 });
 
-const tools = [shellTool, readFileTool, writeFileTool, scanTool, loadTool];
+const tools = [
+  shellTool, 
+  readFileTool, 
+  writeFileTool, 
+  scanTool, 
+  loadTool,
+  dispatchTool,
+  steerTool,
+  abortTool
+];
 
 const context: ToolContext = {
-  cwd: process.cwd()
+  cwd: process.cwd(),
+  tasksRoot: join(process.cwd(), ".tasks")
 };
 
 const messages: Message[] = [];
@@ -64,7 +77,7 @@ const rl = createInterface({
   output: process.stdout
 });
 
-console.log('picoagent v0.3');
+console.log('picoagent v0.4');
 console.log('Type "exit" to quit');
 
 function ask() {

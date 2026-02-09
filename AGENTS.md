@@ -58,3 +58,24 @@ picoagent is a minimal AI agent framework in TypeScript. Read README.md for arch
 - Use Node built-in test runner (node:test)
 - Mock the Provider interface for agent-loop tests
 - Test at trust boundaries: tool args validation, API response parsing
+
+## Task Management (v0.4)
+
+Tasks are isolated units of work with their own directory, state, and tools.
+
+### Directory Structure
+Each task lives in `.tasks/{id}/`:
+- `task.md`: Immutable definition (instructions) + mutable state (status) in frontmatter.
+- `progress.md`: Worker's log of activity.
+- `signal`: Ephemeral file for `abort` or `steer` signals.
+
+### Lifecycle
+Status flow: `pending` → `running` → `completed` | `failed` | `aborted`
+
+### Core Tools
+- `dispatch(name, description, instructions)`: Create a new task (pending).
+- `steer(id, message)`: Redirect a running task.
+- `abort(id)`: Stop a running task.
+
+Workers (v0.5) will pick up pending tasks, update status to running, and consume signals.
+
