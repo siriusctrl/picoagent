@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Provider } from './provider.js';
-import { Tracer } from './trace.js';
+import { AgentHooks } from './hooks.js';
 import {
   AssistantMessage,
   Message,
@@ -67,51 +67,41 @@ export async function runAgentLoop(
   provider: Provider,
   context: ToolContext,
   systemPrompt?: string,
-  tracer?: Tracer
+  hooks?: AgentHooks
 ): Promise<AssistantMessage> {
   const toolDefs = toToolDefinitions(tools);
   let turns = 0;
   
-  let agentSpanId: string | undefined;
-  if (tracer) {
-    agentSpanId = tracer.span();
-    tracer.emit({ 
-        event: 'agent_start', 
-        span_id: agentSpanId,
-        data: { 
-        model: provider.model, 
-        tool_count: tools.length 
-        } 
-    });
-  }
+  await hooks?.onLoopStart?.();
 
   try {
     while (true) {
       turns++;
-      let llmSpanId: string | undefined;
       
-      if (tracer && agentSpanId) {
-        llmSpanId = tracer.span(agentSpanId);
-        tracer.emit({ 
-            event: 'llm_start', 
-            span_id: llmSpanId, 
-            parent_span: agentSpanId,
-            data: { message_count: messages.length } 
-        });
-      }
+      await hooks?.onLlmStart?.(messages);
 
       const startLlm = Date.now();
-      const response = await provider.complete(messages, toolDefs, systemPrompt);
+      let response: AssistantMessage | undefined;
+      
+      if (hooks?.onTextDelta) {
+          const stream = provider.stream(messages, toolDefs, systemPrompt);
+          for await (const event of stream) {
+              if (event.type === 'text_delta' && event.text) {
+                  hooks.onTextDelta(event.text);
+              } else if (event.type === 'done' && event.message) {
+                  response = event.message;
+              }
+          }
+          if (!response) {
+            throw new Error("Stream ended without a final message");
+          }
+      } else {
+          response = await provider.complete(messages, toolDefs, systemPrompt);
+      }
+      
       const llmDuration = Date.now() - startLlm;
       
-      if (tracer && llmSpanId) {
-        tracer.emit({ 
-            event: 'llm_end', 
-            span_id: llmSpanId,
-            parent_span: agentSpanId,
-            duration_ms: llmDuration 
-        });
-      }
+      await hooks?.onLlmEnd?.(response, llmDuration);
 
       messages.push(response);
 
@@ -120,184 +110,62 @@ export async function runAgentLoop(
       );
 
       if (toolCalls.length === 0) {
-        if (tracer && agentSpanId) {
-            tracer.emit({ 
-                event: 'agent_end', 
-                span_id: agentSpanId,
-                data: { total_turns: turns } 
-            });
-        }
+        await hooks?.onLoopEnd?.(turns);
         return response;
       }
 
       for (const toolCall of toolCalls) {
-        let toolSpanId: string | undefined;
-        if (tracer && llmSpanId) {
-            toolSpanId = tracer.span(llmSpanId);
-            tracer.emit({ 
-                event: 'tool_start', 
-                span_id: toolSpanId, 
-                parent_span: llmSpanId,
-                data: { tool: toolCall.name, args: toolCall.arguments } 
-            });
-        }
+        await hooks?.onToolStart?.(toolCall);
 
         const startTool = Date.now();
-        const toolResult = await executeTool(toolCall, tools, context);
+        let toolResult = await executeTool(toolCall, tools, context);
         const toolDuration = Date.now() - startTool;
 
-        if (tracer && toolSpanId && llmSpanId) {
-            tracer.emit({ 
-                event: 'tool_end', 
-                span_id: toolSpanId, 
-                parent_span: llmSpanId,
-                duration_ms: toolDuration,
-                data: { 
-                result_length: toolResult.content.length, 
-                isError: toolResult.isError 
-                } 
-            });
+        const hookResult = await hooks?.onToolEnd?.(toolCall, toolResult, toolDuration);
+        if (hookResult) {
+            // Typescript allows void return, so we check if it returned a value
+            // but the interface says ToolResultMessage | void.
+            // If it returns a modified result, use it.
+            // Wait, the interface says: ToolResultMessage | void | Promise<ToolResultMessage | void>
+            // So if it returns an object that looks like a ToolResultMessage, we use it.
+            if ((hookResult as ToolResultMessage).role === 'toolResult') {
+                toolResult = hookResult as ToolResultMessage;
+            }
         }
 
         messages.push(toolResult);
       }
+      
+      await hooks?.onTurnEnd?.(messages);
     }
   } catch (error) {
-    if (tracer && agentSpanId) {
-        tracer.emit({ 
-            event: 'error', 
-            span_id: agentSpanId,
-            data: { message: error instanceof Error ? error.message : String(error) } 
-        });
+    if (error instanceof Error) {
+        await hooks?.onError?.(error);
+    } else {
+        await hooks?.onError?.(new Error(String(error)));
     }
     throw error;
   }
 }
 
-export async function runAgentLoopStreaming(
-  messages: Message[],
-  tools: Tool[],
-  provider: Provider,
-  context: ToolContext,
-  systemPrompt?: string,
-  onTextDelta?: (text: string) => void,
-  tracer?: Tracer
-): Promise<AssistantMessage> {
-  const toolDefs = toToolDefinitions(tools);
-  let turns = 0;
-
-  let agentSpanId: string | undefined;
-  if (tracer) {
-    agentSpanId = tracer.span();
-    tracer.emit({ 
-        event: 'agent_start', 
-        span_id: agentSpanId,
-        data: { 
-        model: provider.model, 
-        tool_count: tools.length 
-        } 
+// Deprecated: use runAgentLoop with hooks.onTextDelta
+export const runAgentLoopStreaming = (
+    messages: Message[],
+    tools: Tool[],
+    provider: Provider,
+    context: ToolContext,
+    systemPrompt?: string,
+    onTextDelta?: (text: string) => void,
+    // tracer parameter removed, effectively breaking compatibility if used with tracer
+    // but the task says "actually, MERGE the two functions into ONE"
+    // so I will implement it as a wrapper for backward compat if needed, 
+    // but the instruction implies removing it or merging it.
+    // "MERGE the two functions into ONE runAgentLoop"
+    // I will keep runAgentLoopStreaming as a wrapper for now to avoid breaking too many tests at once before I fix them,
+    // or I can just remove it and fix tests. The instructions say "Refactor src/core/agent-loop.ts".
+    // I'll export it for now as a wrapper that constructs hooks.
+): Promise<AssistantMessage> => {
+    return runAgentLoop(messages, tools, provider, context, systemPrompt, {
+        onTextDelta
     });
-  }
-
-  try {
-    while (true) {
-        turns++;
-        let llmSpanId: string | undefined;
-
-        if (tracer && agentSpanId) {
-            llmSpanId = tracer.span(agentSpanId);
-            tracer.emit({ 
-                event: 'llm_start', 
-                span_id: llmSpanId, 
-                parent_span: agentSpanId,
-                data: { message_count: messages.length } 
-            });
-        }
-        
-        const startLlm = Date.now();
-        let response: AssistantMessage | undefined;
-        const stream = provider.stream(messages, toolDefs, systemPrompt);
-        
-        for await (const event of stream) {
-            if (event.type === 'text_delta' && event.text) {
-                onTextDelta?.(event.text);
-            } else if (event.type === 'done' && event.message) {
-                response = event.message;
-            }
-        }
-        
-        const llmDuration = Date.now() - startLlm;
-
-        if (!response) {
-            throw new Error("Stream ended without a final message");
-        }
-
-        if (tracer && llmSpanId) {
-            tracer.emit({ 
-                event: 'llm_end', 
-                span_id: llmSpanId, 
-                parent_span: agentSpanId,
-                duration_ms: llmDuration 
-            });
-        }
-
-        messages.push(response);
-
-        const toolCalls = response.content.filter(
-        (block): block is import('./types.js').ToolCall => block.type === 'toolCall'
-        );
-
-        if (toolCalls.length === 0) {
-            if (tracer && agentSpanId) {
-                tracer.emit({ 
-                    event: 'agent_end', 
-                    span_id: agentSpanId,
-                    data: { total_turns: turns } 
-                });
-            }
-            return response;
-        }
-
-        for (const toolCall of toolCalls) {
-            let toolSpanId: string | undefined;
-            if (tracer && llmSpanId) {
-                toolSpanId = tracer.span(llmSpanId);
-                tracer.emit({ 
-                    event: 'tool_start', 
-                    span_id: toolSpanId, 
-                    parent_span: llmSpanId,
-                    data: { tool: toolCall.name, args: toolCall.arguments } 
-                });
-            }
-
-            const startTool = Date.now();
-            const toolResult = await executeTool(toolCall, tools, context);
-            const toolDuration = Date.now() - startTool;
-
-            if (tracer && toolSpanId && llmSpanId) {
-                tracer.emit({ 
-                    event: 'tool_end', 
-                    span_id: toolSpanId, 
-                    parent_span: llmSpanId,
-                    duration_ms: toolDuration,
-                    data: { 
-                    result_length: toolResult.content.length, 
-                    isError: toolResult.isError 
-                    } 
-                });
-            }
-
-            messages.push(toolResult);
-        }
-    }
-  } catch (error) {
-    if (tracer && agentSpanId) {
-        tracer.emit({ 
-            event: 'error', 
-            span_id: agentSpanId,
-            data: { message: error instanceof Error ? error.message : String(error) } 
-        });
-    }
-    throw error;
-  }
 }

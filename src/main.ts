@@ -86,6 +86,8 @@ const runtime = new Runtime(
 
 // Set callback
 context.onTaskCreated = (taskDir) => runtime.spawnWorker(taskDir);
+context.onSteer = (taskId, message) => runtime.getControl(taskId)?.steer(message);
+context.onAbort = (taskId) => runtime.getControl(taskId)?.abort();
 
 const rl = createInterface({
   input: process.stdin,

@@ -1,12 +1,16 @@
 import { Tool, ToolContext, Message, AssistantMessage } from './types.js';
 import { Provider } from './provider.js';
-import { runAgentLoopStreaming } from './agent-loop.js';
+import { runAgentLoop } from './agent-loop.js';
 import { runWorker, WorkerResult } from './worker.js';
 import { Tracer } from './trace.js';
+import { WorkerControl, createWorkerControlHooks } from './worker-control.js';
+import { createTraceHooks } from './trace-hooks.js';
+import { combineHooks } from './hooks.js';
+import { AgentHooks } from './hooks.js';
 
 export class Runtime {
   private mainMessages: Message[] = [];
-  private activeWorkers = new Map<string, Promise<WorkerResult>>();
+  private activeWorkers = new Map<string, WorkerControl>();
 
   constructor(
     private provider: Provider,
@@ -23,45 +27,60 @@ export class Runtime {
   ): Promise<AssistantMessage> {
     this.mainMessages.push({ role: 'user', content: input });
 
-    let tracer: Tracer | undefined;
+    let hooks: AgentHooks = {};
     if (this.traceDir) {
-      tracer = new Tracer(this.traceDir);
+        const tracer = new Tracer(this.traceDir);
+        hooks = createTraceHooks(tracer, this.provider.model);
     }
 
-    const result = await runAgentLoopStreaming(
+    if (onTextDelta) {
+        hooks = combineHooks(hooks, { onTextDelta });
+    }
+
+    const result = await runAgentLoop(
       this.mainMessages,
       this.mainTools,
       this.provider,
       this.context,
       this.systemPrompt,
-      onTextDelta,
-      tracer
+      hooks
     );
 
     return result;
   }
 
+  getControl(taskId: string): WorkerControl | undefined {
+      return this.activeWorkers.get(taskId);
+  }
+
   spawnWorker(taskDir: string): void {
     const taskId = taskDir.split('/').pop() || 'unknown';
-    // console.log(`[Runtime] Spawning worker for task ${taskId}...`);
+    
+    const control = new WorkerControl();
+    
+    // Setup hooks for worker
+    let hooks = createWorkerControlHooks(control, taskId);
+    
+    if (this.traceDir) {
+        const tracer = new Tracer(this.traceDir); 
+        hooks = combineHooks(hooks, createTraceHooks(tracer, this.provider.model));
+    }
+    
+    this.activeWorkers.set(taskId, control);
 
-    const workerPromise = runWorker(
+    runWorker(
       taskDir,
       this.workerTools,
       this.provider,
-      this.context
-    );
-
-    this.activeWorkers.set(taskId, workerPromise);
-
-    workerPromise
+      this.context,
+      hooks
+    )
       .then((result) => {
         this.activeWorkers.delete(taskId);
         const msg = `[Task ${result.taskId} completed. Status: ${result.status}]\n` +
           (result.result ? `Result: ${result.result}` : `Error: ${result.error}`);
         
         // Inject notification
-        // We use a default logger if this is a background notification
         this.onUserMessage(msg, (text) => process.stdout.write(text))
             .then(() => process.stdout.write('\n> ')) // Restore prompt
             .catch(console.error);

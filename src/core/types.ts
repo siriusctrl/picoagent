@@ -47,6 +47,8 @@ export interface ToolContext {
   cwd: string;
   tasksRoot: string;
   onTaskCreated?: (taskDir: string) => void;
+  onSteer?: (taskId: string, message: string) => void;
+  onAbort?: (taskId: string) => void;
 }
 
 export interface ToolResult {

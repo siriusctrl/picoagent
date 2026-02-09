@@ -3,7 +3,7 @@ import assert from "node:assert";
 import { join } from "path";
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from "fs";
 import { tmpdir } from "os";
-import { createTask, readTask, updateTaskStatus, writeSignal, consumeSignal, listTasks } from "../../src/core/task.js";
+import { createTask, readTask, updateTaskStatus, listTasks } from "../../src/core/task.js";
 
 describe("Task Management", () => {
   let tasksRoot: string;
@@ -73,25 +73,6 @@ describe("Task Management", () => {
     assert.ok(updated.completed);
   });
 
-  it("should handle signals", () => {
-    const task = createTask(tasksRoot, { name: "Signal Me", description: "Desc", instructions: "Instr" });
-    
-    // No signal initially
-    assert.strictEqual(consumeSignal(task.dir), null);
-    
-    // Write abort
-    writeSignal(task.dir, "abort");
-    const s1 = consumeSignal(task.dir);
-    assert.strictEqual(s1?.signal, "abort");
-    assert.strictEqual(s1?.message, undefined);
-    assert.strictEqual(consumeSignal(task.dir), null); // Consumed
-    
-    // Write steer
-    writeSignal(task.dir, "steer", "go left");
-    const s2 = consumeSignal(task.dir);
-    assert.strictEqual(s2?.signal, "steer");
-    assert.strictEqual(s2?.message, "go left");
-  });
 
   it("should list tasks", () => {
     createTask(tasksRoot, { name: "T1", description: "D1", instructions: "I1" });

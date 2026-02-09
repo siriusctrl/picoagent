@@ -27,11 +27,17 @@ picoagent is a minimal AI agent framework in TypeScript. Read README.md for arch
 - Use z.object().describe() for parameter descriptions (shows in JSON Schema for LLM)
 - Keep tools focused: one tool = one capability
 
-### Tracing
-- Tracer is optional in agent-loop — pass it for observability, omit for zero overhead
-- Each trace is one JSONL file: ~/.picoagent/traces/{trace_id}.jsonl
-- Use span_id and parent_span to reconstruct call trees
-- Events: agent_start/end, llm_start/end, tool_start/end, error
+### Hooks System
+- Use `AgentHooks` interface for lifecycle events:
+  - `onLoopStart`, `onLoopEnd`
+  - `onLlmStart`, `onLlmEnd`
+  - `onToolStart`, `onToolEnd`
+  - `onTurnEnd`
+  - `onError`
+  - `onTextDelta` (for streaming)
+- `combineHooks()` merges multiple hook sets
+- `trace-hooks.ts` implements tracing via hooks
+- `worker-control.ts` implements task steering/aborting via hooks
 
 ### File Organization
 - src/core/ — stable foundation, minimize changes
@@ -67,7 +73,6 @@ Tasks are isolated units of work with their own directory, state, and tools.
 Each task lives in `.tasks/{id}/`:
 - `task.md`: Immutable definition (instructions) + mutable state (status) in frontmatter.
 - `progress.md`: Worker's log of activity.
-- `signal`: Ephemeral file for `abort` or `steer` signals.
 
 ### Lifecycle
 Status flow: `pending` → `running` → `completed` | `failed` | `aborted`
@@ -87,17 +92,17 @@ Status flow: `pending` → `running` → `completed` | `failed` | `aborted`
 - Writes logs to `progress.md`
 - Writes final output to `result.md`
 - System prompt includes task context but NO user profile or personality
-- Uses blocking `runAgentLoop` internally
+- Uses blocking `runAgentLoop` internally with hooks for control and tracing
 
 ### Runtime Coordination
 - `src/core/runtime.ts` manages the main loop
 - Spawns workers via `spawnWorker(taskDir)`
-- Tracks active workers in memory
+- Tracks active workers in memory via `WorkerControl`
 - Injects completion notifications into the main agent stream via `onUserMessage`
 - Main agent wakes up to handle worker results
 
 ### Tool Context
 - `onTaskCreated` callback added to `ToolContext`
-- `dispatch` tool triggers this callback to spawn workers immediately
-
-
+- `onSteer` callback for `steer` tool
+- `onAbort` callback for `abort` tool
+- `dispatch` tool triggers `onTaskCreated` to spawn workers immediately

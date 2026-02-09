@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Tool } from "../core/types.js";
-import { writeSignal, updateTaskStatus } from "../core/task.js";
+import { updateTaskStatus } from "../core/task.js";
 import { join } from "path";
 import { existsSync } from "fs";
 
@@ -22,19 +22,11 @@ export const abortTool: Tool<typeof AbortParams> = {
       };
     }
 
-    // Write signal first, in case update fails or takes time?
-    // Usually signals are picked up by worker loop.
-    // If worker is running, it will check signal.
-    // But we are setting status to aborted immediately here.
-    // If worker is running, it might overwrite status back to running/completed?
-    // Typically worker checks signal, then aborts itself.
-    // But here we set status too.
-    // The prompt says: "Writes an abort signal file and updates task status to 'aborted'".
-    // So I do both.
-
     try {
-      writeSignal(taskDir, "abort");
       updateTaskStatus(taskDir, "aborted");
+      if (context.onAbort) {
+          context.onAbort(args.id);
+      }
     } catch (e) {
       return {
         content: `Failed to abort task ${args.id}: ${(e as Error).message}`,

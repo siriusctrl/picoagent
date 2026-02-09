@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync, readdirSync, statSync } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { parseFrontmatter } from "./scanner.js";
 
@@ -143,27 +143,6 @@ export function updateTaskStatus(taskDir: string, status: TaskInfo["status"]): v
   newContent += "---\n\n" + body;
 
   writeFileSync(taskPath, newContent);
-}
-
-/**
- * Write a signal file to a task directory
- * Signals: "abort" | "steer"
- * For steer, include the message in the signal file content
- */
-export function writeSignal(taskDir: string, signal: "abort" | "steer", message?: string): void {
-  writeFileSync(join(taskDir, "signal"), `${signal}\n${message || ""}`.trim());
-}
-
-/**
- * Read and consume (delete) a signal file if it exists
- */
-export function consumeSignal(taskDir: string): { signal: string; message?: string } | null {
-  const signalPath = join(taskDir, "signal");
-  if (!existsSync(signalPath)) return null;
-  const content = readFileSync(signalPath, "utf-8");
-  unlinkSync(signalPath);
-  const [signal, ...rest] = content.split("\n");
-  return { signal, message: rest.join("\n") || undefined };
 }
 
 /**

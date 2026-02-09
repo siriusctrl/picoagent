@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { Tracer, TraceEvent } from '../../src/core/trace.js';
+import { createTraceHooks } from '../../src/core/trace-hooks.js';
 import { runAgentLoop } from '../../src/core/agent-loop.js';
 import { Provider, StreamEvent } from '../../src/core/provider.js';
 import { Message, Tool, ToolContext, AssistantMessage, ToolDefinition } from '../../src/core/types.js';
@@ -16,7 +17,7 @@ const mockTool: Tool<any> = {
   execute: async (args: { arg: string }) => ({ content: `Executed: ${args.arg}` })
 };
 
-const context: ToolContext = { cwd: process.cwd() };
+const context: ToolContext = { cwd: process.cwd(), tasksRoot: process.cwd() };
 
 class MockProvider implements Provider {
     model = 'mock-model';
@@ -95,7 +96,8 @@ test('Tracer integrates with agent loop', async () => {
         }
     ]);
     
-    await runAgentLoop([], [mockTool], provider, context, undefined, tracer);
+    const hooks = createTraceHooks(tracer, 'mock-model');
+    await runAgentLoop([], [mockTool], provider, context, undefined, hooks);
     
     const filePath = join(traceDir, `${tracer.traceId}.jsonl`);
     const content = readFileSync(filePath, 'utf-8');

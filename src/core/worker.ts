@@ -5,6 +5,7 @@ import { updateTaskStatus } from './task.js';
 import { runAgentLoop } from './agent-loop.js';
 import { Tool, ToolContext } from './types.js';
 import { Provider } from './provider.js';
+import { AgentHooks } from './hooks.js';
 
 export interface WorkerResult {
   taskId: string;
@@ -17,7 +18,8 @@ export async function runWorker(
   taskDir: string,
   tools: Tool[],
   provider: Provider,
-  baseContext: ToolContext
+  baseContext: ToolContext,
+  hooks?: AgentHooks
 ): Promise<WorkerResult> {
   const taskPath = join(taskDir, 'task.md');
   const content = readFileSync(taskPath, 'utf-8');
@@ -51,7 +53,8 @@ You are working in: ${taskDir}
       tools,
       provider,
       baseContext,
-      systemPrompt
+      systemPrompt,
+      hooks
     );
 
     // Extract text result from the assistant's final response

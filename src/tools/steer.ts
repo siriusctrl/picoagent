@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { Tool } from "../core/types.js";
-import { writeSignal } from "../core/task.js";
 import { join } from "path";
 import { existsSync } from "fs";
 
@@ -23,10 +22,16 @@ export const steerTool: Tool<typeof SteerParams> = {
       };
     }
 
-    writeSignal(taskDir, "steer", args.message);
-    
-    return {
-      content: `Signal sent to task ${args.id}: steer`
-    };
+    if (context.onSteer) {
+        context.onSteer(args.id, args.message);
+        return {
+            content: `Signal sent to task ${args.id}: steer`
+        };
+    } else {
+        return {
+            content: `Steer capability not available in this context.`,
+            isError: true
+        }
+    }
   }
 };
