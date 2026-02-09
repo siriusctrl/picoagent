@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { WorkerControl, createWorkerControlHooks, AbortError } from '../../src/core/worker-control.js';
+import { WorkerControl, createWorkerControlHooks, AbortError } from '../../src/runtime/worker-control.js';
 import { Message, ToolCall, ToolResultMessage } from '../../src/core/types.js';
 
 test('WorkerControl abort', async () => {

@@ -1,11 +1,11 @@
 import { join } from 'path';
 import { readFileSync, writeFileSync } from 'fs';
-import { parseFrontmatter } from './scanner.js';
-import { updateTaskStatus } from './task.js';
-import { runAgentLoop } from './agent-loop.js';
-import { Tool, ToolContext } from './types.js';
-import { Provider } from './provider.js';
-import { AgentHooks } from './hooks.js';
+import { parseFrontmatter } from '../lib/frontmatter.js';
+import { updateTaskStatus } from '../lib/task.js';
+import { runAgentLoop } from '../core/loop.js';
+import { Tool, ToolContext } from '../core/types.js';
+import { Provider } from '../core/provider.js';
+import { AgentHooks } from '../core/hooks.js';
 
 export interface WorkerResult {
   taskId: string;

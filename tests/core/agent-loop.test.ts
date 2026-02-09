@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { runAgentLoop, runAgentLoopStreaming } from '../../src/core/agent-loop.js';
+import { runAgentLoop, runAgentLoopStreaming } from '../../src/core/loop.js';
 import { Provider, StreamEvent } from '../../src/core/provider.js';
 import { Message, Tool, ToolContext, AssistantMessage, ToolDefinition } from '../../src/core/types.js';
 import { z } from 'zod';

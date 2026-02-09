@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { truncateOutput } from '../../src/core/agent-loop.js';
+import { truncateOutput } from '../../src/core/loop.js';
 
 test('truncateOutput keeps short content unchanged', () => {
   const content = 'hello world';

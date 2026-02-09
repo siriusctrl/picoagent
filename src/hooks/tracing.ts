@@ -1,5 +1,5 @@
-import { Tracer } from "./trace.js";
-import { AgentHooks } from "./hooks.js";
+import { Tracer } from "../lib/tracer.js";
+import { AgentHooks } from "../core/hooks.js";
 
 export function createTraceHooks(tracer: Tracer, modelName?: string): AgentHooks {
   let agentSpanId: string;

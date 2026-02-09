@@ -11,9 +11,9 @@ import { steerTool } from './tools/steer.js';
 import { abortTool } from './tools/abort.js';
 import { ToolContext } from './core/types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
-import { scan } from './core/scanner.js';
-import { Runtime } from './core/runtime.js';
-import { DEFAULT_CONFIG } from './core/compaction.js';
+import { scan } from './lib/frontmatter.js';
+import { Runtime } from './runtime/runtime.js';
+import { DEFAULT_CONFIG } from './hooks/compaction.js';
 
 const apiKey = process.env.ANTHROPIC_API_KEY;
 if (!apiKey) {

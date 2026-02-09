@@ -9,11 +9,95 @@ Existing agent frameworks are powerful but complex — 50+ modules, deep abstrac
 **picoagent** strips the agent down to its essence:
 - **~950 lines of core** that stabilize after v1
 - **File-based state** for tasks, memory, and progress
-- **Hook-based observability** — tracing, worker control, streaming all via composable hooks
+- **Hook-based observability** — tracing, compaction, worker control, streaming all via composable hooks
 - **Extensible via tools and skills**, not code changes
 - **Everything is a markdown file with frontmatter** — one pattern for all discovery and retrieval
 
 ## Architecture
+
+### System Overview
+
+```mermaid
+graph TB
+    User((User)) --> Main[Main Agent]
+    Main -->|fast turns| User
+    Main -->|dispatch| Runtime
+    Runtime -->|spawn| W1[Worker 1]
+    Runtime -->|spawn| W2[Worker 2]
+    Runtime -->|completion msg| Main
+    Main -->|steer/abort| Runtime
+    Runtime -->|control| W1
+    Runtime -->|control| W2
+
+    subgraph "File System"
+        Tasks[".tasks/t_001/\ntask.md\nprogress.md\nresult.md"]
+        Skills["skills/\nSKILL.md"]
+        Memory["memory/\nmemory.md"]
+    end
+
+    W1 -->|read/write| Tasks
+    W2 -->|read/write| Tasks
+    Main -->|scan/load| Tasks
+    Main -->|scan/load| Skills
+    Main -->|load| Memory
+```
+
+### Use Case: Dispatching Work
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Main as Main Agent
+    participant RT as Runtime
+    participant W as Worker
+
+    User->>Main: "refactor main.rs"
+    Main->>Main: dispatch(task)
+    Main-->>User: "On it, refactoring main.rs"
+    Main->>RT: onTaskCreated(taskDir)
+    RT->>W: spawn(task.md, tools, hooks)
+    
+    Note over W: Worker runs autonomously
+    W->>W: read task.md
+    W->>W: shell("cargo check")
+    W->>W: write progress.md
+    W->>W: write result.md
+
+    W-->>RT: WorkerResult
+    RT->>Main: inject "[Worker completed t_001]"
+    Main->>Main: load(result.md)
+    Main-->>User: "Refactoring done! ✅"
+```
+
+### Data Flow: Hooks Lifecycle
+
+```mermaid
+flowchart LR
+    subgraph AgentLoop["Agent Loop"]
+        LS[onLoopStart] --> LMS[onLlmStart]
+        LMS --> LLM[LLM Call]
+        LLM --> LME[onLlmEnd]
+        LME --> TS[onToolStart]
+        TS --> Tool[Execute Tool]
+        Tool --> TE[onToolEnd]
+        TE --> TurnEnd[onTurnEnd]
+        TurnEnd -->|more tools?| LMS
+        TurnEnd -->|done| LE[onLoopEnd]
+    end
+
+    subgraph Hooks["Hook Consumers"]
+        Trace[Tracing\nspan tree + JSONL]
+        Compact[Compaction\ntoken check + summarize]
+        WC[Worker Control\nabort flag + steer queue]
+        Stream[Streaming\nonTextDelta → stdout]
+    end
+
+    TE -.-> Trace
+    TE -.-> WC
+    TurnEnd -.-> Compact
+    TurnEnd -.-> WC
+    LLM -.-> Stream
+```
 
 ### Main Agent + Async Workers
 
@@ -59,31 +143,7 @@ Existing agent frameworks are powerful but complex — 50+ modules, deep abstrac
 └──────────────────────────────────────────┘
 ```
 
-### How It Flows
-
-```
-User: "refactor main.rs"
-  → Main Agent turn (fast):
-    → dispatch(task) → "On it, refactoring main.rs"
-    → Worker spawned async, Main Agent turn ends
-
-User: "also fix the tests"
-  → Main Agent turn (fast):
-    → scan active tasks → Worker₁ is refactoring
-    → dispatch(task) → "Started that too"
-    → Worker₂ spawned async
-
-User: "how's the refactoring going?"
-  → Main Agent turn (fast):
-    → load(.tasks/t_001/progress.md) → "3/7 steps done, extracting handleAuth now"
-
-[Worker₁ completes → Runtime injects message → Main Agent wakes up]
-  → Main Agent turn:
-    → load(.tasks/t_001/result.md)
-    → "Refactoring done! Changed 5 files, all tests pass ✅"
-```
-
-Main Agent stays fast because it never does heavy work directly. Heavy work goes to Workers. Workers notify Main Agent on completion via the Runtime.
+## Core Concepts
 
 ### Hooks System
 
@@ -104,53 +164,21 @@ interface AgentHooks {
 }
 ```
 
-**Key timing:** `onToolEnd` fires after tool execution, before the result enters messages. `onTurnEnd` fires after all tool results are collected, before the next LLM call. This is where worker control (abort/steer) is checked.
-
 Multiple hooks compose via `combineHooks()`:
 
 ```typescript
 const hooks = combineHooks(
   createTraceHooks(tracer, "claude-sonnet"),   // observability
+  createCompactionHooks(provider, config),      // context management
   createWorkerControlHooks(control, taskId),    // abort + steer
   { onTextDelta: (t) => process.stdout.write(t) } // streaming
 );
 ```
 
 Built-in hook adapters:
-- **`createTraceHooks(tracer)`** — JSONL tracing via hooks (span tree reconstruction)
+- **`createTraceHooks(tracer)`** — JSONL tracing with span tree reconstruction
+- **`createCompactionHooks(provider, config)`** — automatic context compaction when token threshold exceeded
 - **`createWorkerControlHooks(control, taskId)`** — abort flag + steer message queue
-
-### Worker Control
-
-Workers are controlled via an **in-memory message queue**, not file-based signals:
-
-```typescript
-class WorkerControl {
-  abort(): void;           // set abort flag
-  steer(msg: string): void; // push message to steer queue
-}
-```
-
-- **Abort** — `onToolEnd` hook checks the abort flag; throws `AbortError` immediately
-- **Steer** — `onTurnEnd` hook drains the steer queue and injects messages into the conversation before the next LLM call
-
-The Runtime maintains a `Map<taskId, WorkerControl>`. The `steer` and `abort` tools operate on this map via context callbacks.
-
-### Notification: Files for State, Runtime for Wakeup
-
-Files store **what happened**. The Runtime handles **who gets notified**.
-
-```
-Worker completes:
-  1. Writes result.md          ← file (persistent state)
-  2. Updates task.md status    ← file (persistent state)
-  3. Runtime injects message   ← runtime (triggers Main Agent)
-     → Main Agent wakes up
-     → Reads result.md
-     → Tells user
-```
-
-## Core Concepts
 
 ### Agent Loop
 
@@ -162,12 +190,10 @@ runAgentLoop(messages, tools, provider, context, systemPrompt?, hooks?) {
 
   loop {
     hooks.onLlmStart(messages)
-    response = provider.complete(messages, tools)  // or .stream() if onTextDelta hook
+    response = provider.complete(messages, tools)  // or .stream() if onTextDelta
     hooks.onLlmEnd(response, duration)
 
-    if no tool calls:
-      hooks.onLoopEnd(turns)
-      return response
+    if no tool calls → hooks.onLoopEnd(turns) → return
 
     for each tool_call:
       hooks.onToolStart(tool_call)
@@ -180,7 +206,7 @@ runAgentLoop(messages, tools, provider, context, systemPrompt?, hooks?) {
 }
 ```
 
-One function handles both streaming and non-streaming: if `hooks.onTextDelta` is set, the loop uses `provider.stream()` and emits text deltas. Otherwise it uses `provider.complete()`.
+One function handles both streaming and non-streaming: if `hooks.onTextDelta` is set, the loop uses `provider.stream()`. Otherwise `provider.complete()`.
 
 ### Provider Abstraction
 
@@ -196,96 +222,35 @@ interface Provider {
 
 Currently implemented: `AnthropicProvider` (Claude). Adding OpenAI, Gemini, etc. = one new file in `src/providers/`.
 
-### Trust Boundaries (Zod)
+### Worker Control
 
-Zod validation at **trust boundaries only**:
-- **Tool parameters** — LLM-generated, untrusted → Zod schema + `z.toJSONSchema()` for LLM
-- **API responses** — external, untrusted → Zod validation
-- **Internal types** — compiler-guaranteed → plain TypeScript interfaces
+Workers are controlled via an **in-memory message queue**, not file-based signals:
 
-### Workspace / Core Separation
-
-```
-~/.picoagent/                     ← core (managed by runtime)
-├── config.yaml                   ← global config (hot reload)
-├── sessions/                     ← conversation history
-│   ├── main.jsonl
-│   └── workers/{task_id}.jsonl
-└── traces/
-    └── {trace_id}.jsonl
-
-~/workspace/                      ← workspace (agents read/write freely)
-├── AGENTS.md                     ← agent behavior
-├── SOUL.md                       ← persona (Main Agent only)
-├── USER.md                       ← user info (Main Agent only)
-├── memory/
-│   ├── memory.md                 ← core memory (Main Agent system prompt)
-│   └── {topic}.md                ← topic memories (scan/load on demand)
-├── skills/
-│   └── {skill}/SKILL.md
-└── .tasks/                       ← task directories
-    ├── t_001/
-    ├── t_002/
-    └── ...
+```typescript
+class WorkerControl {
+  abort(): void;           // set abort flag
+  steer(msg: string): void; // push message to steer queue
+}
 ```
 
-### Context Separation
+- **Abort** — `onToolEnd` hook checks the abort flag; throws `AbortError` immediately
+- **Steer** — `onTurnEnd` hook drains the steer queue and injects messages before the next LLM call
 
-Main Agent and Workers get different context:
+The Runtime maintains a `Map<taskId, WorkerControl>`. The `steer` and `abort` tools operate on this map via context callbacks.
 
-| Context | Main Agent | Worker |
-|---------|-----------|--------|
-| SOUL.md | ✅ (persona) | ❌ |
-| USER.md | ✅ (preferences) | ❌ |
-| AGENTS.md | ✅ | ❌ |
-| memory.md | ✅ (always loaded) | ❌ |
-| Skill frontmatter | ✅ (for routing) | ✅ (same as Main) |
-| Skill body | On demand | On demand |
-| task.md | ❌ | ✅ (own task only) |
-| Task state | All active tasks (scan) | Own task only |
+### Compaction
 
-Workers get **task.md + skills**. That's it. Main Agent curates everything the Worker needs into `task.md` at dispatch time.
+Long sessions accumulate context. Compaction keeps agents within their context window.
 
-### Task Directory
+**Layer 1: Tool Result Truncation** — head + tail pattern (key info often at end of output). Applied at tool execution time, before the result enters the session.
 
-One Worker = one task directory. Self-contained, scannable, archivable.
-
-```
-.tasks/t_001/
-├── task.md          ← definition + metadata (frontmatter)
-├── progress.md      ← live progress (the emit channel)
-└── result.md        ← final deliverable
-```
-
-**task.md** (frontmatter follows the universal pattern):
-
-```yaml
----
-id: t_001
-name: "refactor main.rs"
-description: "Extract repeated functions into separate modules"
-status: running          # pending → running → completed / failed / aborted
-created: 2024-02-08T14:02:00Z
-started: 2024-02-08T14:02:01Z
-completed: null
-model: claude-sonnet
-tags: [refactoring, backend]
----
-
-## Instructions
-(task details)
-
-## Constraints
-(boundaries)
-```
-
-Sequential IDs (`t_001`, `t_002`, ...) for human readability. Frontmatter round-trip preserved on status updates.
+**Layer 2: Session Compaction** — implemented as a hook (`createCompactionHooks`). Fires on `onTurnEnd`, estimates token count, and when usage exceeds 75% of the context window, summarizes old messages via an LLM call and replaces them with a compact summary. File operations are extracted programmatically and appended.
 
 ### Progressive Disclosure
 
 **Everything scannable is a markdown file with YAML frontmatter.** One pattern for all retrieval:
 
-```markdown
+```yaml
 ---
 name: "some entity"
 tags: [a, b]
@@ -300,92 +265,110 @@ scan(dir, pattern?) → DocMeta[]   // frontmatter only, supports * wildcards
 load(path)          → DocFull     // frontmatter + body
 ```
 
-Small + essential (skill descriptions) → system prompt.
-Large + accumulated (task history, topic memories) → scan/load.
+### Trust Boundaries (Zod)
+
+Zod validation at **trust boundaries only**:
+- **Tool parameters** — LLM-generated, untrusted → Zod schema + `z.toJSONSchema()` for LLM
+- **API responses** — external, untrusted → Zod validation
+- **Internal types** — compiler-guaranteed → plain TypeScript interfaces
+
+### Workspace / Core Separation
+
+```
+~/.picoagent/                     ← core (managed by runtime)
+├── config.yaml
+├── sessions/
+│   ├── main.jsonl
+│   └── workers/{task_id}.jsonl
+└── traces/
+    └── {trace_id}.jsonl
+
+~/workspace/                      ← workspace (agents read/write freely)
+├── AGENTS.md
+├── SOUL.md
+├── USER.md
+├── memory/
+│   ├── memory.md
+│   └── {topic}.md
+├── skills/
+│   └── {skill}/SKILL.md
+└── .tasks/
+    ├── t_001/
+    └── ...
+```
+
+### Context Separation
+
+| Context | Main Agent | Worker |
+|---------|-----------|--------|
+| SOUL.md | ✅ | ❌ |
+| USER.md | ✅ | ❌ |
+| AGENTS.md | ✅ | ❌ |
+| memory.md | ✅ | ❌ |
+| Skill frontmatter | ✅ | ✅ |
+| task.md | ❌ | ✅ (own only) |
 
 ### Three Levels of Observability
 
-| File | Granularity | Audience | Content |
-|------|------------|----------|---------|
-| `progress.md` | Key milestones | User / Main Agent | `14:03 Found 5 extractable functions` |
-| `traces/*.jsonl` | Every event | Machine / benchmark | `{"event":"tool_start","tool":"read_file"}` |
-| `sessions/*.jsonl` | Full conversation | Developer debug | Raw LLM messages |
-
-Traces include `trace_id`, `span_id`, and `parent_span` for call stack reconstruction across Workers and sub-workers.
-
-### Compaction
-
-Long sessions accumulate context. Compaction keeps agents within their context window.
-
-**Layer 1: Tool Result Truncation** — head + tail pattern (key info often at end of output). Applied at tool execution time, before the result enters the session.
-
-**Layer 2: Session Compaction** — summarizes old conversation history when context grows too large. Triggered when only 1/4 of context window remains.
-
-Unified compaction prompt for Main Agent and Workers (3 fields: Goal, Key Decisions, Context). File operations extracted programmatically from tool call history.
+| File | Granularity | Content |
+|------|------------|---------|
+| `progress.md` | Key milestones | `14:03 Found 5 extractable functions` |
+| `traces/*.jsonl` | Every event | `{"event":"tool_start","tool":"read_file"}` |
+| `sessions/*.jsonl` | Full conversation | Raw LLM messages |
 
 ## Project Structure
 
 ```
 src/
-├── core/                      ← ~950 lines, stable after v1
-│   ├── agent-loop.ts          ← unified tool-calling loop (hooks-based)
-│   ├── hooks.ts               ← AgentHooks interface + combineHooks
-│   ├── provider.ts            ← Provider interface (SDK-agnostic)
-│   ├── runtime.ts             ← message routing + worker lifecycle
-│   ├── scanner.ts             ← frontmatter scan/load (universal)
-│   ├── task.ts                ← task directory management
-│   ├── trace.ts               ← JSONL tracer
-│   ├── trace-hooks.ts         ← tracer → hooks adapter
-│   ├── types.ts               ← Message/Tool/ToolContext interfaces
-│   ├── worker.ts              ← worker execution
-│   └── worker-control.ts      ← abort flag + steer queue + hooks
+├── core/                      ← kernel, 4 files, frozen after v1
+│   ├── loop.ts                    agent loop (hooks-based)
+│   ├── hooks.ts                   AgentHooks interface + combineHooks
+│   ├── provider.ts                Provider interface
+│   └── types.ts                   Message, Tool, ToolContext
 │
-├── providers/                 ← SDK-specific implementations
-│   └── anthropic.ts           ← Claude (streaming + non-streaming)
+├── runtime/                   ← orchestration
+│   ├── runtime.ts                 Runtime class (message routing + workers)
+│   ├── worker.ts                  runWorker
+│   └── worker-control.ts         WorkerControl + abort/steer hooks
 │
-├── tools/                     ← built-in tools
-│   ├── shell.ts               ← 30s timeout + output truncation
-│   ├── read-file.ts
-│   ├── write-file.ts
-│   ├── scan.ts
-│   ├── load.ts
-│   ├── dispatch.ts            ← spawn async worker
-│   ├── steer.ts               ← redirect a worker
-│   └── abort.ts               ← cancel a worker
+├── hooks/                     ← composable hook adapters
+│   ├── tracing.ts                 createTraceHooks (JSONL spans)
+│   └── compaction.ts              createCompactionHooks
 │
-└── main.ts                    ← REPL entry point + runtime wiring
-
-tests/                         ← mirrors src/ structure, strict mode
-├── core/                      ← agent-loop, trace, scanner, task, worker, worker-control
-├── tools/                     ← shell
-├── helpers/                   ← shared mock provider
-└── fixtures/                  ← test markdown files
+├── lib/                       ← shared utilities
+│   ├── frontmatter.ts             parseFrontmatter, scan, load
+│   ├── task.ts                    task directory CRUD
+│   └── tracer.ts                  Tracer class (JSONL writer)
+│
+├── providers/                 ← SDK-specific
+│   └── anthropic.ts               Claude (streaming + non-streaming)
+│
+├── tools/                     ← LLM tool interfaces
+│   ├── shell.ts                   30s timeout + truncation
+│   ├── read-file.ts / write-file.ts
+│   ├── scan.ts / load.ts
+│   └── dispatch.ts / steer.ts / abort.ts
+│
+└── main.ts                    ← REPL entry point
 ```
 
-**Design principle:** `core/` stabilizes after v1. All new functionality = new tools or new skills.
+**Design principle:** `core/` is the kernel — 4 files that stabilize after v1. Everything else builds on top.
 
-## Roadmap
+## TODO
 
-- [x] **v0.1** — Provider abstraction, agent loop, 3 tools (shell, read, write), stdin/stdout REPL
-- [x] **v0.2** — JSONL tracing (`trace_id` + `span_id` + `parent_span`)
-- [x] **v0.3** — Frontmatter scanner + scan/load tools + skill discovery
-- [x] **v0.4** — Task directories + dispatch/steer/abort tools
-- [x] **v0.5** — Async Workers + Runtime
-- [x] **v0.5.1** — Hook system (tracer, worker control, streaming as composable hooks)
-- [x] **v0.6** — Compaction (hook-based, two-layer defense)
-- [ ] TODO — Channel integration
+- [ ] Channel integration (single channel, TBD)
 
 ## Stats
 
-- **2241 lines** total (src + tests)
-- **31 files** (21 src, 10 tests)
-- **33 tests** (all passing, strict mode)
+- **2616 lines** across 33 files
+- **39 tests**, all passing under strict mode
 
 ## Acknowledgments
 
 Inspired by studying the architectures of:
 - [OpenClaw](https://github.com/openclaw/openclaw) — comprehensive agent framework
 - [NanoClaw](https://github.com/gavrielc/nanoclaw) — minimal Claude agent with container isolation
+- [pi-agent](https://github.com/pchaganti/gx-pi-agent) — lightweight coding agent
 
 ## License
 

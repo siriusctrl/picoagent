@@ -3,7 +3,7 @@ import assert from "node:assert";
 import { join } from "path";
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from "fs";
 import { tmpdir } from "os";
-import { createTask, readTask, updateTaskStatus, listTasks } from "../../src/core/task.js";
+import { createTask, readTask, updateTaskStatus, listTasks } from "../../src/lib/task.js";
 
 describe("Task Management", () => {
   let tasksRoot: string;

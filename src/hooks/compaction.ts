@@ -1,6 +1,6 @@
-import { Provider } from "./provider.js";
-import { AgentHooks } from "./hooks.js";
-import { Message, ToolCall, ToolResultMessage } from "./types.js";
+import { Provider } from "../core/provider.js";
+import { AgentHooks } from "../core/hooks.js";
+import { Message, ToolCall, ToolResultMessage } from "../core/types.js";
 
 export interface CompactionConfig {
   contextWindow: number;

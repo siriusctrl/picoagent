@@ -1,11 +1,11 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert';
-import { runWorker } from '../../src/core/worker.js';
+import { runWorker } from '../../src/runtime/worker.js';
 import { MockProvider } from '../helpers/mock-provider.js';
 import { join } from 'path';
 import { ToolContext } from '../../src/core/types.js';
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
-import { parseFrontmatter } from '../../src/core/scanner.js';
+import { parseFrontmatter } from '../../src/lib/frontmatter.js';
 
 const testDir = join(process.cwd(), 'tests', 'temp-worker');
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Tool } from "../core/types.js";
-import { updateTaskStatus } from "../core/task.js";
+import { updateTaskStatus } from "../lib/task.js";
 import { join } from "path";
 import { existsSync } from "fs";
 

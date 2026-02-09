@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { Runtime } from '../../src/core/runtime.js';
+import { Runtime } from '../../src/runtime/runtime.js';
 import { MockProvider } from '../helpers/mock-provider.js';
 import { join } from 'path';
 import { ToolContext } from '../../src/core/types.js';

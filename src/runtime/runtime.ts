@@ -1,12 +1,12 @@
-import { Tool, ToolContext, Message, AssistantMessage } from './types.js';
-import { Provider } from './provider.js';
-import { runAgentLoop } from './agent-loop.js';
+import { Tool, ToolContext, Message, AssistantMessage } from '../core/types.js';
+import { Provider } from '../core/provider.js';
+import { runAgentLoop } from '../core/loop.js';
 import { runWorker, WorkerResult } from './worker.js';
-import { Tracer } from './trace.js';
+import { Tracer } from '../lib/tracer.js';
 import { WorkerControl, createWorkerControlHooks } from './worker-control.js';
-import { createTraceHooks } from './trace-hooks.js';
-import { AgentHooks, combineHooks } from './hooks.js';
-import { CompactionConfig, createCompactionHooks, DEFAULT_CONFIG } from './compaction.js';
+import { createTraceHooks } from '../hooks/tracing.js';
+import { AgentHooks, combineHooks } from '../core/hooks.js';
+import { CompactionConfig, createCompactionHooks, DEFAULT_CONFIG } from '../hooks/compaction.js';
 
 export class Runtime {
   private mainMessages: Message[] = [];

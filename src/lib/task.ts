@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
-import { parseFrontmatter } from "./scanner.js";
+import { parseFrontmatter } from "./frontmatter.js";
 
 export interface TaskConfig {
   name: string;

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Tool } from "../core/types.js";
-import { createTask } from "../core/task.js";
+import { createTask } from "../lib/task.js";
 
 const DispatchParams = z.object({
   name: z.string().describe("Short name for the task"),

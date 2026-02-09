@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Tool, ToolContext } from "../core/types.js";
-import { scan } from "../core/scanner.js";
+import { scan } from "../lib/frontmatter.js";
 import { join } from "path";
 
 const ScanParams = z.object({

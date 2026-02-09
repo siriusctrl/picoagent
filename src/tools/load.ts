@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Tool, ToolContext } from "../core/types.js";
-import { load } from "../core/scanner.js";
+import { load } from "../lib/frontmatter.js";
 import { join } from "path";
 
 const LoadParams = z.object({

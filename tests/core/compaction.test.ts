@@ -6,7 +6,7 @@ import {
     compactMessages, 
     createCompactionHooks,
     CompactionConfig 
-} from '../../src/core/compaction.js';
+} from '../../src/hooks/compaction.js';
 import { MockProvider } from '../helpers/mock-provider.js';
 import { Message, AssistantMessage } from '../../src/core/types.js';
 

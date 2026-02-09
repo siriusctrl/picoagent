@@ -1,5 +1,5 @@
-import { AgentHooks } from "./hooks.js";
-import { Message } from "./types.js";
+import { AgentHooks } from "../core/hooks.js";
+import { Message } from "../core/types.js";
 
 export class WorkerControl {
   private _aborted = false;
