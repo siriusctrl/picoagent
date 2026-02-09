@@ -30,9 +30,9 @@ graph TB
     Runtime -->|control| W2
 
     subgraph "File System"
-        Tasks[".tasks/t_001/\ntask.md\nprogress.md\nresult.md"]
-        Skills["skills/\nSKILL.md"]
-        Memory["memory/\nmemory.md"]
+        Tasks[".tasks/t_001/<br/>task.md<br/>progress.md<br/>result.md"]
+        Skills["skills/<br/>SKILL.md"]
+        Memory["memory/<br/>memory.md"]
     end
 
     W1 -->|read/write| Tasks
@@ -86,10 +86,10 @@ flowchart LR
     end
 
     subgraph Hooks["Hook Consumers"]
-        Trace[Tracing\nspan tree + JSONL]
-        Compact[Compaction\ntoken check + summarize]
-        WC[Worker Control\nabort flag + steer queue]
-        Stream[Streaming\nonTextDelta → stdout]
+        Trace["Tracing<br/>span tree + JSONL"]
+        Compact["Compaction<br/>token check + summarize"]
+        WC["Worker Control<br/>abort flag + steer queue"]
+        Stream["Streaming<br/>onTextDelta → stdout"]
     end
 
     TE -.-> Trace
@@ -236,7 +236,7 @@ class WorkerControl {
 - **Abort** — `onToolEnd` hook checks the abort flag; throws `AbortError` immediately
 - **Steer** — `onTurnEnd` hook drains the steer queue and injects messages before the next LLM call
 
-The Runtime maintains a `Map<taskId, WorkerControl>`. The `steer` and `abort` tools operate on this map via context callbacks.
+The Runtime maintains a `Map<taskId, WorkerControl>` per active worker. The `steer` and `abort` tools operate on this map via context callbacks.
 
 ### Compaction
 
