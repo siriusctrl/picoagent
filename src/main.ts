@@ -5,9 +5,12 @@ import { runAgentLoopStreaming } from './core/agent-loop.js';
 import { shellTool } from './tools/shell.js';
 import { readFileTool } from './tools/read-file.js';
 import { writeFileTool } from './tools/write-file.js';
+import { scanTool } from './tools/scan.js';
+import { loadTool } from './tools/load.js';
 import { Message, ToolContext } from './core/types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { Tracer } from './core/trace.js';
+import { scan } from './core/scanner.js';
 
 const apiKey = process.env.ANTHROPIC_API_KEY;
 if (!apiKey) {
@@ -17,13 +20,38 @@ if (!apiKey) {
 
 const model = process.env.PICOAGENT_MODEL || 'claude-sonnet-4-20250514';
 
+// Scan for skills
+let skillDescriptions = "";
+const skillsDir = join(process.cwd(), 'skills');
+try {
+  const skills = scan(skillsDir);
+  if (skills.length > 0) {
+    skillDescriptions = "Available skills:\n";
+    for (const skill of skills) {
+      const name = skill.frontmatter.name as string | undefined;
+      const desc = skill.frontmatter.description as string | undefined;
+      if (name && desc) {
+        skillDescriptions += `- ${name}: ${desc}\n`;
+      }
+    }
+  }
+} catch (error) {
+  // Skills directory might not exist, ignore
+}
+
+const baseSystemPrompt = 'You are a helpful coding assistant.';
+const systemPrompt = `${baseSystemPrompt}
+
+${skillDescriptions}
+Use scan() and load() to explore skills and other markdown files.`.trim();
+
 const provider = new AnthropicProvider({
   apiKey,
   model,
-  systemPrompt: 'You are a helpful coding assistant.'
+  systemPrompt
 });
 
-const tools = [shellTool, readFileTool, writeFileTool];
+const tools = [shellTool, readFileTool, writeFileTool, scanTool, loadTool];
 
 const context: ToolContext = {
   cwd: process.cwd()
@@ -36,7 +64,7 @@ const rl = createInterface({
   output: process.stdout
 });
 
-console.log('picoagent v0.2');
+console.log('picoagent v0.3');
 console.log('Type "exit" to quit');
 
 function ask() {

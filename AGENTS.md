@@ -39,6 +39,13 @@ picoagent is a minimal AI agent framework in TypeScript. Read README.md for arch
 - src/tools/ — built-in tools
 - tests/ — mirrors src/ structure
 
+### Scanning & Frontmatter
+- Use `src/core/scanner.ts` for all markdown scanning
+- Frontmatter parser is custom (no external YAML lib) to keep core small
+- Supports only: `key: value` (string/number/bool) and inline arrays `key: [a, b]`
+- No nested objects or multi-line values
+- Always use `---` delimiters
+
 ### Common Mistakes
 - Importing SDK types in core/ files (breaks provider abstraction)
 - Forgetting to handle the `toolResult` grouping in Anthropic (consecutive tool results must be in one user message)
