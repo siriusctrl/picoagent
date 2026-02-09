@@ -23,6 +23,7 @@ const mockTools = [mockTool, errorTool];
 const mockContext = { cwd: process.cwd() };
 
 class MockProvider implements Provider {
+    model = 'mock-model';
     messages: Message[] = [];
     responses: AssistantMessage[] = [];
     

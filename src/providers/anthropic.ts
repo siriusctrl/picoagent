@@ -39,6 +39,10 @@ export class AnthropicProvider implements Provider {
     this.client = new Anthropic({ apiKey: config.apiKey });
   }
 
+  get model(): string {
+    return this.config.model;
+  }
+
   async complete(
     messages: Message[],
     tools: ToolDefinition[],

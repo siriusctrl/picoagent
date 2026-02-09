@@ -27,6 +27,12 @@ picoagent is a minimal AI agent framework in TypeScript. Read README.md for arch
 - Use z.object().describe() for parameter descriptions (shows in JSON Schema for LLM)
 - Keep tools focused: one tool = one capability
 
+### Tracing
+- Tracer is optional in agent-loop — pass it for observability, omit for zero overhead
+- Each trace is one JSONL file: ~/.picoagent/traces/{trace_id}.jsonl
+- Use span_id and parent_span to reconstruct call trees
+- Events: agent_start/end, llm_start/end, tool_start/end, error
+
 ### File Organization
 - src/core/ — stable foundation, minimize changes
 - src/providers/ — SDK-specific implementations

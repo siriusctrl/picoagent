@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Provider } from './provider.js';
+import { Tracer } from './trace.js';
 import {
   AssistantMessage,
   Message,
@@ -65,26 +66,111 @@ export async function runAgentLoop(
   tools: Tool[],
   provider: Provider,
   context: ToolContext,
-  systemPrompt?: string
+  systemPrompt?: string,
+  tracer?: Tracer
 ): Promise<AssistantMessage> {
   const toolDefs = toToolDefinitions(tools);
+  let turns = 0;
+  
+  let agentSpanId: string | undefined;
+  if (tracer) {
+    agentSpanId = tracer.span();
+    tracer.emit({ 
+        event: 'agent_start', 
+        span_id: agentSpanId,
+        data: { 
+        model: provider.model, 
+        tool_count: tools.length 
+        } 
+    });
+  }
 
-  while (true) {
-    const response = await provider.complete(messages, toolDefs, systemPrompt);
-    messages.push(response);
+  try {
+    while (true) {
+      turns++;
+      let llmSpanId: string | undefined;
+      
+      if (tracer && agentSpanId) {
+        llmSpanId = tracer.span(agentSpanId);
+        tracer.emit({ 
+            event: 'llm_start', 
+            span_id: llmSpanId, 
+            parent_span: agentSpanId,
+            data: { message_count: messages.length } 
+        });
+      }
 
-    const toolCalls = response.content.filter(
-      (block): block is import('./types.js').ToolCall => block.type === 'toolCall'
-    );
+      const startLlm = Date.now();
+      const response = await provider.complete(messages, toolDefs, systemPrompt);
+      const llmDuration = Date.now() - startLlm;
+      
+      if (tracer && llmSpanId) {
+        tracer.emit({ 
+            event: 'llm_end', 
+            span_id: llmSpanId,
+            parent_span: agentSpanId,
+            duration_ms: llmDuration 
+        });
+      }
 
-    if (toolCalls.length === 0) {
-      return response;
+      messages.push(response);
+
+      const toolCalls = response.content.filter(
+        (block): block is import('./types.js').ToolCall => block.type === 'toolCall'
+      );
+
+      if (toolCalls.length === 0) {
+        if (tracer && agentSpanId) {
+            tracer.emit({ 
+                event: 'agent_end', 
+                span_id: agentSpanId,
+                data: { total_turns: turns } 
+            });
+        }
+        return response;
+      }
+
+      for (const toolCall of toolCalls) {
+        let toolSpanId: string | undefined;
+        if (tracer && llmSpanId) {
+            toolSpanId = tracer.span(llmSpanId);
+            tracer.emit({ 
+                event: 'tool_start', 
+                span_id: toolSpanId, 
+                parent_span: llmSpanId,
+                data: { tool: toolCall.name, args: toolCall.arguments } 
+            });
+        }
+
+        const startTool = Date.now();
+        const toolResult = await executeTool(toolCall, tools, context);
+        const toolDuration = Date.now() - startTool;
+
+        if (tracer && toolSpanId && llmSpanId) {
+            tracer.emit({ 
+                event: 'tool_end', 
+                span_id: toolSpanId, 
+                parent_span: llmSpanId,
+                duration_ms: toolDuration,
+                data: { 
+                result_length: toolResult.content.length, 
+                isError: toolResult.isError 
+                } 
+            });
+        }
+
+        messages.push(toolResult);
+      }
     }
-
-    for (const toolCall of toolCalls) {
-      const toolResult = await executeTool(toolCall, tools, context);
-      messages.push(toolResult);
+  } catch (error) {
+    if (tracer && agentSpanId) {
+        tracer.emit({ 
+            event: 'error', 
+            span_id: agentSpanId,
+            data: { message: error instanceof Error ? error.message : String(error) } 
+        });
     }
+    throw error;
   }
 }
 
@@ -94,39 +180,124 @@ export async function runAgentLoopStreaming(
   provider: Provider,
   context: ToolContext,
   systemPrompt?: string,
-  onTextDelta?: (text: string) => void
+  onTextDelta?: (text: string) => void,
+  tracer?: Tracer
 ): Promise<AssistantMessage> {
   const toolDefs = toToolDefinitions(tools);
+  let turns = 0;
 
-  while (true) {
-    let response: AssistantMessage | undefined;
-    const stream = provider.stream(messages, toolDefs, systemPrompt);
-    
-    for await (const event of stream) {
-        if (event.type === 'text_delta' && event.text) {
-            onTextDelta?.(event.text);
-        } else if (event.type === 'done' && event.message) {
-            response = event.message;
+  let agentSpanId: string | undefined;
+  if (tracer) {
+    agentSpanId = tracer.span();
+    tracer.emit({ 
+        event: 'agent_start', 
+        span_id: agentSpanId,
+        data: { 
+        model: provider.model, 
+        tool_count: tools.length 
+        } 
+    });
+  }
+
+  try {
+    while (true) {
+        turns++;
+        let llmSpanId: string | undefined;
+
+        if (tracer && agentSpanId) {
+            llmSpanId = tracer.span(agentSpanId);
+            tracer.emit({ 
+                event: 'llm_start', 
+                span_id: llmSpanId, 
+                parent_span: agentSpanId,
+                data: { message_count: messages.length } 
+            });
+        }
+        
+        const startLlm = Date.now();
+        let response: AssistantMessage | undefined;
+        const stream = provider.stream(messages, toolDefs, systemPrompt);
+        
+        for await (const event of stream) {
+            if (event.type === 'text_delta' && event.text) {
+                onTextDelta?.(event.text);
+            } else if (event.type === 'done' && event.message) {
+                response = event.message;
+            }
+        }
+        
+        const llmDuration = Date.now() - startLlm;
+
+        if (!response) {
+            throw new Error("Stream ended without a final message");
+        }
+
+        if (tracer && llmSpanId) {
+            tracer.emit({ 
+                event: 'llm_end', 
+                span_id: llmSpanId, 
+                parent_span: agentSpanId,
+                duration_ms: llmDuration 
+            });
+        }
+
+        messages.push(response);
+
+        const toolCalls = response.content.filter(
+        (block): block is import('./types.js').ToolCall => block.type === 'toolCall'
+        );
+
+        if (toolCalls.length === 0) {
+            if (tracer && agentSpanId) {
+                tracer.emit({ 
+                    event: 'agent_end', 
+                    span_id: agentSpanId,
+                    data: { total_turns: turns } 
+                });
+            }
+            return response;
+        }
+
+        for (const toolCall of toolCalls) {
+            let toolSpanId: string | undefined;
+            if (tracer && llmSpanId) {
+                toolSpanId = tracer.span(llmSpanId);
+                tracer.emit({ 
+                    event: 'tool_start', 
+                    span_id: toolSpanId, 
+                    parent_span: llmSpanId,
+                    data: { tool: toolCall.name, args: toolCall.arguments } 
+                });
+            }
+
+            const startTool = Date.now();
+            const toolResult = await executeTool(toolCall, tools, context);
+            const toolDuration = Date.now() - startTool;
+
+            if (tracer && toolSpanId && llmSpanId) {
+                tracer.emit({ 
+                    event: 'tool_end', 
+                    span_id: toolSpanId, 
+                    parent_span: llmSpanId,
+                    duration_ms: toolDuration,
+                    data: { 
+                    result_length: toolResult.content.length, 
+                    isError: toolResult.isError 
+                    } 
+                });
+            }
+
+            messages.push(toolResult);
         }
     }
-    
-    if (!response) {
-        throw new Error("Stream ended without a final message");
+  } catch (error) {
+    if (tracer && agentSpanId) {
+        tracer.emit({ 
+            event: 'error', 
+            span_id: agentSpanId,
+            data: { message: error instanceof Error ? error.message : String(error) } 
+        });
     }
-
-    messages.push(response);
-
-    const toolCalls = response.content.filter(
-      (block): block is import('./types.js').ToolCall => block.type === 'toolCall'
-    );
-
-    if (toolCalls.length === 0) {
-      return response;
-    }
-
-    for (const toolCall of toolCalls) {
-      const toolResult = await executeTool(toolCall, tools, context);
-      messages.push(toolResult);
-    }
+    throw error;
   }
 }
