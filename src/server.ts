@@ -29,16 +29,18 @@ const model = process.env.PICOAGENT_MODEL || 'claude-sonnet-4-20250514';
 const port = parseInt(process.env.PICOAGENT_PORT || '3000', 10);
 const workspaceDir = process.cwd();
 
+// --- Tools ---
+
+const workerTools = [shellTool, readFileTool, writeFileTool, scanTool, loadTool];
+const mainTools = [...workerTools, dispatchTool, steerTool, abortTool];
+
 // --- Prompt ---
 
-const systemPrompt = buildMainPrompt(workspaceDir);
+const systemPrompt = buildMainPrompt(workspaceDir, mainTools);
 
 // --- Runtime ---
 
 const provider = new AnthropicProvider({ apiKey, model, systemPrompt });
-
-const workerTools = [shellTool, readFileTool, writeFileTool, scanTool, loadTool];
-const mainTools = [...workerTools, dispatchTool, steerTool, abortTool];
 
 const context: ToolContext = {
   cwd: workspaceDir,

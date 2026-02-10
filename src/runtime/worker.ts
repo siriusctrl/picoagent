@@ -36,6 +36,7 @@ export async function runWorker(
   const systemPrompt = buildWorkerPrompt(
     taskDir,
     baseContext.cwd,
+    tools,
     instructions,
     taskId,
     taskName,

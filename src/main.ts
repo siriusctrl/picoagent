@@ -24,13 +24,7 @@ if (!apiKey) {
 const model = process.env.PICOAGENT_MODEL || 'claude-sonnet-4-20250514';
 const workspaceDir = process.cwd();
 
-const systemPrompt = buildMainPrompt(workspaceDir);
-
-const provider = new AnthropicProvider({
-  apiKey,
-  model,
-  systemPrompt
-});
+// --- Tools ---
 
 const workerTools = [
   shellTool,
@@ -46,6 +40,18 @@ const mainTools = [
   steerTool,
   abortTool
 ];
+
+// --- Prompt & Provider ---
+
+const systemPrompt = buildMainPrompt(workspaceDir, mainTools);
+
+const provider = new AnthropicProvider({
+  apiKey,
+  model,
+  systemPrompt
+});
+
+// --- Runtime ---
 
 const context: ToolContext = {
   cwd: workspaceDir,
@@ -71,6 +77,8 @@ const runtime = new Runtime(
 context.onTaskCreated = (taskDir) => runtime.spawnWorker(taskDir);
 context.onSteer = (taskId, message) => runtime.getControl(taskId)?.steer(message);
 context.onAbort = (taskId) => runtime.getControl(taskId)?.abort();
+
+// --- REPL ---
 
 const rl = createInterface({
   input: process.stdin,

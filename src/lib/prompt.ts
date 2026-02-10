@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { scan } from './frontmatter.js';
+import { Tool } from '../core/types.js';
 
 function readOptional(path: string): string | null {
   if (!existsSync(path)) return null;
@@ -25,13 +26,18 @@ function buildSkillSummary(skillsDir: string): string {
   }
 }
 
+function buildToolHints(tools: Tool[]): string {
+  const lines = tools.map((t) => `- ${t.name}: ${t.description}`);
+  return `## Available Tools\n${lines.join('\n')}`;
+}
+
 /**
  * Build the system prompt for the Main Agent.
  *
  * Assembly order:
  *   SOUL.md → USER.md → AGENTS.md → memory.md → skill summaries → tool hints
  */
-export function buildMainPrompt(workspaceDir: string): string {
+export function buildMainPrompt(workspaceDir: string, tools: Tool[]): string {
   const sections: string[] = [];
 
   const soul = readOptional(join(workspaceDir, 'SOUL.md'));
@@ -50,13 +56,7 @@ export function buildMainPrompt(workspaceDir: string): string {
   const skills = buildSkillSummary(join(workspaceDir, 'skills'));
   if (skills) sections.push(skills);
 
-  sections.push(
-    `## Tools\n` +
-    `Use scan(dir, pattern?) to search markdown files by frontmatter.\n` +
-    `Use load(path) to read full file content.\n` +
-    `Use scan("memory/") to search through memories.\n` +
-    `Use dispatch(task) to send research/analysis tasks to background workers.`
-  );
+  sections.push(buildToolHints(tools));
 
   return sections.join('\n\n');
 }
@@ -70,6 +70,7 @@ export function buildMainPrompt(workspaceDir: string): string {
 export function buildWorkerPrompt(
   taskDir: string,
   workspaceDir: string,
+  tools: Tool[],
   taskBody: string,
   taskId: string,
   taskName: string,
@@ -83,14 +84,7 @@ export function buildWorkerPrompt(
   const skills = buildSkillSummary(join(workspaceDir, 'skills'));
   if (skills) sections.push(skills);
 
-  sections.push(
-    `## Tools\n` +
-    `Use scan(dir, pattern?) to search markdown files by frontmatter.\n` +
-    `Use load(path) to read full file content.\n` +
-    `Use shell(command) to run commands.\n` +
-    `Use read_file(path) to read any file.\n` +
-    `Use write_file(path, content) to write files (restricted to your working directory).`
-  );
+  sections.push(buildToolHints(tools));
 
   sections.push(
     `## Protocol\n` +
