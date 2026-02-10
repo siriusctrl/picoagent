@@ -304,15 +304,24 @@ Zod validation at **trust boundaries only**:
 └── traces/
     └── {trace_id}.jsonl
 
-~/workspace/                      ← workspace (agents read/write freely)
+picoagent/defaults/               ← built-in (ships with picoagent)
+├── skills/
+│   ├── coding.md                     coding conventions
+│   └── writing.md                    technical writing guide
+└── agents/
+    ├── researcher.md                 deep research (gpt-4o)
+    └── reviewer.md                   code review
+
+~/workspace/                      ← workspace (user-managed)
+├── config.md                         provider/model config
 ├── AGENTS.md
 ├── SOUL.md
 ├── USER.md
 ├── memory/
 │   ├── memory.md
 │   └── {topic}.md
-├── skills/
-│   └── {skill}/SKILL.md
+├── skills/                           user skills (override built-in by name)
+├── agents/                           user agents (override built-in by name)
 └── .tasks/
     ├── t_001/
     └── ...
@@ -428,7 +437,7 @@ data: {"type":"error","error":"..."}     ← on failure
 
 ## Stats
 
-- **3545 lines** across 40 files
+- **3576 lines** across 44 files
 - **41 tests**, all passing under strict mode
 
 ## Acknowledgments

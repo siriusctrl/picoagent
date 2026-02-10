@@ -1,35 +1,60 @@
 import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
-import { scan } from './frontmatter.js';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { scan, DocMeta } from './frontmatter.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DEFAULTS_DIR = join(__dirname, '..', '..', 'defaults');
 
 function readOptional(path: string): string | null {
   if (!existsSync(path)) return null;
   return readFileSync(path, 'utf-8').trim();
 }
 
-function buildSkillSummary(skillsDir: string): string {
+/**
+ * Scan a directory from both defaults and workspace, workspace overrides by name.
+ */
+function scanMerged(subdir: string, workspaceDir: string): DocMeta[] {
+  const byName = new Map<string, DocMeta>();
+
+  // Scan defaults first
+  const defaultsPath = join(DEFAULTS_DIR, subdir);
   try {
-    const skills = scan(skillsDir);
-    if (skills.length === 0) return '';
-    const lines = skills
-      .map((s) => {
-        const name = s.frontmatter.name as string | undefined;
-        const desc = s.frontmatter.description as string | undefined;
-        return name && desc ? `- ${name}: ${desc}` : null;
-      })
-      .filter(Boolean);
-    if (lines.length === 0) return '';
-    return `## Available Skills\n${lines.join('\n')}`;
-  } catch {
-    return '';
-  }
+    for (const doc of scan(defaultsPath)) {
+      const name = doc.frontmatter.name as string;
+      if (name) byName.set(name, doc);
+    }
+  } catch { /* defaults dir may not exist */ }
+
+  // Workspace overrides by name
+  const workspacePath = join(workspaceDir, subdir);
+  try {
+    for (const doc of scan(workspacePath)) {
+      const name = doc.frontmatter.name as string;
+      if (name) byName.set(name, doc);
+    }
+  } catch { /* workspace dir may not exist */ }
+
+  return [...byName.values()];
+}
+
+function buildSummary(title: string, docs: DocMeta[]): string {
+  const lines = docs
+    .map((d) => {
+      const name = d.frontmatter.name as string | undefined;
+      const desc = d.frontmatter.description as string | undefined;
+      return name && desc ? `- ${name}: ${desc}` : null;
+    })
+    .filter(Boolean);
+  if (lines.length === 0) return '';
+  return `## ${title}\n${lines.join('\n')}`;
 }
 
 /**
  * Build the system prompt for the Main Agent.
  *
  * Assembly order:
- *   SOUL.md → USER.md → AGENTS.md → memory.md → skill summaries
+ *   SOUL.md → USER.md → AGENTS.md → memory.md → skill summaries → agent summaries
  *
  * Tools are provided via the provider's structured tool interface, not the prompt.
  */
@@ -49,8 +74,13 @@ export function buildMainPrompt(workspaceDir: string): string {
   const memory = readOptional(join(workspaceDir, 'memory', 'memory.md'));
   if (memory) sections.push(`## Core Memory\n${memory}`);
 
-  const skills = buildSkillSummary(join(workspaceDir, 'skills'));
-  if (skills) sections.push(skills);
+  const skills = scanMerged('skills', workspaceDir);
+  const skillSummary = buildSummary('Available Skills', skills);
+  if (skillSummary) sections.push(skillSummary);
+
+  const agentProfiles = scanMerged('agents', workspaceDir);
+  const agentSummary = buildSummary('Available Agents', agentProfiles);
+  if (agentSummary) sections.push(agentSummary);
 
   return sections.join('\n\n');
 }
@@ -76,8 +106,9 @@ export function buildWorkerPrompt(
   const agents = readOptional(join(workspaceDir, 'AGENTS.md'));
   if (agents) sections.push(agents);
 
-  const skills = buildSkillSummary(join(workspaceDir, 'skills'));
-  if (skills) sections.push(skills);
+  const skills = scanMerged('skills', workspaceDir);
+  const skillSummary = buildSummary('Available Skills', skills);
+  if (skillSummary) sections.push(skillSummary);
 
   sections.push(
     `## Protocol\n` +
