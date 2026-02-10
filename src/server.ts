@@ -11,6 +11,7 @@ import { dispatchTool } from './tools/dispatch.js';
 import { steerTool } from './tools/steer.js';
 import { abortTool } from './tools/abort.js';
 import { ToolContext } from './core/types.js';
+import { loadConfig } from './lib/config.js';
 import { createProvider } from './providers/index.js';
 import { buildMainPrompt } from './lib/prompt.js';
 import { listTasks, readTask } from './lib/task.js';
@@ -21,16 +22,17 @@ import { DEFAULT_CONFIG } from './hooks/compaction.js';
 
 const port = parseInt(process.env.PICOAGENT_PORT || '3000', 10);
 const workspaceDir = process.cwd();
+const config = loadConfig(workspaceDir);
 
 // --- Tools ---
 
 const workerTools = [shellTool, readFileTool, writeFileTool, scanTool, loadTool];
 const mainTools = [...workerTools, dispatchTool, steerTool, abortTool];
 
-// --- Prompt ---
+// --- Prompt & Provider ---
 
 const systemPrompt = buildMainPrompt(workspaceDir);
-const provider = createProvider(systemPrompt);
+const provider = createProvider(config, systemPrompt);
 
 const context: ToolContext = {
   cwd: workspaceDir,
@@ -38,8 +40,7 @@ const context: ToolContext = {
 };
 
 const traceDir = join(homedir(), '.picoagent', 'traces');
-const contextWindow = parseInt(process.env.PICOAGENT_CONTEXT_WINDOW || '200000', 10);
-const compactionConfig = { ...DEFAULT_CONFIG, contextWindow };
+const compactionConfig = { ...DEFAULT_CONFIG, contextWindow: config.contextWindow };
 
 const runtime = new Runtime(provider, mainTools, workerTools, context, systemPrompt, traceDir, compactionConfig);
 

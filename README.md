@@ -222,18 +222,26 @@ interface Provider {
 
 Currently implemented: `AnthropicProvider` (Claude), `OpenAIProvider` (GPT + compatible APIs), `GeminiProvider` (Gemini). Adding more = one new file in `src/providers/`.
 
-Configure via environment variables:
-```bash
-PICOAGENT_PROVIDER=anthropic|openai|gemini   # default: anthropic
-PICOAGENT_MODEL=model-name                   # default per provider
-PICOAGENT_MAX_TOKENS=4096
-
-# Provider-specific keys:
-ANTHROPIC_API_KEY=sk-...
-OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL=https://...   # for compatible APIs (DeepSeek, Groq, Together, Ollama)
-GEMINI_API_KEY=...
+Configure via `config.md` in the workspace root:
+```markdown
+---
+provider: anthropic
+model: claude-sonnet-4-20250514
+max_tokens: 4096
+context_window: 200000
+---
 ```
+
+For OpenAI-compatible APIs, add `base_url`:
+```markdown
+---
+provider: openai
+model: deepseek-chat
+base_url: https://api.deepseek.com
+---
+```
+
+API keys are read from environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`.
 
 ### Worker Control
 
@@ -350,6 +358,7 @@ src/
 │   └── compaction.ts              createCompactionHooks
 │
 ├── lib/                       ← shared utilities
+│   ├── config.ts                  loadConfig from workspace config.md
 │   ├── frontmatter.ts             parseFrontmatter, scan, load
 │   ├── prompt.ts                  buildMainPrompt, buildWorkerPrompt
 │   ├── task.ts                    task directory CRUD
@@ -381,14 +390,13 @@ src/
 ANTHROPIC_API_KEY=sk-... npm run dev
 
 # or with OpenAI
-PICOAGENT_PROVIDER=openai OPENAI_API_KEY=sk-... npm run dev
+OPENAI_API_KEY=sk-... npm run dev
 
 # or with Gemini
-PICOAGENT_PROVIDER=gemini GEMINI_API_KEY=... npm run dev
-
-# or with DeepSeek (OpenAI-compatible)
-PICOAGENT_PROVIDER=openai OPENAI_API_KEY=sk-... OPENAI_BASE_URL=https://api.deepseek.com PICOAGENT_MODEL=deepseek-chat npm run dev
+GEMINI_API_KEY=... npm run dev
 ```
+
+(Set `provider` in `config.md` to match your API key.)
 
 ### HTTP Server
 
@@ -420,7 +428,7 @@ data: {"type":"error","error":"..."}     ← on failure
 
 ## Stats
 
-- **3489 lines** across 39 files
+- **3545 lines** across 40 files
 - **41 tests**, all passing under strict mode
 
 ## Acknowledgments
