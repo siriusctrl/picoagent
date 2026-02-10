@@ -1,7 +1,6 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { scan } from './frontmatter.js';
-import { Tool } from '../core/types.js';
 
 function readOptional(path: string): string | null {
   if (!existsSync(path)) return null;
@@ -26,18 +25,15 @@ function buildSkillSummary(skillsDir: string): string {
   }
 }
 
-function buildToolHints(tools: Tool[]): string {
-  const lines = tools.map((t) => `- ${t.name}: ${t.description}`);
-  return `## Available Tools\n${lines.join('\n')}`;
-}
-
 /**
  * Build the system prompt for the Main Agent.
  *
  * Assembly order:
- *   SOUL.md → USER.md → AGENTS.md → memory.md → skill summaries → tool hints
+ *   SOUL.md → USER.md → AGENTS.md → memory.md → skill summaries
+ *
+ * Tools are provided via the provider's structured tool interface, not the prompt.
  */
-export function buildMainPrompt(workspaceDir: string, tools: Tool[]): string {
+export function buildMainPrompt(workspaceDir: string): string {
   const sections: string[] = [];
 
   const soul = readOptional(join(workspaceDir, 'SOUL.md'));
@@ -56,8 +52,6 @@ export function buildMainPrompt(workspaceDir: string, tools: Tool[]): string {
   const skills = buildSkillSummary(join(workspaceDir, 'skills'));
   if (skills) sections.push(skills);
 
-  sections.push(buildToolHints(tools));
-
   return sections.join('\n\n');
 }
 
@@ -65,12 +59,13 @@ export function buildMainPrompt(workspaceDir: string, tools: Tool[]): string {
  * Build the system prompt for a Worker.
  *
  * Assembly order:
- *   AGENTS.md → skill summaries → tool hints → protocol → constraints → task instructions (last)
+ *   AGENTS.md → skill summaries → protocol → constraints → task instructions (last)
+ *
+ * Tools are provided via the provider's structured tool interface, not the prompt.
  */
 export function buildWorkerPrompt(
   taskDir: string,
   workspaceDir: string,
-  tools: Tool[],
   taskBody: string,
   taskId: string,
   taskName: string,
@@ -83,8 +78,6 @@ export function buildWorkerPrompt(
 
   const skills = buildSkillSummary(join(workspaceDir, 'skills'));
   if (skills) sections.push(skills);
-
-  sections.push(buildToolHints(tools));
 
   sections.push(
     `## Protocol\n` +

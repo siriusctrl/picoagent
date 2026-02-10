@@ -43,7 +43,7 @@ const mainTools = [
 
 // --- Prompt & Provider ---
 
-const systemPrompt = buildMainPrompt(workspaceDir, mainTools);
+const systemPrompt = buildMainPrompt(workspaceDir);
 
 const provider = new AnthropicProvider({
   apiKey,

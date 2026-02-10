@@ -36,7 +36,7 @@ const mainTools = [...workerTools, dispatchTool, steerTool, abortTool];
 
 // --- Prompt ---
 
-const systemPrompt = buildMainPrompt(workspaceDir, mainTools);
+const systemPrompt = buildMainPrompt(workspaceDir);
 
 // --- Runtime ---
 
