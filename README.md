@@ -220,7 +220,20 @@ interface Provider {
 }
 ```
 
-Currently implemented: `AnthropicProvider` (Claude). Adding OpenAI, Gemini, etc. = one new file in `src/providers/`.
+Currently implemented: `AnthropicProvider` (Claude), `OpenAIProvider` (GPT + compatible APIs), `GeminiProvider` (Gemini). Adding more = one new file in `src/providers/`.
+
+Configure via environment variables:
+```bash
+PICOAGENT_PROVIDER=anthropic|openai|gemini   # default: anthropic
+PICOAGENT_MODEL=model-name                   # default per provider
+PICOAGENT_MAX_TOKENS=4096
+
+# Provider-specific keys:
+ANTHROPIC_API_KEY=sk-...
+OPENAI_API_KEY=sk-...
+OPENAI_BASE_URL=https://...   # for compatible APIs (DeepSeek, Groq, Together, Ollama)
+GEMINI_API_KEY=...
+```
 
 ### Worker Control
 
@@ -343,7 +356,10 @@ src/
 │   └── tracer.ts                  Tracer class (JSONL writer)
 │
 ├── providers/                 ← SDK-specific
-│   └── anthropic.ts               Claude (streaming + non-streaming)
+│   ├── index.ts                   createProvider factory
+│   ├── anthropic.ts               Claude
+│   ├── openai.ts                  GPT + compatible APIs (DeepSeek, Groq, etc.)
+│   └── gemini.ts                  Gemini
 │
 ├── tools/                     ← LLM tool interfaces
 │   ├── shell.ts                   30s timeout + truncation
@@ -363,6 +379,15 @@ src/
 
 ```bash
 ANTHROPIC_API_KEY=sk-... npm run dev
+
+# or with OpenAI
+PICOAGENT_PROVIDER=openai OPENAI_API_KEY=sk-... npm run dev
+
+# or with Gemini
+PICOAGENT_PROVIDER=gemini GEMINI_API_KEY=... npm run dev
+
+# or with DeepSeek (OpenAI-compatible)
+PICOAGENT_PROVIDER=openai OPENAI_API_KEY=sk-... OPENAI_BASE_URL=https://api.deepseek.com PICOAGENT_MODEL=deepseek-chat npm run dev
 ```
 
 ### HTTP Server
@@ -395,7 +420,7 @@ data: {"type":"error","error":"..."}     ← on failure
 
 ## Stats
 
-- **3030 lines** across 36 files
+- **3489 lines** across 39 files
 - **41 tests**, all passing under strict mode
 
 ## Acknowledgments

@@ -11,7 +11,7 @@ import { dispatchTool } from './tools/dispatch.js';
 import { steerTool } from './tools/steer.js';
 import { abortTool } from './tools/abort.js';
 import { ToolContext } from './core/types.js';
-import { AnthropicProvider } from './providers/anthropic.js';
+import { createProvider } from './providers/index.js';
 import { buildMainPrompt } from './lib/prompt.js';
 import { listTasks, readTask } from './lib/task.js';
 import { Runtime } from './runtime/runtime.js';
@@ -19,13 +19,6 @@ import { DEFAULT_CONFIG } from './hooks/compaction.js';
 
 // --- Config ---
 
-const apiKey = process.env.ANTHROPIC_API_KEY;
-if (!apiKey) {
-  console.error('Error: ANTHROPIC_API_KEY environment variable is required');
-  process.exit(1);
-}
-
-const model = process.env.PICOAGENT_MODEL || 'claude-sonnet-4-20250514';
 const port = parseInt(process.env.PICOAGENT_PORT || '3000', 10);
 const workspaceDir = process.cwd();
 
@@ -37,10 +30,7 @@ const mainTools = [...workerTools, dispatchTool, steerTool, abortTool];
 // --- Prompt ---
 
 const systemPrompt = buildMainPrompt(workspaceDir);
-
-// --- Runtime ---
-
-const provider = new AnthropicProvider({ apiKey, model, systemPrompt });
+const provider = createProvider(systemPrompt);
 
 const context: ToolContext = {
   cwd: workspaceDir,

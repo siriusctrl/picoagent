@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
+    "@google/genai": "^1.40.0",
+    "openai": "^6.19.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

@@ -10,18 +10,11 @@ import { dispatchTool } from './tools/dispatch.js';
 import { steerTool } from './tools/steer.js';
 import { abortTool } from './tools/abort.js';
 import { ToolContext } from './core/types.js';
-import { AnthropicProvider } from './providers/anthropic.js';
+import { createProvider } from './providers/index.js';
 import { buildMainPrompt } from './lib/prompt.js';
 import { Runtime } from './runtime/runtime.js';
 import { DEFAULT_CONFIG } from './hooks/compaction.js';
 
-const apiKey = process.env.ANTHROPIC_API_KEY;
-if (!apiKey) {
-  console.error('Error: ANTHROPIC_API_KEY environment variable is required');
-  process.exit(1);
-}
-
-const model = process.env.PICOAGENT_MODEL || 'claude-sonnet-4-20250514';
 const workspaceDir = process.cwd();
 
 // --- Tools ---
@@ -44,12 +37,7 @@ const mainTools = [
 // --- Prompt & Provider ---
 
 const systemPrompt = buildMainPrompt(workspaceDir);
-
-const provider = new AnthropicProvider({
-  apiKey,
-  model,
-  systemPrompt
-});
+const provider = createProvider(systemPrompt);
 
 // --- Runtime ---
 
@@ -73,7 +61,6 @@ const runtime = new Runtime(
   compactionConfig
 );
 
-// Set callback
 context.onTaskCreated = (taskDir) => runtime.spawnWorker(taskDir);
 context.onSteer = (taskId, message) => runtime.getControl(taskId)?.steer(message);
 context.onAbort = (taskId) => runtime.getControl(taskId)?.abort();
@@ -85,7 +72,7 @@ const rl = createInterface({
   output: process.stdout
 });
 
-console.log('picoagent v0.6');
+console.log(`picoagent v0.6 (${provider.model})`);
 console.log('Type "exit" to quit');
 
 function ask() {
