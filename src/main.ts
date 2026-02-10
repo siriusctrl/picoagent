@@ -11,7 +11,7 @@ import { steerTool } from './tools/steer.js';
 import { abortTool } from './tools/abort.js';
 import { ToolContext } from './core/types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
-import { scan } from './lib/frontmatter.js';
+import { buildMainPrompt } from './lib/prompt.js';
 import { Runtime } from './runtime/runtime.js';
 import { DEFAULT_CONFIG } from './hooks/compaction.js';
 
@@ -22,31 +22,9 @@ if (!apiKey) {
 }
 
 const model = process.env.PICOAGENT_MODEL || 'claude-sonnet-4-20250514';
+const workspaceDir = process.cwd();
 
-// Scan for skills
-let skillDescriptions = "";
-const skillsDir = join(process.cwd(), 'skills');
-try {
-  const skills = scan(skillsDir);
-  if (skills.length > 0) {
-    skillDescriptions = "Available skills:\n";
-    for (const skill of skills) {
-      const name = skill.frontmatter.name as string | undefined;
-      const desc = skill.frontmatter.description as string | undefined;
-      if (name && desc) {
-        skillDescriptions += `- ${name}: ${desc}\n`;
-      }
-    }
-  }
-} catch (error) {
-  // Skills directory might not exist, ignore
-}
-
-const baseSystemPrompt = 'You are a helpful coding assistant.';
-const systemPrompt = `${baseSystemPrompt}
-
-${skillDescriptions}
-Use scan() and load() to explore skills and other markdown files.`.trim();
+const systemPrompt = buildMainPrompt(workspaceDir);
 
 const provider = new AnthropicProvider({
   apiKey,
@@ -70,8 +48,8 @@ const mainTools = [
 ];
 
 const context: ToolContext = {
-  cwd: process.cwd(),
-  tasksRoot: join(process.cwd(), ".tasks")
+  cwd: workspaceDir,
+  tasksRoot: join(workspaceDir, ".tasks")
 };
 
 const traceDir = join(homedir(), '.picoagent', 'traces');
@@ -99,7 +77,7 @@ const rl = createInterface({
   output: process.stdout
 });
 
-console.log('picoagent v0.5');
+console.log('picoagent v0.6');
 console.log('Type "exit" to quit');
 
 function ask() {

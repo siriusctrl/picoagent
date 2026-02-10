@@ -303,10 +303,11 @@ Zod validation at **trust boundaries only**:
 |---------|-----------|--------|
 | SOUL.md | ✅ | ❌ |
 | USER.md | ✅ | ❌ |
-| AGENTS.md | ✅ | ❌ |
+| AGENTS.md | ✅ | ✅ |
 | memory.md | ✅ | ❌ |
 | Skill frontmatter | ✅ | ✅ |
 | task.md | ❌ | ✅ (own only) |
+| write_file | unrestricted | task dir only |
 
 ### Three Levels of Observability
 
@@ -337,6 +338,7 @@ src/
 │
 ├── lib/                       ← shared utilities
 │   ├── frontmatter.ts             parseFrontmatter, scan, load
+│   ├── prompt.ts                  buildMainPrompt, buildWorkerPrompt
 │   ├── task.ts                    task directory CRUD
 │   └── tracer.ts                  Tracer class (JSONL writer)
 │
@@ -393,8 +395,8 @@ data: {"type":"error","error":"..."}     ← on failure
 
 ## Stats
 
-- **2878 lines** across 34 files
-- **39 tests**, all passing under strict mode
+- **3030 lines** across 36 files
+- **41 tests**, all passing under strict mode
 
 ## Acknowledgments
 

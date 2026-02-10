@@ -12,7 +12,7 @@ import { steerTool } from './tools/steer.js';
 import { abortTool } from './tools/abort.js';
 import { ToolContext } from './core/types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
-import { scan } from './lib/frontmatter.js';
+import { buildMainPrompt } from './lib/prompt.js';
 import { listTasks, readTask } from './lib/task.js';
 import { Runtime } from './runtime/runtime.js';
 import { DEFAULT_CONFIG } from './hooks/compaction.js';
@@ -27,22 +27,11 @@ if (!apiKey) {
 
 const model = process.env.PICOAGENT_MODEL || 'claude-sonnet-4-20250514';
 const port = parseInt(process.env.PICOAGENT_PORT || '3000', 10);
+const workspaceDir = process.cwd();
 
-// --- Skills ---
+// --- Prompt ---
 
-let skillDescriptions = '';
-const skillsDir = join(process.cwd(), 'skills');
-try {
-  const skills = scan(skillsDir);
-  for (const skill of skills) {
-    const name = skill.frontmatter.name as string | undefined;
-    const desc = skill.frontmatter.description as string | undefined;
-    if (name && desc) skillDescriptions += `- ${name}: ${desc}\n`;
-  }
-  if (skillDescriptions) skillDescriptions = `Available skills:\n${skillDescriptions}`;
-} catch { /* skills dir may not exist */ }
-
-const systemPrompt = `You are a helpful coding assistant.\n\n${skillDescriptions}\nUse scan() and load() to explore skills and other markdown files.`.trim();
+const systemPrompt = buildMainPrompt(workspaceDir);
 
 // --- Runtime ---
 
@@ -52,8 +41,8 @@ const workerTools = [shellTool, readFileTool, writeFileTool, scanTool, loadTool]
 const mainTools = [...workerTools, dispatchTool, steerTool, abortTool];
 
 const context: ToolContext = {
-  cwd: process.cwd(),
-  tasksRoot: join(process.cwd(), '.tasks'),
+  cwd: workspaceDir,
+  tasksRoot: join(workspaceDir, '.tasks'),
 };
 
 const traceDir = join(homedir(), '.picoagent', 'traces');

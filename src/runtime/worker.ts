@@ -2,6 +2,7 @@ import { join } from 'path';
 import { readFileSync, writeFileSync } from 'fs';
 import { parseFrontmatter } from '../lib/frontmatter.js';
 import { updateTaskStatus } from '../lib/task.js';
+import { buildWorkerPrompt } from '../lib/prompt.js';
 import { runAgentLoop } from '../core/loop.js';
 import { Tool, ToolContext } from '../core/types.js';
 import { Provider } from '../core/provider.js';
@@ -30,29 +31,30 @@ export async function runWorker(
 
   updateTaskStatus(taskDir, 'running');
 
-  const progressPath = join(taskDir, 'progress.md');
   const resultPath = join(taskDir, 'result.md');
 
-  const systemPrompt = `You are a Worker for task ${taskId}: "${taskName}".
-Description: ${taskDesc}
+  const systemPrompt = buildWorkerPrompt(
+    taskDir,
+    baseContext.cwd,
+    instructions,
+    taskId,
+    taskName,
+    taskDesc
+  );
 
-Your Goal: Complete the task described in the user message.
-
-Protocol:
-1. Update ${progressPath} with your status/plan.
-2. Write the final result to ${resultPath}.
-3. If you fail, write the error to ${resultPath}.
-
-You have access to files in: ${baseContext.cwd}
-You are working in: ${taskDir}
-`;
+  // Worker context: cwd and writeRoot scoped to task directory
+  const workerContext: ToolContext = {
+    ...baseContext,
+    cwd: taskDir,
+    writeRoot: taskDir,
+  };
 
   try {
     const resultMsg = await runAgentLoop(
       [{ role: 'user', content: instructions }],
       tools,
       provider,
-      baseContext,
+      workerContext,
       systemPrompt,
       hooks
     );

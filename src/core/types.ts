@@ -46,6 +46,7 @@ export interface ToolDefinition {
 export interface ToolContext {
   cwd: string;
   tasksRoot: string;
+  writeRoot?: string;  // if set, write_file restricts paths to this directory
   onTaskCreated?: (taskDir: string) => void;
   onSteer?: (taskId: string, message: string) => void;
   onAbort?: (taskId: string) => void;
