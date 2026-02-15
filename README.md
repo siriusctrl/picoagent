@@ -30,19 +30,21 @@ graph TB
     Runtime -->|control| W2
 
     subgraph "File System"
-        Tasks[".tasks/t_001/<br/>task.md<br/>progress.md<br/>result.md"]
+        Tasks["/srv/picoagent/workspaces/<run>/tasks/t_001/<br/>task.md<br/>progress.md<br/>result.md"]
+        Repo["/srv/picoagent/workspaces/<run>/repo (git)"]
         Skills["skills/<br/>SKILL.md"]
         Memory["memory/<br/>memory.md"]
     end
 
-    W1 -->|read/write| Tasks
-    W2 -->|read/write| Tasks
+    W1 -->|read/write (sandboxed)| Tasks
+    W2 -->|read/write (sandboxed)| Tasks
+    Main -->|orchestrate| Repo
     Main -->|scan/load| Tasks
     Main -->|scan/load| Skills
     Main -->|load| Memory
 ```
 
-### Use Case: Dispatching Work
+### Use Case: Dispatching Work (Worktrees + Sandbox)
 
 ```mermaid
 sequenceDiagram
@@ -55,9 +57,9 @@ sequenceDiagram
     Main->>Main: dispatch(task)
     Main-->>User: "On it, refactoring main.rs"
     Main->>RT: onTaskCreated(taskDir)
-    RT->>W: spawn(task.md, tools, hooks)
+    RT->>W: spawn(worktreeDir, tools, hooks)
     
-    Note over W: Worker runs autonomously
+    Note over W: Worker runs autonomously (bwrap sandbox)
     W->>W: read task.md
     W->>W: shell("cargo check")
     W->>W: write progress.md
@@ -295,37 +297,30 @@ Zod validation at **trust boundaries only**:
 
 ### Workspace / Core Separation
 
+picoagent distinguishes a **control directory** (where you run it, containing config + prompts) from a **per-run execution workspace** (created automatically).
+
 ```
-~/.picoagent/                     ← core (managed by runtime)
-├── config.yaml
-├── sessions/
-│   ├── main.jsonl
-│   └── workers/{task_id}.jsonl
-└── traces/
-    └── {trace_id}.jsonl
-
-picoagent/defaults/               ← built-in (ships with picoagent)
-├── skills/
-│   ├── coding.md                     coding conventions
-│   └── writing.md                    technical writing guide
-└── agents/
-    ├── researcher.md                 deep research (gpt-4o)
-    └── reviewer.md                   code review
-
-~/workspace/                      ← workspace (user-managed)
-├── config.md                         provider/model config
+<control-dir>/                    ← user-managed (where you launch picoagent)
+├── config.md                        provider/model config
 ├── AGENTS.md
 ├── SOUL.md
 ├── USER.md
 ├── memory/
-│   ├── memory.md
-│   └── {topic}.md
-├── skills/                           user skills (override built-in by name)
-├── agents/                           user agents (override built-in by name)
-└── .tasks/
-    ├── t_001/
+├── skills/
+└── agents/
+
+/srv/picoagent/workspaces/<run>/  ← execution workspace (auto-created)
+├── repo/                             git repo for orchestration (seed commit)
+└── tasks/                            one git worktree per task
+    ├── t_001/                         task.md / progress.md / result.md
     └── ...
+
+picoagent/defaults/               ← built-in (ships with picoagent)
+├── skills/
+└── agents/
 ```
+
+**Why this split?** It lets Workers run inside a filesystem sandbox: the OS is readable, but only the task worktree is writable.
 
 ### Context Separation
 
@@ -338,6 +333,7 @@ picoagent/defaults/               ← built-in (ships with picoagent)
 | Skill frontmatter | ✅ | ✅ |
 | task.md | ❌ | ✅ (own only) |
 | write_file | unrestricted | task dir only |
+| shell (writes) | unrestricted | **sandboxed** (only task dir writable) |
 
 ### Three Levels of Observability
 
