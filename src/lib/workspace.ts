@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { gitOk } from './git.js';
@@ -21,7 +21,20 @@ function isoId(d = new Date()): string {
  *   tasks/ - worktree directories for subagents
  */
 export function createRunWorkspace(opts?: { baseDir?: string; copyConfigFrom?: string }): RunWorkspace {
-  const base = opts?.baseDir ?? join(homedir(), '.picoagent', 'workspaces');
+  // Prefer a non-$HOME location so sandboxes can safely hide /home and /root.
+  // Fall back to ~/.picoagent if /srv isn't writable.
+  let base = opts?.baseDir ?? join('/srv', 'picoagent', 'workspaces');
+  try {
+    mkdirSync(base, { recursive: true });
+    // quick write test
+    const probe = join(base, '.write-test');
+    writeFileSync(probe, 'ok', 'utf8');
+    // best-effort cleanup
+    try { unlinkSync(probe); } catch {}
+  } catch {
+    base = opts?.baseDir ?? join(homedir(), '.picoagent', 'workspaces');
+  }
+
   const runDir = join(base, isoId());
   const repoDir = join(runDir, 'repo');
   const tasksDir = join(runDir, 'tasks');
