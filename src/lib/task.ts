@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { parseFrontmatter } from "./frontmatter.js";
+import { gitOk } from './git.js';
 
 export interface TaskConfig {
   name: string;
@@ -23,11 +24,18 @@ export interface TaskInfo {
   tags: string[];
 }
 
+export interface TaskWorkspaceOptions {
+  /** If set, create each task directory as a git worktree rooted at that directory. */
+  gitRoot?: string;
+  /** Enable git worktrees for tasks. */
+  useWorktree?: boolean;
+}
+
 /**
  * Create a task directory under tasksRoot with task.md, empty progress.md, etc.
  * Returns the TaskInfo with id and directory path.
  */
-export function createTask(tasksRoot: string, config: TaskConfig): TaskInfo {
+export function createTask(tasksRoot: string, config: TaskConfig, opts?: TaskWorkspaceOptions): TaskInfo {
   // Ensure tasks root exists
   if (!existsSync(tasksRoot)) {
     mkdirSync(tasksRoot, { recursive: true });
@@ -43,7 +51,14 @@ export function createTask(tasksRoot: string, config: TaskConfig): TaskInfo {
   const id = `t_${String(nextId).padStart(3, "0")}`;
   const taskDir = join(tasksRoot, id);
 
-  mkdirSync(taskDir);
+  if (opts?.useWorktree) {
+    if (!opts.gitRoot) throw new Error('createTask: gitRoot is required when useWorktree=true');
+    // Create a fresh worktree at taskDir.
+    // Note: taskDir must not already exist.
+    gitOk(['worktree', 'add', '-q', '-b', `agent/${id}`, taskDir, 'HEAD'], { cwd: opts.gitRoot });
+  } else {
+    mkdirSync(taskDir);
+  }
 
   const now = new Date().toISOString();
   

@@ -15,13 +15,21 @@ export const dispatchTool: Tool<typeof DispatchParams> = {
   description: "Dispatch a new task to a background worker",
   parameters: DispatchParams,
   execute: async (args, context) => {
-    const taskInfo = createTask(context.tasksRoot, {
-      name: args.name,
-      description: args.description,
-      instructions: args.instructions,
-      model: args.model,
-      tags: args.tags
-    });
+    const taskInfo = createTask(
+      context.tasksRoot,
+      {
+        name: args.name,
+        description: args.description,
+        instructions: args.instructions,
+        model: args.model,
+        tags: args.tags,
+      },
+      {
+        // When running in a dedicated run workspace, context.cwd is the git root.
+        gitRoot: context.cwd,
+        useWorktree: true,
+      }
+    );
 
     if (context.onTaskCreated) {
       context.onTaskCreated(taskInfo.dir);

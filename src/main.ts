@@ -15,9 +15,15 @@ import { createProvider } from './providers/index.js';
 import { buildMainPrompt } from './lib/prompt.js';
 import { Runtime } from './runtime/runtime.js';
 import { DEFAULT_CONFIG } from './hooks/compaction.js';
+import { createRunWorkspace } from './lib/workspace.js';
 
-const workspaceDir = process.cwd();
-const config = loadConfig(workspaceDir);
+const controlDir = process.cwd();
+const config = loadConfig(controlDir);
+
+// --- Run Workspace ---
+
+const runWs = createRunWorkspace({ copyConfigFrom: controlDir });
+const workspaceDir = runWs.repoDir;
 
 // --- Tools ---
 
@@ -45,7 +51,7 @@ const provider = createProvider(config, systemPrompt);
 
 const context: ToolContext = {
   cwd: workspaceDir,
-  tasksRoot: join(workspaceDir, ".tasks")
+  tasksRoot: runWs.tasksDir
 };
 
 const traceDir = join(homedir(), '.picoagent', 'traces');

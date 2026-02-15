@@ -47,6 +47,12 @@ export async function runWorker(
     ...baseContext,
     cwd: taskDir,
     writeRoot: taskDir,
+    // If the run workspace lives under $HOME, hiding /home(/root) would break git worktrees
+    // because the worktree's gitdir is referenced via an absolute path under the repo.
+    sandbox: {
+      ...(baseContext.sandbox ?? {}),
+      hideHome: false,
+    },
   };
 
   try {
