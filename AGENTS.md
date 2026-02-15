@@ -8,6 +8,12 @@ picoagent is a minimal AI agent framework in TypeScript. Read README.md for arch
 - `npm test` — run all tests
 - `npx tsc -p tsconfig.check.json` — strict type check (src + tests)
 
+## CI (Required for New / Experimental Features)
+When adding new functionality (especially orchestration, sandboxing, workspaces, workers):
+- **Add tests** that cover the new behavior (unit or integration depending on scope).
+- **Keep GitHub Actions green**. If a feature depends on Linux-only infra (e.g. bubblewrap), tests must be **skip + warn** when the dependency is unavailable or blocked by the environment (e.g. user namespaces disabled), rather than making CI flaky.
+- Prefer **deterministic infra tests** (workspaces/worktrees/sandbox boundaries/timeouts) over LLM-dependent tests.
+
 ## Key Conventions
 
 ### Trust Boundaries (Zod vs Interface)
@@ -56,10 +62,10 @@ picoagent is a minimal AI agent framework in TypeScript. Read README.md for arch
 | write_file | unrestricted | task dir only |
 
 ### Worker Write Boundary
-- Workers can read the entire workspace but can only write within their task directory (.tasks/t_xxx/)
-- Enforced via `writeRoot` in ToolContext — write_file checks `path.startsWith(writeRoot)`
-- Shell is soft-constrained: cwd set to task dir, system prompt instructs write-only-here
-- Main Agent has no write restrictions
+- Workers can read broadly, but can only write within their task directory (task worktree).
+- `write_file` is restricted via `writeRoot` in ToolContext.
+- `shell` is **hard-restricted** for workers via bubblewrap sandbox (bwrap): OS is readable, but only the task directory is writable.
+- Main Agent has no write restrictions.
 
 ### File Organization
 - src/core/ — kernel (loop, hooks, provider, types) — 4 files, frozen after v1
@@ -96,7 +102,7 @@ picoagent is a minimal AI agent framework in TypeScript. Read README.md for arch
 Tasks are isolated units of work with their own directory and state.
 
 ### Directory Structure
-Each task lives in `.tasks/{id}/`:
+Each task lives in the per-run workspace under `.../tasks/{id}/` (a git worktree):
 - `task.md`: Definition + metadata in frontmatter
 - `progress.md`: Worker's activity log
 - `result.md`: Final output
