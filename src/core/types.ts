@@ -47,6 +47,18 @@ export interface ToolContext {
   cwd: string;
   tasksRoot: string;
   writeRoot?: string;  // if set, write_file restricts paths to this directory
+
+  /**
+   * Optional sandbox settings for tools that execute code (e.g. shell).
+   * Intended to constrain writes to writeRoot/cwd for subagents.
+   */
+  sandbox?: {
+    enabled?: boolean; // default: true for workers when writeRoot is set
+    bwrapPath?: string;
+    /** Hide /home and /root using tmpfs to reduce credential leakage. Default true. */
+    hideHome?: boolean;
+  };
+
   onTaskCreated?: (taskDir: string) => void;
   onSteer?: (taskId: string, message: string) => void;
   onAbort?: (taskId: string) => void;
