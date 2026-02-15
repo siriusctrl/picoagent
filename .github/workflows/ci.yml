@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install bubblewrap (best-effort)
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y bubblewrap || true
+          command -v bwrap && bwrap --version || echo "[warn] bwrap not available; sandbox tests will be skipped"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Test
+        run: npm test

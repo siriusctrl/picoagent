@@ -3,13 +3,26 @@ import assert from 'node:assert';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { spawnSync } from 'child_process';
 import { runSandboxedShell } from '../../src/lib/sandbox.js';
 
-function hasBwrap(): boolean {
-  return existsSync('/usr/bin/bwrap');
+function canUseBwrap(): boolean {
+  if (!existsSync('/usr/bin/bwrap')) return false;
+  // Preflight: some CI environments disable user namespaces.
+  const res = spawnSync('/usr/bin/bwrap', ['--unshare-user', '--ro-bind', '/', '/', 'true'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return (res.status ?? 1) === 0;
 }
 
-test('sandbox: allows writing inside writeRoot', { skip: !hasBwrap() }, async () => {
+const BWRAP_OK = canUseBwrap();
+if (!BWRAP_OK) {
+  // Visible warning in CI logs.
+  console.warn('[warn] bubblewrap sandbox not available (missing bwrap or userns disabled); skipping sandbox integration assertions');
+}
+
+test('sandbox: allows writing inside writeRoot', { skip: !BWRAP_OK }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'pico-sb-'));
   const file = join(dir, 'a.txt');
   writeFileSync(file, 'hello\n', 'utf8');
@@ -28,7 +41,7 @@ test('sandbox: allows writing inside writeRoot', { skip: !hasBwrap() }, async ()
   assert.ok(content.includes('world'));
 });
 
-test('sandbox: prevents writing outside writeRoot (e.g. /etc)', { skip: !hasBwrap() }, async () => {
+test('sandbox: prevents writing outside writeRoot (e.g. /etc)', { skip: !BWRAP_OK }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'pico-sb-'));
 
   const res = await runSandboxedShell({
