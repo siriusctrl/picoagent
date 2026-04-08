@@ -51,34 +51,34 @@ function buildSummary(title: string, docs: DocMeta[]): string {
 }
 
 /**
- * Build the system prompt for the Main Agent.
+ * Build the system prompt for the Main Agent from the user-managed control directory.
  *
  * Assembly order:
  *   SOUL.md → USER.md → AGENTS.md → memory.md → skill summaries → agent summaries
  *
  * Tools are provided via the provider's structured tool interface, not the prompt.
  */
-export function buildMainPrompt(workspaceDir: string): string {
+export function buildMainPrompt(controlDir: string): string {
   const sections: string[] = [];
 
-  const soul = readOptional(join(workspaceDir, 'SOUL.md'));
+  const soul = readOptional(join(controlDir, 'SOUL.md'));
   if (soul) sections.push(soul);
   else sections.push('You are a helpful coding assistant.');
 
-  const user = readOptional(join(workspaceDir, 'USER.md'));
+  const user = readOptional(join(controlDir, 'USER.md'));
   if (user) sections.push(user);
 
-  const agents = readOptional(join(workspaceDir, 'AGENTS.md'));
+  const agents = readOptional(join(controlDir, 'AGENTS.md'));
   if (agents) sections.push(agents);
 
-  const memory = readOptional(join(workspaceDir, 'memory', 'memory.md'));
+  const memory = readOptional(join(controlDir, 'memory', 'memory.md'));
   if (memory) sections.push(`## Core Memory\n${memory}`);
 
-  const skills = scanMerged('skills', workspaceDir);
+  const skills = scanMerged('skills', controlDir);
   const skillSummary = buildSummary('Available Skills', skills);
   if (skillSummary) sections.push(skillSummary);
 
-  const agentProfiles = scanMerged('agents', workspaceDir);
+  const agentProfiles = scanMerged('agents', controlDir);
   const agentSummary = buildSummary('Available Agents', agentProfiles);
   if (agentSummary) sections.push(agentSummary);
 
@@ -89,13 +89,13 @@ export function buildMainPrompt(workspaceDir: string): string {
  * Build the system prompt for a Worker.
  *
  * Assembly order:
- *   AGENTS.md → skill summaries → protocol → constraints → task instructions (last)
+ *   control-dir AGENTS.md → skill summaries → protocol → constraints → task instructions (last)
  *
  * Tools are provided via the provider's structured tool interface, not the prompt.
  */
 export function buildWorkerPrompt(
   taskDir: string,
-  workspaceDir: string,
+  controlDir: string,
   taskBody: string,
   taskId: string,
   taskName: string,
@@ -103,10 +103,10 @@ export function buildWorkerPrompt(
 ): string {
   const sections: string[] = [];
 
-  const agents = readOptional(join(workspaceDir, 'AGENTS.md'));
+  const agents = readOptional(join(controlDir, 'AGENTS.md'));
   if (agents) sections.push(agents);
 
-  const skills = scanMerged('skills', workspaceDir);
+  const skills = scanMerged('skills', controlDir);
   const skillSummary = buildSummary('Available Skills', skills);
   if (skillSummary) sections.push(skillSummary);
 
@@ -121,7 +121,7 @@ export function buildWorkerPrompt(
     `## Working Directory\n` +
     `Your working directory is: ${taskDir}\n` +
     `All file outputs must be written here.\n` +
-    `The project workspace at ${workspaceDir} is available for reading and reference only.`
+    `The control workspace at ${controlDir} is the source of AGENTS.md, skills, and user profile files.`
   );
 
   sections.push(

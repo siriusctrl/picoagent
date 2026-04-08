@@ -28,3 +28,12 @@ export function gitOk(args: string[], opts: { cwd: string }): GitResult {
   }
   return res;
 }
+
+export function findGitRoot(cwd: string): string | null {
+  const res = git(['rev-parse', '--show-toplevel'], { cwd });
+  if (res.code !== 0) {
+    return null;
+  }
+
+  return res.stdout.trim() || null;
+}

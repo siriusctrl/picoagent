@@ -1,12 +1,15 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'fs';
+import { basename, join, resolve } from 'path';
+import { cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
-import { gitOk } from './git.js';
+import { findGitRoot, gitOk } from './git.js';
+
+export type RunWorkspaceMode = 'attached-git' | 'isolated-copy';
 
 export interface RunWorkspace {
   runDir: string;
   repoDir: string;
   tasksDir: string;
+  mode: RunWorkspaceMode;
 }
 
 function isoId(d = new Date()): string {
@@ -14,57 +17,83 @@ function isoId(d = new Date()): string {
   return d.toISOString().replace(/[:.]/g, '-');
 }
 
-/**
- * Create a fresh workspace under ~/.picoagent/workspaces/<timestamp>/
- * containing:
- *   repo/  - a git repo (main/orchestrator checkout)
- *   tasks/ - worktree directories for subagents
- */
-export function createRunWorkspace(opts?: { baseDir?: string; copyConfigFrom?: string }): RunWorkspace {
+function resolveBaseDir(baseDir?: string): string {
   // Prefer a non-$HOME location so sandboxes can safely hide /home and /root.
   // Fall back to ~/.picoagent if /srv isn't writable.
-  let base = opts?.baseDir ?? join('/srv', 'picoagent', 'workspaces');
+  let base = baseDir ?? join('/srv', 'picoagent', 'workspaces');
   try {
     mkdirSync(base, { recursive: true });
-    // quick write test
     const probe = join(base, '.write-test');
     writeFileSync(probe, 'ok', 'utf8');
-    // best-effort cleanup
     try { unlinkSync(probe); } catch {}
   } catch {
-    base = opts?.baseDir ?? join(homedir(), '.picoagent', 'workspaces');
+    base = baseDir ?? join(homedir(), '.picoagent', 'workspaces');
   }
 
+  return base;
+}
+
+function shouldCopyPath(src: string): boolean {
+  const name = basename(src);
+  return !new Set(['.git', 'node_modules', 'dist', '.picoagent']).has(name);
+}
+
+function initWorkspaceRepo(repoDir: string): void {
+  gitOk(['init', '-q'], { cwd: repoDir });
+  gitOk(['config', 'user.email', 'picoagent@local'], { cwd: repoDir });
+  gitOk(['config', 'user.name', 'picoagent'], { cwd: repoDir });
+}
+
+function seedIsolatedRepo(repoDir: string, controlDir: string): void {
+  cpSync(controlDir, repoDir, {
+    recursive: true,
+    filter: shouldCopyPath,
+  });
+
+  if (!existsSync(join(repoDir, '.gitignore'))) {
+    writeFileSync(join(repoDir, '.gitignore'), 'node_modules/\ndist/\n.picoagent/\n', 'utf8');
+  }
+
+  initWorkspaceRepo(repoDir);
+  gitOk(['add', '.'], { cwd: repoDir });
+  gitOk(['commit', '-q', '-m', 'chore: initialize execution snapshot'], { cwd: repoDir });
+}
+
+/**
+ * Create a fresh execution workspace under ~/.picoagent/workspaces/<timestamp>/.
+ *
+ * If the control directory is inside a git repository, picoagent executes directly
+ * against that repository and stores only task worktrees in the run directory.
+ * Otherwise it creates an isolated git snapshot under runDir/repo so worker
+ * worktrees still have a real repository to branch from.
+ */
+export function createRunWorkspace(opts: { baseDir?: string; controlDir: string }): RunWorkspace {
+  const base = resolveBaseDir(opts.baseDir);
+  const controlDir = resolve(opts.controlDir);
   const runDir = join(base, isoId());
-  const repoDir = join(runDir, 'repo');
   const tasksDir = join(runDir, 'tasks');
 
-  mkdirSync(repoDir, { recursive: true });
+  mkdirSync(runDir, { recursive: true });
   mkdirSync(tasksDir, { recursive: true });
 
-  // init git repo with a seed commit so worktrees can be created
-  if (!existsSync(join(repoDir, '.git'))) {
-    gitOk(['init', '-q'], { cwd: repoDir });
-    gitOk(['config', 'user.email', 'picoagent@local'], { cwd: repoDir });
-    gitOk(['config', 'user.name', 'picoagent'], { cwd: repoDir });
-
-    writeFileSync(join(repoDir, '.gitignore'), 'node_modules\n.venv\n__pycache__\n*.pyc\n.DS_Store\n', 'utf8');
-    writeFileSync(join(repoDir, 'README.md'), `# picoagent run workspace\n\nCreated: ${new Date().toISOString()}\n`, 'utf8');
-
-    gitOk(['add', '.'], { cwd: repoDir });
-    gitOk(['commit', '-q', '-m', 'chore: init run workspace'], { cwd: repoDir });
+  const gitRoot = findGitRoot(controlDir);
+  if (gitRoot) {
+    return {
+      runDir,
+      repoDir: gitRoot,
+      tasksDir,
+      mode: 'attached-git',
+    };
   }
 
-  // Optional: copy config.md so tools that expect it in workspace can find it.
-  if (opts?.copyConfigFrom) {
-    const src = join(opts.copyConfigFrom, 'config.md');
-    const dst = join(repoDir, 'config.md');
-    if (existsSync(src) && !existsSync(dst)) {
-      writeFileSync(dst, readFileSync(src, 'utf8'));
-      gitOk(['add', 'config.md'], { cwd: repoDir });
-      gitOk(['commit', '-q', '-m', 'chore: add config.md'], { cwd: repoDir });
-    }
-  }
+  const repoDir = join(runDir, 'repo');
+  mkdirSync(repoDir, { recursive: true });
+  seedIsolatedRepo(repoDir, controlDir);
 
-  return { runDir, repoDir, tasksDir };
+  return {
+    runDir,
+    repoDir,
+    tasksDir,
+    mode: 'isolated-copy',
+  };
 }

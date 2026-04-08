@@ -8,7 +8,8 @@
     "start:server": "node dist/server.js",
     "dev": "npx tsx src/main.ts",
     "dev:server": "npx tsx src/server.ts",
-    "test": "node --import tsx --test tests/**/*.test.ts"
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "typecheck": "npx tsc -p tsconfig.check.json"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",

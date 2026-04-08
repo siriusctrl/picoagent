@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Tool } from "../core/types.js";
 import { createTask } from "../lib/task.js";
+import { findGitRoot } from "../lib/git.js";
 
 const DispatchParams = z.object({
   name: z.string().describe("Short name for the task"),
@@ -15,6 +16,8 @@ export const dispatchTool: Tool<typeof DispatchParams> = {
   description: "Dispatch a new task to a background worker",
   parameters: DispatchParams,
   execute: async (args, context) => {
+    const repoRoot = context.repoRoot ?? context.cwd;
+    const gitRoot = findGitRoot(repoRoot);
     const taskInfo = createTask(
       context.tasksRoot,
       {
@@ -25,9 +28,8 @@ export const dispatchTool: Tool<typeof DispatchParams> = {
         tags: args.tags,
       },
       {
-        // When running in a dedicated run workspace, context.cwd is the git root.
-        gitRoot: context.cwd,
-        useWorktree: true,
+        gitRoot: gitRoot ?? undefined,
+        useWorktree: Boolean(gitRoot),
       }
     );
 

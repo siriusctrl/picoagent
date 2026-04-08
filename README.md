@@ -1,447 +1,120 @@
 # picoagent
 
-A minimal agent framework for AI assistants. Small enough to understand, powerful enough to use.
+Minimal agent orchestration for coding and task delegation.
 
-## Why
+## What this is
 
-Existing agent frameworks are powerful but complex — 50+ modules, deep abstraction layers, enterprise-grade config systems. For a single user who just wants a personal AI agent, most of that complexity is unnecessary.
+`picoagent` is a TypeScript agent framework built around a small kernel:
+- one tool-calling loop
+- one provider interface
+- one runtime for main-agent and worker orchestration
+- file-based prompts, skills, memory, tasks, and results
 
-**picoagent** strips the agent down to its essence:
-- **~950 lines of core** that stabilize after v1
-- **File-based state** for tasks, memory, and progress
-- **Hook-based observability** — tracing, compaction, worker control, streaming all via composable hooks
-- **Extensible via tools and skills**, not code changes
-- **Everything is a markdown file with frontmatter** — one pattern for all discovery and retrieval
+The project is intentionally not a platform. It is meant to stay understandable from the repository alone.
 
-## Architecture
+## Design Stance
 
-### System Overview
+- kernel first
+- control workspace is the source of truth
+- workers get isolated execution workspaces
+- one package until package boundaries are operationally necessary
+- explicit contracts over framework-looking abstraction
 
-```mermaid
-graph TB
-    User((User)) --> Main[Main Agent]
-    Main -->|fast turns| User
-    Main -->|dispatch| Runtime
-    Runtime -->|spawn| W1[Worker 1]
-    Runtime -->|spawn| W2[Worker 2]
-    Runtime -->|completion msg| Main
-    Main -->|steer/abort| Runtime
-    Runtime -->|control| W1
-    Runtime -->|control| W2
+## Current Layout
 
-    subgraph "File System"
-        Tasks["/srv/picoagent/workspaces/<run>/tasks/t_001/<br/>task.md<br/>progress.md<br/>result.md"]
-        Repo["/srv/picoagent/workspaces/<run>/repo (git)"]
-        Skills["skills/<br/>SKILL.md"]
-        Memory["memory/<br/>memory.md"]
-    end
+```text
+src/
+  app/        runtime assembly and entrypoint bootstrap
+  core/       agent loop, hooks contract, provider contract, shared types
+  runtime/    main/worker orchestration
+  hooks/      tracing and compaction adapters
+  providers/  Anthropic, OpenAI-compatible, Gemini adapters
+  tools/      shell, file, scan/load, dispatch/steer/abort
+  lib/        prompts, tasks, workspace, sandbox, git, config helpers
 
-    W1 -->|read/write (sandboxed)| Tasks
-    W2 -->|read/write (sandboxed)| Tasks
-    Main -->|orchestrate| Repo
-    Main -->|scan/load| Tasks
-    Main -->|scan/load| Skills
-    Main -->|load| Memory
+defaults/
+  skills/
+  agents/
+
+docs/
+  INDEX.md
+  architecture.md
+  golden-principles.md
+  runtime-model.md
+  entrypoints.md
 ```
 
-### Use Case: Dispatching Work (Worktrees + Sandbox)
+## Runtime Model
 
-```mermaid
-sequenceDiagram
-    actor User
-    participant Main as Main Agent
-    participant RT as Runtime
-    participant W as Worker
+`picoagent` distinguishes three things:
 
-    User->>Main: "refactor main.rs"
-    Main->>Main: dispatch(task)
-    Main-->>User: "On it, refactoring main.rs"
-    Main->>RT: onTaskCreated(taskDir)
-    RT->>W: spawn(worktreeDir, tools, hooks)
-    
-    Note over W: Worker runs autonomously (bwrap sandbox)
-    W->>W: read task.md
-    W->>W: shell("cargo check")
-    W->>W: write progress.md
-    W->>W: write result.md
+- Control workspace: the directory where you launch picoagent. It owns `config.md`, `AGENTS.md`, `SOUL.md`, `USER.md`, `memory/`, `skills/`, and `agents/`.
+- Execution repo: the filesystem root where commands and edits run. If the control workspace is already inside a git repo, picoagent uses that repo directly. Otherwise it creates an isolated git snapshot for execution.
+- Task workspaces: one directory per dispatched worker, usually created as git worktrees from the execution repo.
 
-    W-->>RT: WorkerResult
-    RT->>Main: inject "[Worker completed t_001]"
-    Main->>Main: load(result.md)
-    Main-->>User: "Refactoring done! ✅"
+The important consequence is:
+- prompts and skills come from the control workspace
+- code execution happens in the execution repo or task workspaces
+- worker writes stay bounded to the task workspace
+
+Detailed behavior lives in `docs/runtime-model.md`.
+
+## Development
+
+```bash
+npm install
+npm run build
+npm test
+npm run typecheck
 ```
 
-### Data Flow: Hooks Lifecycle
+## Usage
 
-```mermaid
-flowchart LR
-    subgraph AgentLoop["Agent Loop"]
-        LS[onLoopStart] --> LMS[onLlmStart]
-        LMS --> LLM[LLM Call]
-        LLM --> LME[onLlmEnd]
-        LME --> TS[onToolStart]
-        TS --> Tool[Execute Tool]
-        Tool --> TE[onToolEnd]
-        TE --> TurnEnd[onTurnEnd]
-        TurnEnd -->|more tools?| LMS
-        TurnEnd -->|done| LE[onLoopEnd]
-    end
+Create a `config.md` in the control workspace:
 
-    subgraph Hooks["Hook Consumers"]
-        Trace["Tracing<br/>span tree + JSONL"]
-        Compact["Compaction<br/>token check + summarize"]
-        WC["Worker Control<br/>abort flag + steer queue"]
-        Stream["Streaming<br/>onTextDelta → stdout"]
-    end
-
-    TE -.-> Trace
-    TE -.-> WC
-    TurnEnd -.-> Compact
-    TurnEnd -.-> WC
-    LLM -.-> Stream
-```
-
-### Main Agent + Async Workers
-
-```
-┌──────────────────────────────────────────┐
-│              Main Agent                   │
-│                                           │
-│  ✦ Receives all user messages             │
-│  ✦ Fast turns — routing + simple answers  │
-│  ✦ Dispatches heavy work to Workers       │
-│  ✦ Gets notified when Workers complete    │
-│  ✦ Reads progress / relays results        │
-│                                           │
-│  Tools:                                   │
-│    dispatch(task) — spawn async Worker     │
-│    steer(id, msg) — redirect a Worker      │
-│    abort(id)      — cancel a Worker        │
-│    scan(dir)      — search by frontmatter  │
-│    load(path)     — read full content      │
-│    shell / read / write — simple tasks     │
-├──────────────────────────────────────────┤
-│               Runtime                     │
-│                                           │
-│  ✦ Routes user messages to Main Agent     │
-│  ✦ Manages Worker lifecycle               │
-│  ✦ Manages WorkerControl per task         │
-│  ✦ Injects completion messages            │
-│     (Worker done → wake Main Agent)       │
-├──────────────────────────────────────────┤
-│           Workers (async, ×N)             │
-│                                           │
-│  ✦ One Worker = one task directory         │
-│  ✦ Runs tool-calling loop                 │
-│  ✦ Updates progress.md after each step    │
-│  ✦ Controlled via hooks (abort/steer)     │
-│  ✦ Never talks to user directly           │
-│  ✦ Completion triggers Main Agent wakeup  │
-│                                           │
-│  Tools:                                   │
-│    shell / read / write                   │
-│    scan / load                            │
-│    + skill-provided tools                 │
-└──────────────────────────────────────────┘
-```
-
-## Core Concepts
-
-### Hooks System
-
-The agent loop supports a composable **hook system** for lifecycle observation and control. Hooks are optional — zero overhead when not provided.
-
-```typescript
-interface AgentHooks {
-  onLoopStart?(): void | Promise<void>;
-  onLoopEnd?(turns: number): void | Promise<void>;
-  onLlmStart?(messages: Message[]): void | Promise<void>;
-  onLlmEnd?(response: AssistantMessage, durationMs: number): void | Promise<void>;
-  onToolStart?(call: ToolCall): void | Promise<void>;
-  onToolEnd?(call: ToolCall, result: ToolResultMessage, durationMs: number):
-    ToolResultMessage | void | Promise<ToolResultMessage | void>;
-  onTurnEnd?(messages: Message[]): void | Promise<void>;
-  onTextDelta?(text: string): void;
-  onError?(error: Error): void | Promise<void>;
-}
-```
-
-Multiple hooks compose via `combineHooks()`:
-
-```typescript
-const hooks = combineHooks(
-  createTraceHooks(tracer, "claude-sonnet"),   // observability
-  createCompactionHooks(provider, config),      // context management
-  createWorkerControlHooks(control, taskId),    // abort + steer
-  { onTextDelta: (t) => process.stdout.write(t) } // streaming
-);
-```
-
-Built-in hook adapters:
-- **`createTraceHooks(tracer)`** — JSONL tracing with span tree reconstruction
-- **`createCompactionHooks(provider, config)`** — automatic context compaction when token threshold exceeded
-- **`createWorkerControlHooks(control, taskId)`** — abort flag + steer message queue
-
-### Agent Loop
-
-The heart of picoagent — a unified tool-calling loop used by both Main Agent and Workers:
-
-```
-runAgentLoop(messages, tools, provider, context, systemPrompt?, hooks?) {
-  hooks.onLoopStart()
-
-  loop {
-    hooks.onLlmStart(messages)
-    response = provider.complete(messages, tools)  // or .stream() if onTextDelta
-    hooks.onLlmEnd(response, duration)
-
-    if no tool calls → hooks.onLoopEnd(turns) → return
-
-    for each tool_call:
-      hooks.onToolStart(tool_call)
-      result = execute_tool(tool_call)
-      result = hooks.onToolEnd(tool_call, result, duration) || result
-      messages.push(result)
-
-    hooks.onTurnEnd(messages)
-  }
-}
-```
-
-One function handles both streaming and non-streaming: if `hooks.onTextDelta` is set, the loop uses `provider.stream()`. Otherwise `provider.complete()`.
-
-### Provider Abstraction
-
-The agent loop never imports any SDK. All LLM-specific code lives behind the `Provider` interface:
-
-```typescript
-interface Provider {
-  model: string;
-  complete(messages, tools, systemPrompt?): Promise<AssistantMessage>;
-  stream(messages, tools, systemPrompt?): AsyncIterable<StreamEvent>;
-}
-```
-
-Currently implemented: `AnthropicProvider` (Claude), `OpenAIProvider` (GPT + compatible APIs), `GeminiProvider` (Gemini). Adding more = one new file in `src/providers/`.
-
-Configure via `config.md` in the workspace root:
-```markdown
----
-provider: anthropic
-model: claude-sonnet-4-20250514
-max_tokens: 4096
-context_window: 200000
----
-```
-
-For OpenAI-compatible APIs, add `base_url`:
 ```markdown
 ---
 provider: openai
-model: deepseek-chat
-base_url: https://api.deepseek.com
+model: gpt-4o
 ---
 ```
 
-API keys are read from environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`.
+Supported providers:
+- `anthropic`
+- `openai`
+- `gemini`
 
-### Worker Control
-
-Workers are controlled via an **in-memory message queue**, not file-based signals:
-
-```typescript
-class WorkerControl {
-  abort(): void;           // set abort flag
-  steer(msg: string): void; // push message to steer queue
-}
-```
-
-- **Abort** — `onToolEnd` hook checks the abort flag; throws `AbortError` immediately
-- **Steer** — `onTurnEnd` hook drains the steer queue and injects messages before the next LLM call
-
-The Runtime maintains a `Map<taskId, WorkerControl>` per active worker. The `steer` and `abort` tools operate on this map via context callbacks.
-
-### Compaction
-
-Long sessions accumulate context. Compaction keeps agents within their context window.
-
-**Layer 1: Tool Result Truncation** — head + tail pattern (key info often at end of output). Applied at tool execution time, before the result enters the session.
-
-**Layer 2: Session Compaction** — implemented as a hook (`createCompactionHooks`). Fires on `onTurnEnd`, estimates token count, and when usage exceeds 75% of the context window, summarizes old messages via an LLM call and replaces them with a compact summary. File operations are extracted programmatically and appended.
-
-### Progressive Disclosure
-
-**Everything scannable is a markdown file with YAML frontmatter.** One pattern for all retrieval:
-
-```yaml
----
-name: "some entity"
-tags: [a, b]
----
-(detailed content, loaded on demand)
-```
-
-**Two tools power all retrieval:**
-
-```typescript
-scan(dir, pattern?) → DocMeta[]   // frontmatter only, supports * wildcards
-load(path)          → DocFull     // frontmatter + body
-```
-
-### Trust Boundaries (Zod)
-
-Zod validation at **trust boundaries only**:
-- **Tool parameters** — LLM-generated, untrusted → Zod schema + `z.toJSONSchema()` for LLM
-- **API responses** — external, untrusted → Zod validation
-- **Internal types** — compiler-guaranteed → plain TypeScript interfaces
-
-### Workspace / Core Separation
-
-picoagent distinguishes a **control directory** (where you run it, containing config + prompts) from a **per-run execution workspace** (created automatically).
-
-```
-<control-dir>/                    ← user-managed (where you launch picoagent)
-├── config.md                        provider/model config
-├── AGENTS.md
-├── SOUL.md
-├── USER.md
-├── memory/
-├── skills/
-└── agents/
-
-/srv/picoagent/workspaces/<run>/  ← execution workspace (auto-created)
-├── repo/                             git repo for orchestration (seed commit)
-└── tasks/                            one git worktree per task
-    ├── t_001/                         task.md / progress.md / result.md
-    └── ...
-
-picoagent/defaults/               ← built-in (ships with picoagent)
-├── skills/
-└── agents/
-```
-
-**Why this split?** It lets Workers run inside a filesystem sandbox: the OS is readable, but only the task worktree is writable.
-
-### Context Separation
-
-| Context | Main Agent | Worker |
-|---------|-----------|--------|
-| SOUL.md | ✅ | ❌ |
-| USER.md | ✅ | ❌ |
-| AGENTS.md | ✅ | ✅ |
-| memory.md | ✅ | ❌ |
-| Skill frontmatter | ✅ | ✅ |
-| task.md | ❌ | ✅ (own only) |
-| write_file | unrestricted | task dir only |
-| shell (writes) | unrestricted | **sandboxed** (only task dir writable) |
-
-### Three Levels of Observability
-
-| File | Granularity | Content |
-|------|------------|---------|
-| `progress.md` | Key milestones | `14:03 Found 5 extractable functions` |
-| `traces/*.jsonl` | Every event | `{"event":"tool_start","tool":"read_file"}` |
-| `sessions/*.jsonl` | Full conversation | Raw LLM messages |
-
-## Project Structure
-
-```
-src/
-├── core/                      ← kernel, 4 files, frozen after v1
-│   ├── loop.ts                    agent loop (hooks-based)
-│   ├── hooks.ts                   AgentHooks interface + combineHooks
-│   ├── provider.ts                Provider interface
-│   └── types.ts                   Message, Tool, ToolContext
-│
-├── runtime/                   ← orchestration
-│   ├── runtime.ts                 Runtime class (message routing + workers)
-│   ├── worker.ts                  runWorker
-│   └── worker-control.ts         WorkerControl + abort/steer hooks
-│
-├── hooks/                     ← composable hook adapters
-│   ├── tracing.ts                 createTraceHooks (JSONL spans)
-│   └── compaction.ts              createCompactionHooks
-│
-├── lib/                       ← shared utilities
-│   ├── config.ts                  loadConfig from workspace config.md
-│   ├── frontmatter.ts             parseFrontmatter, scan, load
-│   ├── prompt.ts                  buildMainPrompt, buildWorkerPrompt
-│   ├── task.ts                    task directory CRUD
-│   └── tracer.ts                  Tracer class (JSONL writer)
-│
-├── providers/                 ← SDK-specific
-│   ├── index.ts                   createProvider factory
-│   ├── anthropic.ts               Claude
-│   ├── openai.ts                  GPT + compatible APIs (DeepSeek, Groq, etc.)
-│   └── gemini.ts                  Gemini
-│
-├── tools/                     ← LLM tool interfaces
-│   ├── shell.ts                   30s timeout + truncation
-│   ├── read-file.ts / write-file.ts
-│   ├── scan.ts / load.ts
-│   └── dispatch.ts / steer.ts / abort.ts
-│
-├── main.ts                    ← REPL entry point
-└── server.ts                  ← HTTP server entry point (SSE streaming)
-```
-
-**Design principle:** `core/` is the kernel — 4 files that stabilize after v1. Everything else builds on top.
-
-## Usage
+API keys come from environment variables:
+- `ANTHROPIC_API_KEY`
+- `OPENAI_API_KEY`
+- `GEMINI_API_KEY`
 
 ### REPL
 
 ```bash
-ANTHROPIC_API_KEY=sk-... npm run dev
-
-# or with OpenAI
-OPENAI_API_KEY=sk-... npm run dev
-
-# or with Gemini
-GEMINI_API_KEY=... npm run dev
+OPENAI_API_KEY=... npm run dev
 ```
-
-(Set `provider` in `config.md` to match your API key.)
 
 ### HTTP Server
 
 ```bash
-ANTHROPIC_API_KEY=sk-... npm run dev:server
-# listening on http://localhost:3000
+OPENAI_API_KEY=... npm run dev:server
 ```
 
-Endpoints:
+Server endpoints:
+- `POST /chat`
+- `GET /tasks`
+- `GET /tasks/:id`
+- `POST /tasks/:id/steer`
+- `POST /tasks/:id/abort`
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/chat` | Send message, SSE streaming response |
-| `GET` | `/tasks` | List all tasks |
-| `GET` | `/tasks/:id` | Task details + progress + result |
-| `POST` | `/tasks/:id/steer` | Redirect a running worker |
-| `POST` | `/tasks/:id/abort` | Cancel a running worker |
+## Documentation
 
-**Chat SSE events:**
-```
-data: {"type":"delta","text":"Hello"}    ← streaming token
-data: {"type":"done","text":"Hello..."}  ← final response
-data: {"type":"error","error":"..."}     ← on failure
-```
-
-## TODO
-
-- [ ] Channel integration (single channel, TBD)
-
-## Stats
-
-- **3576 lines** across 44 files
-- **41 tests**, all passing under strict mode
-
-## Acknowledgments
-
-Inspired by studying the architectures of:
-- [OpenClaw](https://github.com/openclaw/openclaw) — comprehensive agent framework
-- [NanoClaw](https://github.com/gavrielc/nanoclaw) — minimal Claude agent with container isolation
-- [pi-agent](https://github.com/pchaganti/gx-pi-agent) — lightweight coding agent
+Start here:
+- `docs/INDEX.md`
+- `docs/architecture.md`
+- `docs/runtime-model.md`
+- `docs/entrypoints.md`
 
 ## License
 

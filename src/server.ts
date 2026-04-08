@@ -1,54 +1,13 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
-import { homedir } from 'os';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { readFileSync, existsSync } from 'fs';
-import { shellTool } from './tools/shell.js';
-import { readFileTool } from './tools/read-file.js';
-import { writeFileTool } from './tools/write-file.js';
-import { scanTool } from './tools/scan.js';
-import { loadTool } from './tools/load.js';
-import { dispatchTool } from './tools/dispatch.js';
-import { steerTool } from './tools/steer.js';
-import { abortTool } from './tools/abort.js';
-import { ToolContext } from './core/types.js';
-import { loadConfig } from './lib/config.js';
-import { createProvider } from './providers/index.js';
-import { buildMainPrompt } from './lib/prompt.js';
+import { createAppBootstrap } from './app/bootstrap.js';
 import { listTasks, readTask } from './lib/task.js';
-import { Runtime } from './runtime/runtime.js';
-import { DEFAULT_CONFIG } from './hooks/compaction.js';
-
-// --- Config ---
 
 const port = parseInt(process.env.PICOAGENT_PORT || '3000', 10);
-const workspaceDir = process.cwd();
-const config = loadConfig(workspaceDir);
-
-// --- Tools ---
-
-const workerTools = [shellTool, readFileTool, writeFileTool, scanTool, loadTool];
-const mainTools = [...workerTools, dispatchTool, steerTool, abortTool];
-
-// --- Prompt & Provider ---
-
-const systemPrompt = buildMainPrompt(workspaceDir);
-const provider = createProvider(config, systemPrompt);
-
-const context: ToolContext = {
-  cwd: workspaceDir,
-  tasksRoot: join(workspaceDir, '.tasks'),
-};
-
-const traceDir = join(homedir(), '.picoagent', 'traces');
-const compactionConfig = { ...DEFAULT_CONFIG, contextWindow: config.contextWindow };
-
-const runtime = new Runtime(provider, mainTools, workerTools, context, systemPrompt, traceDir, compactionConfig);
-
-context.onTaskCreated = (taskDir) => runtime.spawnWorker(taskDir);
-context.onSteer = (taskId, message) => runtime.getControl(taskId)?.steer(message);
-context.onAbort = (taskId) => runtime.getControl(taskId)?.abort();
-
-// --- HTTP helpers ---
+const app = createAppBootstrap(process.cwd(), {
+  onBackgroundError: (error) => console.error(error),
+});
 
 function cors(res: ServerResponse): void {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -77,8 +36,6 @@ function parseRoute(url: string): { path: string; segments: string[] } {
   return { path, segments };
 }
 
-// --- Routes ---
-
 async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const raw = await readBody(req);
   let message: string;
@@ -94,7 +51,6 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
     return;
   }
 
-  // SSE streaming
   cors(res);
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -103,39 +59,37 @@ async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<vo
   });
 
   try {
-    const result = await runtime.onUserMessage(message, (delta) => {
+    const result = await app.runtime.onUserMessage(message, (delta) => {
       res.write(`data: ${JSON.stringify({ type: 'delta', text: delta })}\n\n`);
     });
 
-    // Extract final text
     const text = result.content
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text)
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text)
       .join('');
 
     res.write(`data: ${JSON.stringify({ type: 'done', text })}\n\n`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
     res.write(`data: ${JSON.stringify({ type: 'error', error: msg })}\n\n`);
   }
+
   res.end();
 }
 
 function handleListTasks(_req: IncomingMessage, res: ServerResponse): void {
-  const tasks = listTasks(context.tasksRoot);
+  const tasks = listTasks(app.context.tasksRoot);
   json(res, { tasks });
 }
 
 function handleGetTask(taskId: string, _req: IncomingMessage, res: ServerResponse): void {
-  const taskDir = join(context.tasksRoot, taskId);
+  const taskDir = join(app.context.tasksRoot, taskId);
   if (!existsSync(taskDir)) {
     json(res, { error: `task ${taskId} not found` }, 404);
     return;
   }
 
   const task = readTask(taskDir);
-
-  // Read optional files
   const progressPath = join(taskDir, 'progress.md');
   const resultPath = join(taskDir, 'result.md');
   const progress = existsSync(progressPath) ? readFileSync(progressPath, 'utf-8') : null;
@@ -159,7 +113,7 @@ async function handleSteerTask(taskId: string, req: IncomingMessage, res: Server
     return;
   }
 
-  const control = runtime.getControl(taskId);
+  const control = app.runtime.getControl(taskId);
   if (!control) {
     json(res, { error: `no active worker for ${taskId}` }, 404);
     return;
@@ -170,7 +124,7 @@ async function handleSteerTask(taskId: string, req: IncomingMessage, res: Server
 }
 
 function handleAbortTask(taskId: string, _req: IncomingMessage, res: ServerResponse): void {
-  const control = runtime.getControl(taskId);
+  const control = app.runtime.getControl(taskId);
   if (!control) {
     json(res, { error: `no active worker for ${taskId}` }, 404);
     return;
@@ -180,13 +134,10 @@ function handleAbortTask(taskId: string, _req: IncomingMessage, res: ServerRespo
   json(res, { ok: true });
 }
 
-// --- Server ---
-
 const server = createServer(async (req, res) => {
   const method = req.method || 'GET';
   const { segments } = parseRoute(req.url || '/');
 
-  // CORS preflight
   if (method === 'OPTIONS') {
     cors(res);
     res.writeHead(204);
@@ -195,50 +146,47 @@ const server = createServer(async (req, res) => {
   }
 
   try {
-    // POST /chat
     if (method === 'POST' && segments[0] === 'chat' && segments.length === 1) {
       await handleChat(req, res);
       return;
     }
 
-    // GET /tasks
     if (method === 'GET' && segments[0] === 'tasks' && segments.length === 1) {
       handleListTasks(req, res);
       return;
     }
 
-    // GET /tasks/:id
     if (method === 'GET' && segments[0] === 'tasks' && segments.length === 2) {
       handleGetTask(segments[1], req, res);
       return;
     }
 
-    // POST /tasks/:id/steer
     if (method === 'POST' && segments[0] === 'tasks' && segments[2] === 'steer' && segments.length === 3) {
       await handleSteerTask(segments[1], req, res);
       return;
     }
 
-    // POST /tasks/:id/abort
     if (method === 'POST' && segments[0] === 'tasks' && segments[2] === 'abort' && segments.length === 3) {
       handleAbortTask(segments[1], req, res);
       return;
     }
 
-    // 404
     json(res, { error: 'not found' }, 404);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
     json(res, { error: msg }, 500);
   }
 });
 
 server.listen(port, () => {
   console.log(`picoagent server listening on http://localhost:${port}`);
+  console.log(`control: ${app.controlDir}`);
+  console.log(`repo: ${app.runWorkspace.repoDir} (${app.runWorkspace.mode})`);
+  console.log(`tasks: ${app.runWorkspace.tasksDir}`);
   console.log('Endpoints:');
-  console.log('  POST /chat              — send message (SSE streaming)');
-  console.log('  GET  /tasks             — list all tasks');
-  console.log('  GET  /tasks/:id         — get task details');
-  console.log('  POST /tasks/:id/steer   — redirect a worker');
-  console.log('  POST /tasks/:id/abort   — cancel a worker');
+  console.log('  POST /chat              - send message (SSE streaming)');
+  console.log('  GET  /tasks             - list all tasks for this server process');
+  console.log('  GET  /tasks/:id         - get task details');
+  console.log('  POST /tasks/:id/steer   - redirect a worker');
+  console.log('  POST /tasks/:id/abort   - cancel a worker');
 });

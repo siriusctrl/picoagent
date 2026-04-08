@@ -35,7 +35,7 @@ export async function runWorker(
 
   const systemPrompt = buildWorkerPrompt(
     taskDir,
-    baseContext.cwd,
+    baseContext.controlRoot ?? baseContext.cwd,
     instructions,
     taskId,
     taskName,

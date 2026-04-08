@@ -1,12 +1,18 @@
 import { Tool, ToolContext, Message, AssistantMessage } from '../core/types.js';
 import { Provider } from '../core/provider.js';
 import { runAgentLoop } from '../core/loop.js';
-import { runWorker, WorkerResult } from './worker.js';
+import { runWorker } from './worker.js';
 import { Tracer } from '../lib/tracer.js';
 import { WorkerControl, createWorkerControlHooks } from './worker-control.js';
 import { createTraceHooks } from '../hooks/tracing.js';
 import { AgentHooks, combineHooks } from '../core/hooks.js';
 import { CompactionConfig, createCompactionHooks, DEFAULT_CONFIG } from '../hooks/compaction.js';
+
+export interface RuntimeEventHandlers {
+  onBackgroundText?: (text: string) => void;
+  onBackgroundTurnComplete?: () => void;
+  onBackgroundError?: (error: unknown) => void;
+}
 
 export class Runtime {
   private mainMessages: Message[] = [];
@@ -19,7 +25,8 @@ export class Runtime {
     private context: ToolContext,
     private systemPrompt?: string,
     private traceDir?: string,
-    private compactionConfig: CompactionConfig = DEFAULT_CONFIG
+    private compactionConfig: CompactionConfig = DEFAULT_CONFIG,
+    private eventHandlers: RuntimeEventHandlers = {}
   ) {}
 
   async onUserMessage(
@@ -86,16 +93,28 @@ export class Runtime {
           (result.result ? `Result: ${result.result}` : `Error: ${result.error}`);
         
         // Inject notification
-        this.onUserMessage(msg, (text) => process.stdout.write(text))
-            .then(() => process.stdout.write('\n> ')) // Restore prompt
-            .catch(console.error);
+        this.onUserMessage(msg, this.eventHandlers.onBackgroundText)
+          .then(() => this.eventHandlers.onBackgroundTurnComplete?.())
+          .catch((error) => {
+            if (this.eventHandlers.onBackgroundError) {
+              this.eventHandlers.onBackgroundError(error);
+              return;
+            }
+            console.error(error);
+          });
       })
       .catch((err) => {
         this.activeWorkers.delete(taskId);
         const msg = `[Task ${taskId} failed unexpectedly: ${err instanceof Error ? err.message : String(err)}]`;
-        this.onUserMessage(msg, (text) => process.stdout.write(text))
-            .then(() => process.stdout.write('\n> '))
-            .catch(console.error);
+        this.onUserMessage(msg, this.eventHandlers.onBackgroundText)
+          .then(() => this.eventHandlers.onBackgroundTurnComplete?.())
+          .catch((error) => {
+            if (this.eventHandlers.onBackgroundError) {
+              this.eventHandlers.onBackgroundError(error);
+              return;
+            }
+            console.error(error);
+          });
       });
   }
 }

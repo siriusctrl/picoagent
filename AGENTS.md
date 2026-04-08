@@ -1,132 +1,98 @@
-# AGENTS.md
+Principles for agents contributing to this repository.
 
-## Project Overview
-picoagent is a minimal AI agent framework in TypeScript. Read README.md for architecture.
+## Mission
 
-## Build & Test
-- `npm run build` — compile TypeScript
-- `npm test` — run all tests
-- `npx tsc -p tsconfig.check.json` — strict type check (src + tests)
+Build a minimal agent framework that stays understandable from the repository alone.
 
-## CI (Required for New / Experimental Features)
-When adding new functionality (especially orchestration, sandboxing, workspaces, workers):
-- **Add tests** that cover the new behavior (unit or integration depending on scope).
-- **Keep GitHub Actions green**. If a feature depends on Linux-only infra (e.g. bubblewrap), tests must be **skip + warn** when the dependency is unavailable or blocked by the environment (e.g. user namespaces disabled), rather than making CI flaky.
-- Prefer **deterministic infra tests** (workspaces/worktrees/sandbox boundaries/timeouts) over LLM-dependent tests.
+The project has two equal goals:
+1. Be useful as a real coding and orchestration tool.
+2. Stay small enough that humans and agents can audit the whole system without framework archaeology.
 
-## Key Conventions
+## Core Principles
 
-### Trust Boundaries (Zod vs Interface)
-- **External data** (LLM tool args, API responses, config files) → validate with Zod schemas
-- **Internal data** (messages, tool results, context) → plain TypeScript interfaces
-- Never add Zod validation for internally-constructed objects
+1. **Kernel first**
+   - Keep the agent loop, provider contract, and tool contract small and explicit.
+   - Protect `src/core/` from SDK leakage and orchestration sprawl.
 
-### Provider Abstraction
-- core/loop.ts must NEVER import any SDK (anthropic, openai, etc.)
-- All SDK-specific code lives in src/providers/
-- Provider interface uses our own types (Message, ToolDefinition), not SDK types
-- Tool[] → ToolDefinition[] conversion happens in loop.ts, not in providers
+2. **Control workspace is the source of truth**
+   - Prompts, skills, memory, and agent instructions come from the user-managed control directory.
+   - Execution workspaces exist to run tasks safely, not to redefine project intent.
 
-### Tool Implementation
-- Tool parameters are Zod schemas, validated automatically by the agent loop
-- Tools receive already-validated, typed args — no need to re-validate
-- Use z.object().describe() for parameter descriptions (shows in JSON Schema for LLM)
-- Keep tools focused: one tool = one capability
+3. **Use the simplest boundary that preserves clarity**
+   - Prefer one package with clear directories over a monorepo with ceremonial package splits.
+   - Add a new package only when dependency boundaries become operationally useful, not aesthetically pleasing.
 
-### Hooks System
-- Use `AgentHooks` interface for lifecycle events
-- `combineHooks()` merges multiple hook sets
-- Built-in hook adapters: tracing (hooks/tracing.ts), compaction (hooks/compaction.ts), worker control (runtime/worker-control.ts)
-- `onTextDelta` hook enables streaming (provider.stream() instead of provider.complete())
+4. **No speculative platform layers**
+   - Do not add plugin buses, registries, transport layers, persistence systems, or compatibility shims unless the task explicitly requires them.
+   - Keep the current REPL and HTTP surfaces honest about what they support today.
 
-### Compaction
-- `createCompactionHooks(provider, config)` — hook-based, agent loop has zero knowledge
-- Fires on `onTurnEnd`, estimates tokens, summarizes when threshold exceeded
-- Preserves recent messages, extracts file operations programmatically
+## Navigation
 
-### System Prompt Assembly
-- `src/lib/prompt.ts` builds prompts from workspace files
-- `buildMainPrompt(workspaceDir)`: SOUL.md → USER.md → AGENTS.md → memory.md → skill summaries → tool hints
-- `buildWorkerPrompt(...)`: AGENTS.md → skill summaries → tool hints → protocol → constraints → task instructions (last)
-- Files are optional — missing files are silently skipped
+Start with docs, then inspect code once you know which boundary you are changing.
 
-### Context Separation
-| Context | Main Agent | Worker |
-|---------|-----------|--------|
-| SOUL.md | ✅ | ❌ |
-| USER.md | ✅ | ❌ |
-| AGENTS.md | ✅ | ✅ |
-| memory.md | ✅ | ❌ |
-| Skill summaries | ✅ | ✅ |
-| task.md | ❌ | ✅ (own task) |
-| write_file | unrestricted | task dir only |
+### Read these docs first
 
-### Worker Write Boundary
-- Workers can read broadly, but can only write within their task directory (task worktree).
-- `write_file` is restricted via `writeRoot` in ToolContext.
-- `shell` is **hard-restricted** for workers via bubblewrap sandbox (bwrap): OS is readable, but only the task directory is writable.
-- Main Agent has no write restrictions.
+- `README.md` - project overview, entrypoints, and development commands.
+- `docs/INDEX.md` - docs map and reading order.
+- `docs/architecture.md` - code boundaries and dependency rules.
+- `docs/golden-principles.md` - durable invariants.
 
-### File Organization
-- src/core/ — kernel (loop, hooks, provider, types) — 4 files, frozen after v1
-- src/runtime/ — orchestration (runtime, worker, worker-control)
-- src/hooks/ — composable hook adapters (tracing, compaction)
-- src/lib/ — shared utilities (frontmatter, prompt, task, tracer)
-- src/providers/ — SDK-specific implementations
-- src/tools/ — LLM-facing tool interfaces
-- tests/ — mirrors src/ structure
+### Read these docs when the task matches
 
-### Scanning & Frontmatter
-- Use `src/lib/frontmatter.ts` for all markdown scanning
-- Frontmatter parser is custom (no external YAML lib) to keep core small
-- Supports only: `key: value` (string/number/bool) and inline arrays `key: [a, b]`
-- No nested objects or multi-line values
-- Always use `---` delimiters
+- Runtime, task, worker, or workspace changes:
+  - Read `docs/runtime-model.md` first.
+- REPL or HTTP entrypoint changes:
+  - Read `docs/entrypoints.md` first.
+- Architecture or directory-boundary changes:
+  - Read `docs/architecture.md` first.
 
-### Common Mistakes
-- Importing SDK types in core/ files (breaks provider abstraction)
-- Forgetting to handle the `toolResult` grouping in Anthropic (consecutive tool results must be in one user message)
-- Using `Record<string, any>` instead of `Record<string, unknown>` (prefer unknown for type safety)
-- Not running `npx tsc -p tsconfig.check.json` after changes
-- Adding node_modules/ or dist/ to git (check .gitignore)
-- Zod v4 uses `z.toJSONSchema()` not the old `zodToJsonSchema` package
+## Top-level Source Map
 
-### Testing
-- Use Node built-in test runner (node:test)
-- Mock the Provider interface for agent-loop tests
-- Test at trust boundaries: tool args validation, API response parsing
-- `tsconfig.check.json` includes both src/ and tests/ under strict mode
+- `src/core` - agent loop, hook contract, provider contract, shared message/tool types.
+- `src/runtime` - runtime orchestration, worker lifecycle, worker control.
+- `src/hooks` - composable lifecycle adapters such as tracing and compaction.
+- `src/providers` - SDK-specific provider adapters.
+- `src/tools` - tool definitions exposed to the LLM.
+- `src/lib` - filesystem, prompt, task, sandbox, and git helpers.
+- `src/app` - entrypoint bootstrap and runtime assembly.
+- `defaults` - built-in skill and agent metadata shipped with picoagent.
+- `tests` - mirrors the source layout where practical.
 
-## Task Management
+## Task Routing
 
-Tasks are isolated units of work with their own directory and state.
+When starting work, route yourself by task type:
 
-### Directory Structure
-Each task lives in the per-run workspace under `.../tasks/{id}/` (a git worktree):
-- `task.md`: Definition + metadata in frontmatter
-- `progress.md`: Worker's activity log
-- `result.md`: Final output
+- For an unfamiliar task, read `README.md`, then `docs/INDEX.md`, then only the matching docs.
+- For loop/provider/tool contract changes, inspect `src/core` before touching providers or tools.
+- For worker dispatch, sandbox, worktree, or task lifecycle changes, inspect `src/runtime`, `src/lib/task.ts`, `src/lib/workspace.ts`, and `src/lib/sandbox.ts`.
+- For prompt, skills, or instruction-loading changes, inspect `src/lib/prompt.ts` and `defaults/`.
+- For REPL or HTTP changes, inspect `src/app`, `src/main.ts`, and `src/server.ts`.
 
-### Lifecycle
-Status flow: `pending` → `running` → `completed` | `failed` | `aborted`
+## Engineering Rules
 
-### Core Tools
-- `dispatch(name, description, instructions)`: Create a new task and spawn worker
-- `steer(id, message)`: Redirect a running worker
-- `abort(id)`: Cancel a running worker
+- TypeScript everywhere.
+- Keep `src/core` free of provider SDK imports.
+- Validate external inputs at trust boundaries, not everywhere.
+- Keep tools focused: one tool, one capability.
+- Worker write access must stay constrained to the task workspace.
+- Keep runtime IO concerns out of core logic when a callback boundary is sufficient.
+- Update docs when runtime contracts, architecture, or entrypoint behavior changes.
 
-## Workers & Runtime
+## Verification Requirements
 
-### Worker Implementation
-- One worker per task directory
-- Reads instructions from `task.md`
-- cwd and writeRoot scoped to task directory
-- System prompt includes AGENTS.md + skills + protocol + constraints + task instructions
-- NO user profile (SOUL.md, USER.md) or memories
+- Minimum bar for meaningful code changes:
+  - `npm run build`
+  - `npm test`
+  - `npm run typecheck`
+- If you change runtime/workspace/task behavior, add or update deterministic tests for the changed contract.
+- If you change REPL or server entrypoints, run the relevant entrypoint manually after build:
+  - `npm run dev`
+  - `npm run dev:server`
+- If a feature depends on Linux-only sandboxing behavior, tests must skip or degrade cleanly when the environment blocks it.
 
-### Runtime Coordination
-- `src/runtime/runtime.ts` manages message routing + worker lifecycle
-- Spawns workers via `spawnWorker(taskDir)`
-- Tracks active workers via `Map<taskId, WorkerControl>`
-- Injects completion notifications into main agent
-- Worker control via hooks: abort flag + steer message queue
+## Collaboration Preferences
+
+- Keep implementations small and legible.
+- Prefer explicit contracts over clever indirection.
+- Optimize for future readers who need to understand the system in one sitting.
+- If the requested goal implies a real architecture change, implement the coherent end state directly instead of layering temporary shims on top of confused boundaries.

@@ -1,87 +1,24 @@
 import { createInterface } from 'readline';
-import { homedir } from 'os';
-import { join } from 'path';
-import { shellTool } from './tools/shell.js';
-import { readFileTool } from './tools/read-file.js';
-import { writeFileTool } from './tools/write-file.js';
-import { scanTool } from './tools/scan.js';
-import { loadTool } from './tools/load.js';
-import { dispatchTool } from './tools/dispatch.js';
-import { steerTool } from './tools/steer.js';
-import { abortTool } from './tools/abort.js';
-import { ToolContext } from './core/types.js';
-import { loadConfig } from './lib/config.js';
-import { createProvider } from './providers/index.js';
-import { buildMainPrompt } from './lib/prompt.js';
-import { Runtime } from './runtime/runtime.js';
-import { DEFAULT_CONFIG } from './hooks/compaction.js';
-import { createRunWorkspace } from './lib/workspace.js';
-
-const controlDir = process.cwd();
-const config = loadConfig(controlDir);
-
-// --- Run Workspace ---
-
-const runWs = createRunWorkspace({ copyConfigFrom: controlDir });
-const workspaceDir = runWs.repoDir;
-
-// --- Tools ---
-
-const workerTools = [
-  shellTool,
-  readFileTool,
-  writeFileTool,
-  scanTool,
-  loadTool
-];
-
-const mainTools = [
-  ...workerTools,
-  dispatchTool,
-  steerTool,
-  abortTool
-];
-
-// --- Prompt & Provider ---
-
-const systemPrompt = buildMainPrompt(workspaceDir);
-const provider = createProvider(config, systemPrompt);
-
-// --- Runtime ---
-
-const context: ToolContext = {
-  cwd: workspaceDir,
-  tasksRoot: runWs.tasksDir
-};
-
-const traceDir = join(homedir(), '.picoagent', 'traces');
-const compactionConfig = { ...DEFAULT_CONFIG, contextWindow: config.contextWindow };
-
-const runtime = new Runtime(
-  provider,
-  mainTools,
-  workerTools,
-  context,
-  systemPrompt,
-  traceDir,
-  compactionConfig
-);
-
-context.onTaskCreated = (taskDir) => runtime.spawnWorker(taskDir);
-context.onSteer = (taskId, message) => runtime.getControl(taskId)?.steer(message);
-context.onAbort = (taskId) => runtime.getControl(taskId)?.abort();
-
-// --- REPL ---
+import { createAppBootstrap } from './app/bootstrap.js';
 
 const rl = createInterface({
   input: process.stdin,
-  output: process.stdout
+  output: process.stdout,
 });
 
-console.log(`picoagent v0.6 (${config.provider}/${config.model})`);
+const app = createAppBootstrap(process.cwd(), {
+  onBackgroundText: (text) => process.stdout.write(text),
+  onBackgroundTurnComplete: () => process.stdout.write('\n> '),
+  onBackgroundError: (error) => console.error(error),
+});
+
+console.log(`picoagent v0.6 (${app.config.provider}/${app.config.model})`);
+console.log(`control: ${app.controlDir}`);
+console.log(`repo: ${app.runWorkspace.repoDir} (${app.runWorkspace.mode})`);
+console.log(`tasks: ${app.runWorkspace.tasksDir}`);
 console.log('Type "exit" to quit');
 
-function ask() {
+function ask(): void {
   rl.question('> ', async (input) => {
     if (input.trim().toLowerCase() === 'exit') {
       rl.close();
@@ -89,12 +26,12 @@ function ask() {
     }
 
     try {
-      await runtime.onUserMessage(input, (text) => process.stdout.write(text));
-      console.log(); 
-    } catch (error: any) {
-      console.error('Error:', error.message || error);
+      await app.runtime.onUserMessage(input, (text) => process.stdout.write(text));
+      console.log();
+    } catch (error: unknown) {
+      console.error('Error:', error instanceof Error ? error.message : String(error));
     }
-    
+
     ask();
   });
 }
