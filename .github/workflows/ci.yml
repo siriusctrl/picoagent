@@ -4,14 +4,17 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -26,5 +29,11 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Build
+        run: npm run build
+
       - name: Test
         run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
