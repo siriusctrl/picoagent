@@ -6,6 +6,7 @@
     "strict": true,
     "outDir": "./dist",
     "rootDir": "./src",
+    "jsx": "react-jsx",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true

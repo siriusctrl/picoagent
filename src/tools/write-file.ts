@@ -1,37 +1,36 @@
 import { z } from 'zod';
-import { Tool, ToolContext, ToolResult } from '../core/types.js';
-import fs from 'fs/promises';
-import path from 'path';
+import { Tool } from '../core/types.js';
+import { resolveSessionPath } from '../lib/filesystem.js';
 
 const WriteFileParams = z.object({
-  path: z.string().describe('Path to file'),
-  content: z.string().describe('File content')
+  path: z.string().describe('Relative path to the file to write.'),
+  content: z.string().describe('Full file content to write.'),
 });
 
 export const writeFileTool: Tool<typeof WriteFileParams> = {
   name: 'write_file',
-  description: 'Write/create files',
+  description: 'Write a text file in the workspace.',
+  kind: 'edit',
   parameters: WriteFileParams,
-  async execute(args, context: ToolContext): Promise<ToolResult> {
+  title: (args) => `Write ${args.path}`,
+  locations: (args, context) => [{ path: resolveSessionPath(args.path, context.cwd, context.roots) }],
+  async execute(args, context) {
+    const fullPath = resolveSessionPath(args.path, context.cwd, context.roots);
+
+    let oldText: string | undefined;
     try {
-      const fullPath = path.resolve(context.cwd, args.path);
-
-      // Enforce write boundary if set
-      if (context.writeRoot) {
-        const resolvedRoot = path.resolve(context.writeRoot);
-        if (!fullPath.startsWith(resolvedRoot + path.sep) && fullPath !== resolvedRoot) {
-          return {
-            content: `Write denied: path ${fullPath} is outside allowed directory ${resolvedRoot}`,
-            isError: true
-          };
-        }
-      }
-
-      await fs.mkdir(path.dirname(fullPath), { recursive: true });
-      await fs.writeFile(fullPath, args.content, 'utf-8');
-      return { content: `Successfully wrote to ${fullPath}` };
-    } catch (error: unknown) {
-      return { content: `Error writing file: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+      oldText = await context.environment.readTextFile(context.sessionId, fullPath);
+    } catch {
+      oldText = undefined;
     }
-  }
+
+    await context.environment.writeTextFile(context.sessionId, fullPath, args.content);
+
+    return {
+      content: oldText === undefined ? `Created ${args.path}` : `Updated ${args.path}`,
+      display: [{ type: 'diff', path: fullPath, oldText, newText: args.content }],
+      rawOutput: { path: fullPath, created: oldText === undefined },
+      locations: [{ path: fullPath }],
+    };
+  },
 };

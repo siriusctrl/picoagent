@@ -1,36 +1,50 @@
 # picoagent
 
-Minimal agent orchestration for coding and task delegation.
+Minimal coding agent built around ACP and a local Ink TUI.
 
-## What this is
+## What This Is
 
-`picoagent` is a TypeScript agent framework built around a small kernel:
+`picoagent` is a small TypeScript harness for running one coding agent per session:
+- ACP agent over stdio
+- local Ink client as the default UI
+- one provider contract
 - one tool-calling loop
-- one provider interface
-- one runtime for main-agent and worker orchestration
-- file-based prompts, skills, memory, tasks, and results
+- one tool registry with mode-based tool subsets
 
-The project is intentionally not a platform. It is meant to stay understandable from the repository alone.
+The current design is intentionally simple:
+- no frontend-agent / backend-agent split
+- no worker orchestration
+- no HTTP control plane
 
-## Design Stance
+## Modes
 
-- kernel first
-- control workspace is the source of truth
-- workers get isolated execution workspaces
-- one package until package boundaries are operationally necessary
-- explicit contracts over framework-looking abstraction
+`picoagent` exposes two session modes:
+
+- `ask`
+  - inspect files
+  - list files
+  - search text
+  - explain and plan
+- `exec`
+  - everything in `ask`
+  - write files
+  - run commands
+
+The important detail is architectural, not just UX:
+- all tools exist in one registry
+- modes only decide which tools are equipped for the session
 
 ## Current Layout
 
 ```text
 src/
-  app/        runtime assembly and entrypoint bootstrap
-  core/       agent loop, hooks contract, provider contract, shared types
-  runtime/    main/worker orchestration
-  hooks/      tracing and compaction adapters
+  acp/        ACP agent entrypoint and ACP-backed environment
+  app/        bootstrap for config, provider, and tool registry
+  core/       loop, provider contract, tool registry, shared types
   providers/  Anthropic, OpenAI-compatible, Gemini adapters
-  tools/      shell, file, scan/load, dispatch/steer/abort
-  lib/        prompts, tasks, workspace, sandbox, git, config helpers
+  tools/      list/read/search/write/run-command tools
+  tui/        local Ink ACP client
+  lib/        config, prompt, frontmatter, filesystem helpers
 
 defaults/
   skills/
@@ -44,21 +58,6 @@ docs/
   entrypoints.md
 ```
 
-## Runtime Model
-
-`picoagent` distinguishes three things:
-
-- Control workspace: the directory where you launch picoagent. It owns `config.md`, `AGENTS.md`, `SOUL.md`, `USER.md`, `memory/`, `skills/`, and `agents/`.
-- Execution repo: the filesystem root where commands and edits run. If the control workspace is already inside a git repo, picoagent uses that repo directly. Otherwise it creates an isolated git snapshot for execution.
-- Task workspaces: one directory per dispatched worker, usually created as git worktrees from the execution repo.
-
-The important consequence is:
-- prompts and skills come from the control workspace
-- code execution happens in the execution repo or task workspaces
-- worker writes stay bounded to the task workspace
-
-Detailed behavior lives in `docs/runtime-model.md`.
-
 ## Development
 
 ```bash
@@ -70,9 +69,9 @@ npm run typecheck
 
 ## Usage
 
-Create a `config.md` in the control workspace:
+Create `config.md` in the workspace you want to operate on:
 
-```markdown
+```md
 ---
 provider: openai
 model: gpt-4o
@@ -84,29 +83,22 @@ Supported providers:
 - `openai`
 - `gemini`
 
-API keys come from environment variables:
+Environment variables:
 - `ANTHROPIC_API_KEY`
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 
-### REPL
+Run the local TUI:
 
 ```bash
 OPENAI_API_KEY=... npm run dev
 ```
 
-### HTTP Server
+Run only the ACP agent:
 
 ```bash
-OPENAI_API_KEY=... npm run dev:server
+OPENAI_API_KEY=... npm run dev:agent
 ```
-
-Server endpoints:
-- `POST /chat`
-- `GET /tasks`
-- `GET /tasks/:id`
-- `POST /tasks/:id/steer`
-- `POST /tasks/:id/abort`
 
 ## Documentation
 

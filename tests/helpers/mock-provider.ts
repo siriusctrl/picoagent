@@ -10,7 +10,12 @@ export class MockProvider implements Provider {
         this.responses = [...responses]; // Copy
     }
 
-    async complete(messages: Message[], tools: ToolDefinition[], systemPrompt?: string): Promise<AssistantMessage> {
+    async complete(
+        messages: Message[],
+        tools: ToolDefinition[],
+        systemPrompt?: string,
+        signal?: AbortSignal,
+    ): Promise<AssistantMessage> {
         this.messages = messages; // Store last messages
         const response = this.responses.shift();
         if (!response) {
@@ -22,8 +27,13 @@ export class MockProvider implements Provider {
         return response;
     }
 
-    async *stream(messages: Message[], tools: ToolDefinition[], systemPrompt?: string): AsyncIterable<StreamEvent> {
-        const response = await this.complete(messages, tools, systemPrompt);
+    async *stream(
+        messages: Message[],
+        tools: ToolDefinition[],
+        systemPrompt?: string,
+        signal?: AbortSignal,
+    ): AsyncIterable<StreamEvent> {
+        const response = await this.complete(messages, tools, systemPrompt, signal);
         
         // Yield text deltas
         for (const block of response.content) {

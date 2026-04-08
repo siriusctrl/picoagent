@@ -4,8 +4,11 @@
 
 The repository is intentionally a single TypeScript package.
 
-That is a deliberate choice, not an incomplete monorepo.
-The current boundaries are clearer as directories than as publishable packages.
+That is a deliberate end state for the current scale:
+- one runtime target
+- one UI target
+- one provider surface
+- cheap cross-cutting refactors
 
 ## Code Boundaries
 
@@ -15,43 +18,49 @@ The kernel.
 
 Responsibilities:
 - message and tool types
-- provider interface
-- lifecycle hooks contract
-- the tool-calling agent loop
+- provider contract
+- tool registry
+- agent loop
 
 Rules:
 - no provider SDK imports
-- no entrypoint IO concerns
-- no workspace-specific policy beyond the generic tool context
+- no ACP-specific types
+- no Ink or terminal UI code
 
-### `src/runtime`
+### `src/acp`
 
-Orchestration around the kernel.
-
-Responsibilities:
-- main-agent session state
-- worker lifecycle
-- completion notifications back into the main session
-- worker control hooks and control state
-
-### `src/hooks`
-
-Composable lifecycle adapters.
+The ACP agent adapter.
 
 Responsibilities:
-- tracing
-- compaction
-- worker-control integration points
+- stdio ACP entrypoint
+- ACP session lifecycle
+- ACP-backed environment for file IO and command execution
+- mapping tool execution into ACP session updates
 
-These are optional extensions to the loop, not alternate runtimes.
+Rules:
+- may depend on `core`, `app`, and `lib`
+- owns transport details, not model logic
+
+### `src/tui`
+
+The local client.
+
+Responsibilities:
+- spawn the ACP agent locally
+- implement ACP client capabilities for filesystem and terminals
+- render a terminal-native UI with Ink
+
+Rules:
+- should stay a thin client
+- should not know provider internals
 
 ### `src/providers`
 
 SDK adapters only.
 
 Responsibilities:
-- translate picoagent message/tool shapes to provider-specific SDK calls
-- parse provider responses back into picoagent message/tool shapes
+- translate between `src/core` message/tool shapes and provider SDKs
+- stream deltas back into the core loop
 
 ### `src/tools`
 
@@ -59,53 +68,51 @@ LLM-facing capabilities.
 
 Responsibilities:
 - define tool parameters
-- enforce boundary validation for tool args
-- call into lower-level helpers
+- validate tool arguments
+- call into the environment or filesystem helpers
 
 ### `src/lib`
 
-Shared filesystem and contract helpers.
+Shared helpers.
 
 Responsibilities:
-- prompt assembly
-- frontmatter parsing and scanning
 - config loading
-- task file management
-- workspace creation
-- sandbox execution
-- git helpers
+- prompt assembly
+- frontmatter parsing
+- filesystem traversal and search
 
 ### `src/app`
 
-Entrypoint assembly.
+Bootstrap only.
 
 Responsibilities:
 - load config from the control workspace
-- assemble tool sets
-- create the runtime
-- connect runtime callbacks to REPL or server presentation
+- create the provider
+- assemble the general tool registry
 
 ## Dependency Rules
 
-- `core` must stay independent of provider SDKs and entrypoint code.
-- `runtime` may depend on `core`, `hooks`, and `lib`.
-- `providers` may depend on `core`, but `core` must not depend on `providers`.
+- `core` must stay independent of provider SDKs, ACP, and Ink.
+- `providers` may depend on `core`, but not vice versa.
 - `tools` may depend on `core` and `lib`.
-- `app` may depend on everything else.
+- `acp` may depend on `core`, `tools`, `app`, and `lib`.
+- `tui` may depend on `acp` only through the ACP protocol and local client behavior.
+- `app` may depend on everything except `tui`.
 
-## Why One Package
+## Tool Model
 
-The repo does not yet have package-level dependency pressure strong enough to justify a monorepo split.
+There is one tool registry for the whole app.
 
-Today, a single package is the stronger design because it keeps:
-- navigation simple
-- refactors cheap
-- type boundaries local
-- contributor overhead low
+That registry owns:
+- the full set of tools
+- which tools each mode equips
 
-If a future split happens, it should come from operational need:
-- separate distribution targets
-- materially different release cadence
-- conflicting dependency surfaces
+Current modes:
+- `ask`
+- `exec`
 
-Not from aesthetics.
+The important design rule is:
+- tools are general
+- modes are just curated subsets
+
+Do not hard-code mode behavior in multiple layers if the registry boundary is enough.

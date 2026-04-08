@@ -142,7 +142,8 @@ export class GeminiProvider implements Provider {
   async complete(
     messages: Message[],
     tools: ToolDefinition[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    _signal?: AbortSignal,
   ): Promise<AssistantMessage> {
     const system = systemPrompt || this.config.systemPrompt;
     const contents = this.convertHistory(messages);
@@ -164,7 +165,8 @@ export class GeminiProvider implements Provider {
   async *stream(
     messages: Message[],
     tools: ToolDefinition[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    _signal?: AbortSignal,
   ): AsyncIterable<StreamEvent> {
     const system = systemPrompt || this.config.systemPrompt;
     const contents = this.convertHistory(messages);

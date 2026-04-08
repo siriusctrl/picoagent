@@ -1,54 +1,56 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { writeFileTool } from '../../src/tools/write-file.js';
 import { ToolContext } from '../../src/core/types.js';
-import { join } from 'path';
-import { tmpdir } from 'os';
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { searchFiles, walkFiles } from '../../src/lib/filesystem.js';
 
-test('write_file respects writeRoot boundary', async () => {
-  const tmpDir = mkdtempSync(join(tmpdir(), 'picoagent-write-'));
-  const allowedDir = join(tmpDir, 'allowed');
-  
-  const context: ToolContext = {
-    cwd: tmpDir,
-    tasksRoot: join(tmpDir, '.tasks'),
-    writeRoot: allowedDir,
+function createContext(root: string): ToolContext {
+  return {
+    sessionId: 'session-1',
+    cwd: root,
+    roots: [root],
+    controlRoot: root,
+    mode: 'exec',
+    signal: new AbortController().signal,
+    environment: {
+      readTextFile: async (_sessionId, filePath) => readFileSync(filePath, 'utf8'),
+      writeTextFile: async (_sessionId, filePath, content) => {
+        await import('node:fs/promises').then(({ mkdir, writeFile }) =>
+          mkdir(dirname(filePath), { recursive: true }).then(() => writeFile(filePath, content, 'utf8')),
+        );
+      },
+      listFiles: (dir, limit, signal) => walkFiles(dir, limit, signal),
+      searchText: (dir, query, limit, signal) => searchFiles(dir, query, limit, signal),
+      runCommand: async () => ({
+        terminalId: 'term-1',
+        output: '',
+        truncated: false,
+        exitCode: 0,
+        signal: null,
+      }),
+    },
   };
+}
 
-  // Should succeed: writing inside writeRoot
-  const ok = await writeFileTool.execute(
-    { path: join(allowedDir, 'test.txt'), content: 'hello' },
-    context
-  );
-  assert.ok(!ok.isError, `Expected success but got: ${ok.content}`);
-  assert.strictEqual(readFileSync(join(allowedDir, 'test.txt'), 'utf-8'), 'hello');
+test('write_file writes inside the session root and returns a diff payload', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'picoagent-write-'));
+  const context = createContext(root);
 
-  // Should fail: writing outside writeRoot
-  const denied = await writeFileTool.execute(
-    { path: join(tmpDir, 'escape.txt'), content: 'nope' },
-    context
-  );
-  assert.ok(denied.isError);
-  assert.ok(denied.content.includes('Write denied'));
+  const result = await writeFileTool.execute({ path: 'notes/todo.txt', content: 'hello' }, context);
+  assert.equal(result.content, 'Created notes/todo.txt');
+  assert.equal(result.display?.[0]?.type, 'diff');
+  assert.equal(readFileSync(join(root, 'notes', 'todo.txt'), 'utf8'), 'hello');
 
-  rmSync(tmpDir, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true });
 });
 
-test('write_file allows all writes when writeRoot not set', async () => {
-  const tmpDir = mkdtempSync(join(tmpdir(), 'picoagent-write-'));
+test('write_file rejects paths outside the session roots', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'picoagent-write-'));
+  const context = createContext(root);
 
-  const context: ToolContext = {
-    cwd: tmpDir,
-    tasksRoot: join(tmpDir, '.tasks'),
-    // no writeRoot
-  };
-
-  const ok = await writeFileTool.execute(
-    { path: join(tmpDir, 'anywhere.txt'), content: 'hello' },
-    context
-  );
-  assert.ok(!ok.isError);
-
-  rmSync(tmpDir, { recursive: true, force: true });
+  await assert.rejects(() => writeFileTool.execute({ path: '../escape.txt', content: 'nope' }, context));
+  rmSync(root, { recursive: true, force: true });
 });

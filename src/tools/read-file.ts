@@ -1,23 +1,37 @@
 import { z } from 'zod';
-import { Tool, ToolContext, ToolResult } from '../core/types.js';
-import fs from 'fs/promises';
-import path from 'path';
+import { Tool } from '../core/types.js';
+import { formatLineNumberedText, resolveSessionPath } from '../lib/filesystem.js';
 
 const ReadFileParams = z.object({
-  path: z.string().describe('Path to file')
+  path: z.string().describe('Relative path to the file to read.'),
+  line: z.number().int().positive().optional().describe('Optional 1-based start line.'),
+  limit: z.number().int().positive().max(500).optional().describe('Optional number of lines to read.'),
 });
 
 export const readFileTool: Tool<typeof ReadFileParams> = {
   name: 'read_file',
-  description: 'Read file contents',
+  description: 'Read a text file from the workspace.',
+  kind: 'read',
   parameters: ReadFileParams,
-  async execute(args, { cwd }: ToolContext): Promise<ToolResult> {
-    try {
-      const fullPath = path.resolve(cwd, args.path);
-      const content = await fs.readFile(fullPath, 'utf-8');
-      return { content };
-    } catch (error: unknown) {
-      return { content: `Error reading file: ${error instanceof Error ? error.message : String(error)}`, isError: true };
-    }
-  }
+  title: (args) => `Read ${args.path}`,
+  locations: (args, context) => [
+    {
+      path: resolveSessionPath(args.path, context.cwd, context.roots),
+      ...(args.line ? { line: args.line } : {}),
+    },
+  ],
+  async execute(args, context) {
+    const fullPath = resolveSessionPath(args.path, context.cwd, context.roots);
+    const content = await context.environment.readTextFile(context.sessionId, fullPath, {
+      line: args.line,
+      limit: args.limit,
+    });
+
+    return {
+      content: formatLineNumberedText(content, args.line ?? 1),
+      display: [{ type: 'text', text: content }],
+      rawOutput: { path: fullPath, line: args.line ?? 1, limit: args.limit ?? null },
+      locations: [{ path: fullPath, ...(args.line ? { line: args.line } : {}) }],
+    };
+  },
 };

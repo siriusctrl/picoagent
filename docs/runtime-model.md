@@ -1,12 +1,10 @@
 # Runtime Model
 
-## Terms
+## Control Workspace
 
-### Control Workspace
+The directory where you launch `picoagent`.
 
-The directory where the user launches picoagent.
-
-It owns:
+It owns prompt framing and local configuration:
 - `config.md`
 - `AGENTS.md`
 - `SOUL.md`
@@ -15,81 +13,68 @@ It owns:
 - `skills/`
 - `agents/`
 
-This is the source of prompt framing and user intent.
+This directory is the source of intent.
 
-### Execution Repo
+## ACP Session
 
-The filesystem root where the main agent executes commands and where worker task workspaces are derived from.
+Each conversation is one ACP session.
 
-Behavior:
-- if the control workspace is inside a git repository, picoagent attaches to that repository
-- otherwise picoagent creates an isolated git snapshot under the run workspace
+A session carries:
+- `cwd`
+- optional additional roots
+- conversation history
+- current mode
 
-This gives workers a real repository to branch from without forcing the docs/prompt source to move.
+There is no worker graph behind the session.
+There is one agent loop for the session.
 
-### Task Workspace
+## Mode Model
 
-One directory per dispatched task.
+`picoagent` has two modes:
 
-Behavior:
-- when a git repo is available, tasks are created as git worktrees
-- otherwise tasks fall back to plain directories
+### `ask`
 
-Workers run with:
-- `cwd = task workspace`
-- `writeRoot = task workspace`
+Equipped tools:
+- `list_files`
+- `read_file`
+- `search_text`
 
-That is the core write boundary.
+Use it for:
+- exploration
+- search
+- explanation
+- planning
 
-## Why This Split Exists
+### `exec`
 
-The project needs two things at once:
+Equipped tools:
+- everything in `ask`
+- `write_file`
+- `run_command`
 
-- stable prompt sources from the user-managed workspace
-- isolated execution surfaces for background workers
+Use it for:
+- implementation
+- edits
+- verification commands
 
-Those are different concerns. Treating them as the same directory caused ambiguous behavior and stale docs.
+## Tool Execution
 
-## Prompt Loading
+The tool registry is global.
 
-Main prompt assembly reads from the control workspace:
+Mode changes do not swap out the runtime.
+They only change which tools are available for the session.
 
-- `SOUL.md`
-- `USER.md`
-- `AGENTS.md`
-- `memory/memory.md`
-- skill summaries
-- agent summaries
+That keeps the model simple:
+- one loop
+- one registry
+- one provider
+- one transport
 
-Worker prompt assembly reads framing from the control workspace but executes inside the task workspace.
+## Environment Boundary
 
-This means:
-- user/project intent stays stable
-- task execution can be isolated
+For tool execution:
+- file reads and writes go through ACP client capabilities
+- command execution goes through ACP terminals
+- filesystem traversal and text search use local deterministic helpers
 
-## Task Lifecycle
-
-Each task directory contains:
-- `task.md`
-- `progress.md`
-- `result.md`
-
-Status flow:
-- `pending`
-- `running`
-- `completed`
-- `failed`
-- `aborted`
-
-## Sandbox Boundary
-
-For worker commands:
-- the shell runs in the task workspace
-- writes are restricted to the task workspace
-- the sandbox may fall back to plain shell execution if `bwrap` is unavailable, but the logical write boundary still applies through `write_file`
-
-## Design Consequences
-
-- Prompt files are not copied around just to make the runtime work.
-- Runtime assembly must explicitly carry both control-root and execution-root context.
-- Entrypoints should log which repo mode they are using so the operator can see whether picoagent attached to a real git repo or created an isolated snapshot.
+This keeps the client in control of actual writes and terminal processes without reintroducing a second agent role.

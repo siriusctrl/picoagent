@@ -1,14 +1,19 @@
-import { AssistantMessage, Message, ToolCall, ToolResultMessage } from "./types.js";
+import { AssistantMessage, ExecutedToolResult, Message, Tool, ToolCall } from './types.js';
 
 export interface AgentHooks {
   onLoopStart?(): void | Promise<void>;
   onLoopEnd?(turns: number): void | Promise<void>;
   onLlmStart?(messages: Message[]): void | Promise<void>;
   onLlmEnd?(response: AssistantMessage, durationMs: number): void | Promise<void>;
-  onToolStart?(call: ToolCall): void | Promise<void>;
-  onToolEnd?(call: ToolCall, result: ToolResultMessage, durationMs: number): ToolResultMessage | void | Promise<ToolResultMessage | void>;
+  onToolStart?(call: ToolCall, tool: Tool | undefined): void | Promise<void>;
+  onToolEnd?(
+    call: ToolCall,
+    tool: Tool | undefined,
+    result: ExecutedToolResult,
+    durationMs: number,
+  ): ExecutedToolResult | void | Promise<ExecutedToolResult | void>;
   onTurnEnd?(messages: Message[]): void | Promise<void>;
-  onTextDelta?(text: string): void;
+  onTextDelta?(text: string): void | Promise<void>;
   onError?(error: Error): void | Promise<void>;
 }
 
@@ -28,19 +33,14 @@ export function combineHooks(...hookSets: (AgentHooks | undefined)[]): AgentHook
     const handlers = filtered.map(h => h[name]).filter(Boolean);
     if (handlers.length === 0) continue;
     
-    if (name === "onToolEnd") {
-      // Chain: each handler can modify the result
-      (combined as any)[name] = async (call: any, result: any, dur: any) => {
+    if (name === 'onToolEnd') {
+      (combined as any)[name] = async (call: any, tool: any, result: any, dur: any) => {
         let current = result;
         for (const handler of handlers) {
-          const modified = await (handler as any)(call, current, dur);
+          const modified = await (handler as any)(call, tool, current, dur);
           if (modified) current = modified;
         }
         return current;
-      };
-    } else if (name === "onTextDelta") {
-      (combined as any)[name] = (text: string) => {
-        for (const handler of handlers) (handler as any)(text);
       };
     } else {
       (combined as any)[name] = async (...args: any[]) => {

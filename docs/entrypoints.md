@@ -1,58 +1,41 @@
 # Entrypoints
 
-## REPL
+## Local TUI
 
-Entry file: `src/main.ts`
-
-Behavior:
-- loads config from the control workspace
-- assembles the runtime once
-- streams assistant text to stdout
-- routes background worker completions back into the main session
-
-The REPL prints:
-- control workspace path
-- execution repo path
-- execution mode
-- task workspace root
-
-That output is intentional. It makes the runtime topology visible up front.
-
-## HTTP Server
-
-Entry file: `src/server.ts`
+Entry file: `src/tui/main.tsx`
 
 Behavior:
-- loads the same runtime bootstrap as the REPL
-- exposes chat over SSE
-- exposes task inspection and worker control endpoints
+- starts the Ink UI
+- spawns the ACP agent as a child process
+- creates one ACP session rooted at the current working directory
+- renders streamed assistant output and tool activity
+- lets the user switch between `ask` and `exec`
 
-Endpoints:
-- `POST /chat`
-- `GET /tasks`
-- `GET /tasks/:id`
-- `POST /tasks/:id/steer`
-- `POST /tasks/:id/abort`
+This is the default way to run the project.
 
-## Process Scope
+## ACP Agent
 
-Task state exposed by the HTTP server is scoped to the runtime created by that server process.
+Entry file: `src/acp/main.ts`
 
-That means:
-- restarting the server creates a new run workspace
-- `/tasks` lists tasks for the current process-run
+Behavior:
+- starts an ACP agent on stdio
+- loads config and prompt framing from the control workspace
+- assembles provider plus tool registry
+- serves one or more ACP sessions
 
-This is the honest contract for the current implementation.
-It is not a persistence layer.
+The ACP agent is transport-only. It does not own a second UI.
 
-## Runtime Assembly
+## Shared Bootstrap
 
-Both entrypoints use the same bootstrap path:
+Both entrypoints rely on the same bootstrap path:
 
 1. load config from the control workspace
-2. resolve the execution repo and task workspace root
-3. build prompt context from the control workspace
-4. create provider, tools, and runtime
-5. connect runtime callbacks to presentation-specific IO
+2. create the provider
+3. assemble the global tool registry
+4. create ACP session state for each session
+5. build the system prompt for the active mode
 
-The important boundary is that presentation stays in the entrypoint, while runtime orchestration stays in `src/runtime`.
+The important boundary is:
+- bootstrap defines the agent shape
+- ACP defines the transport
+- Ink defines the local UI

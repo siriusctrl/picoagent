@@ -1,4 +1,4 @@
-import { AssistantMessage, Message, ToolDefinition } from "./types.js";
+import { AssistantMessage, Message, ToolDefinition } from './types.js';
 
 export interface ProviderConfig {
   apiKey: string;
@@ -21,6 +21,16 @@ export interface StreamEvent {
 
 export interface Provider {
   model: string;
-  complete(messages: Message[], tools: ToolDefinition[], systemPrompt?: string): Promise<AssistantMessage>;
-  stream(messages: Message[], tools: ToolDefinition[], systemPrompt?: string): AsyncIterable<StreamEvent>;
+  complete(
+    messages: Message[],
+    tools: ToolDefinition[],
+    systemPrompt?: string,
+    signal?: AbortSignal,
+  ): Promise<AssistantMessage>;
+  stream(
+    messages: Message[],
+    tools: ToolDefinition[],
+    systemPrompt?: string,
+    signal?: AbortSignal,
+  ): AsyncIterable<StreamEvent>;
 }

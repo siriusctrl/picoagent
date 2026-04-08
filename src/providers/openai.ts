@@ -130,7 +130,8 @@ export class OpenAIProvider implements Provider {
   async complete(
     messages: Message[],
     tools: ToolDefinition[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    signal?: AbortSignal,
   ): Promise<AssistantMessage> {
     const system = systemPrompt || this.config.systemPrompt;
 
@@ -139,12 +140,15 @@ export class OpenAIProvider implements Provider {
       openaiMessages.unshift({ role: 'system', content: system });
     }
 
-    const response = await this.client.chat.completions.create({
-      model: this.config.model,
-      max_tokens: this.config.maxTokens || 4096,
-      messages: openaiMessages,
-      tools: tools.length > 0 ? this.convertTools(tools) : undefined,
-    });
+    const response = await this.client.chat.completions.create(
+      {
+        model: this.config.model,
+        max_tokens: this.config.maxTokens || 4096,
+        messages: openaiMessages,
+        tools: tools.length > 0 ? this.convertTools(tools) : undefined,
+      },
+      { signal },
+    );
 
     return this.parseResponse(response.choices[0].message);
   }
@@ -152,7 +156,8 @@ export class OpenAIProvider implements Provider {
   async *stream(
     messages: Message[],
     tools: ToolDefinition[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    signal?: AbortSignal,
   ): AsyncIterable<StreamEvent> {
     const system = systemPrompt || this.config.systemPrompt;
 
@@ -161,13 +166,16 @@ export class OpenAIProvider implements Provider {
       openaiMessages.unshift({ role: 'system', content: system });
     }
 
-    const stream = await this.client.chat.completions.create({
-      model: this.config.model,
-      max_tokens: this.config.maxTokens || 4096,
-      messages: openaiMessages,
-      tools: tools.length > 0 ? this.convertTools(tools) : undefined,
-      stream: true,
-    });
+    const stream = await this.client.chat.completions.create(
+      {
+        model: this.config.model,
+        max_tokens: this.config.maxTokens || 4096,
+        messages: openaiMessages,
+        tools: tools.length > 0 ? this.convertTools(tools) : undefined,
+        stream: true,
+      },
+      { signal },
+    );
 
     // Accumulate the full response for the final message
     let currentText = '';

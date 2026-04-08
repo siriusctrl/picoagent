@@ -9,13 +9,11 @@ Read in this order when getting oriented:
 Read these when the task matches:
 
 - `docs/runtime-model.md`
-  - control workspace
-  - execution repo
-  - task workspaces
-  - worker write boundaries
+  - ACP session shape
+  - `ask` vs `exec`
+  - tool access model
 - `docs/entrypoints.md`
-  - REPL behavior
-  - HTTP server behavior
-  - task APIs and process-scoped runtime notes
+  - Ink TUI behavior
+  - ACP stdio agent behavior
 
-This repo is intentionally small. If a doc starts duplicating the source tree line-by-line, shorten the doc instead of expanding it.
+This repo is intentionally small. Keep docs coarse-grained and focused on durable contracts.

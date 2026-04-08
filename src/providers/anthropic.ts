@@ -46,7 +46,8 @@ export class AnthropicProvider implements Provider {
   async complete(
     messages: Message[],
     tools: ToolDefinition[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    signal?: AbortSignal,
   ): Promise<AssistantMessage> {
     const system = systemPrompt || this.config.systemPrompt;
 
@@ -89,13 +90,16 @@ export class AnthropicProvider implements Provider {
       input_schema: t.parameters as Anthropic.Tool.InputSchema
     }));
 
-    const response = await this.client.messages.create({
-      model: this.config.model,
-      max_tokens: this.config.maxTokens || 4096,
-      system,
-      messages: anthropicMessages,
-      tools: anthropicTools,
-    });
+    const response = await this.client.messages.create(
+      {
+        model: this.config.model,
+        max_tokens: this.config.maxTokens || 4096,
+        system,
+        messages: anthropicMessages,
+        tools: anthropicTools,
+      },
+      { signal },
+    );
 
     // Validate API response at trust boundary
     const validated = ResponseSchema.parse({
@@ -121,7 +125,8 @@ export class AnthropicProvider implements Provider {
   async *stream(
     messages: Message[],
     tools: ToolDefinition[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    signal?: AbortSignal,
   ): AsyncIterable<StreamEvent> {
     const system = systemPrompt || this.config.systemPrompt;
 
@@ -164,13 +169,16 @@ export class AnthropicProvider implements Provider {
       input_schema: t.parameters as Anthropic.Tool.InputSchema
     }));
 
-    const stream = this.client.messages.stream({
-      model: this.config.model,
-      max_tokens: this.config.maxTokens || 4096,
-      system,
-      messages: anthropicMessages,
-      tools: anthropicTools,
-    });
+    const stream = this.client.messages.stream(
+      {
+        model: this.config.model,
+        max_tokens: this.config.maxTokens || 4096,
+        system,
+        messages: anthropicMessages,
+        tools: anthropicTools,
+      },
+      { signal },
+    );
 
     for await (const event of stream) {
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {

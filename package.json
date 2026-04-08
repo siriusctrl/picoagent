@@ -4,17 +4,22 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/main.js",
-    "start:server": "node dist/server.js",
-    "dev": "npx tsx src/main.ts",
-    "dev:server": "npx tsx src/server.ts",
+    "start": "node dist/tui/main.js",
+    "start:agent": "node dist/acp/main.js",
+    "dev": "npx tsx src/tui/main.tsx",
+    "dev:agent": "npx tsx src/acp/main.ts",
     "test": "node --import tsx --test tests/**/*.test.ts",
     "typecheck": "npx tsc -p tsconfig.check.json"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.18.1",
     "@anthropic-ai/sdk": "^0.74.0",
     "@google/genai": "^1.40.0",
+    "@types/react": "^19.2.14",
+    "ink": "^7.0.0",
+    "ink-text-input": "^6.0.0",
     "openai": "^6.19.0",
+    "react": "^19.2.4",
     "zod": "^4.3.6"
   },
   "devDependencies": {
