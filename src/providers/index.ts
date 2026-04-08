@@ -3,12 +3,22 @@ import { PicoConfig, resolveApiKey } from '../lib/config.js';
 import { AnthropicProvider } from './anthropic.js';
 import { OpenAIProvider } from './openai.js';
 import { GeminiProvider } from './gemini.js';
+import { EchoProvider } from './echo.js';
 
 /**
  * Create a provider from PicoConfig.
  * API keys are resolved from environment variables.
  */
 export function createProvider(config: PicoConfig, systemPrompt?: string): Provider {
+  if (config.provider === 'echo') {
+    return new EchoProvider({
+      apiKey: '',
+      model: config.model,
+      maxTokens: config.maxTokens,
+      systemPrompt,
+    });
+  }
+
   const apiKey = resolveApiKey(config.provider);
 
   switch (config.provider) {

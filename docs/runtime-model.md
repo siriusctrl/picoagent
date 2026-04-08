@@ -5,11 +5,11 @@
 The directory where you launch `picoagent`.
 
 It owns prompt framing and local configuration:
-- `config.md`
+- `.pico/config.jsonc`
 - `AGENTS.md`
 - `SOUL.md`
 - `USER.md`
-- `memory/`
+- `.pico/memory/`
 - `skills/`
 - `agents/`
 

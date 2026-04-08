@@ -69,6 +69,20 @@ export class TuiController {
   private connection?: acp.ClientSideConnection;
   private sessionId?: string;
   private mode: SessionModeId = 'ask';
+  private stopping = false;
+
+  private formatAgentExitError(code: number | null, signal: NodeJS.Signals | null, stderr: string): Error {
+    const detail = stderr.trim();
+    if (detail) {
+      return new Error(detail);
+    }
+
+    if (signal) {
+      return new Error(`ACP agent exited with signal ${signal}`);
+    }
+
+    return new Error(`ACP agent exited with code ${code ?? 'unknown'}`);
+  }
 
   constructor(options: TuiControllerOptions) {
     this.cwd = options.cwd;
@@ -77,38 +91,67 @@ export class TuiController {
 
   async start(): Promise<void> {
     const agent = resolveAgentCommand();
+    this.stopping = false;
     this.agentProcess = spawn(agent.command, agent.args, {
       cwd: this.cwd,
-      stdio: ['pipe', 'pipe', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-    if (!this.agentProcess.stdin || !this.agentProcess.stdout) {
+    if (!this.agentProcess.stdin || !this.agentProcess.stdout || !this.agentProcess.stderr) {
       throw new Error('Failed to create ACP stdio pipes');
     }
+
+    let stderr = '';
+    this.agentProcess.stderr.on('data', (chunk: Buffer | string) => {
+      stderr = trimOutput(`${stderr}${chunk.toString()}`, 16000).output;
+    });
 
     const input = Writable.toWeb(this.agentProcess.stdin) as WritableStream<Uint8Array>;
     const output = Readable.toWeb(this.agentProcess.stdout) as unknown as ReadableStream<Uint8Array>;
     const stream = acp.ndJsonStream(input, output);
     this.connection = new acp.ClientSideConnection(() => this, stream);
 
-    const initialized = await this.connection.initialize({
-      protocolVersion: acp.PROTOCOL_VERSION,
-      clientCapabilities: {
-        fs: {
-          readTextFile: true,
-          writeTextFile: true,
-        },
-        terminal: true,
-      },
+    const startupExit = new Promise<never>((_, reject) => {
+      this.agentProcess?.once('exit', (code, signal) => {
+        reject(this.formatAgentExitError(code, signal, stderr));
+      });
     });
 
-    if (initialized.protocolVersion !== acp.PROTOCOL_VERSION) {
-      this.onEvent({ type: 'error', text: `ACP protocol mismatch: ${initialized.protocolVersion}` });
+    let initialized: acp.InitializeResponse;
+    let session: acp.NewSessionResponse;
+
+    try {
+      initialized = await Promise.race([
+        this.connection.initialize({
+          protocolVersion: acp.PROTOCOL_VERSION,
+          clientCapabilities: {
+            fs: {
+              readTextFile: true,
+              writeTextFile: true,
+            },
+            terminal: true,
+          },
+        }),
+        startupExit,
+      ]);
+
+      if (initialized.protocolVersion !== acp.PROTOCOL_VERSION) {
+        this.onEvent({ type: 'error', text: `ACP protocol mismatch: ${initialized.protocolVersion}` });
+      }
+
+      session = await Promise.race([
+        this.connection.newSession({
+          cwd: this.cwd,
+          mcpServers: [],
+        }),
+        startupExit,
+      ]);
+    } catch (error: unknown) {
+      if (this.agentProcess.exitCode !== null || this.agentProcess.signalCode !== null || stderr.trim()) {
+        throw this.formatAgentExitError(this.agentProcess.exitCode, this.agentProcess.signalCode, stderr);
+      }
+
+      throw error instanceof Error ? error : new Error(String(error));
     }
-
-    const session = await this.connection.newSession({
-      cwd: this.cwd,
-      mcpServers: [],
-    });
 
     this.sessionId = session.sessionId;
     const currentMode = session.modes?.currentModeId;
@@ -118,6 +161,16 @@ export class TuiController {
 
     this.onEvent({ type: 'mode', mode: this.mode });
     this.onEvent({ type: 'status', text: `Connected in ${this.mode} mode` });
+
+    this.agentProcess.on('exit', (code, signal) => {
+      if (this.stopping) {
+        return;
+      }
+
+      const error = this.formatAgentExitError(code, signal, stderr);
+      this.onEvent({ type: 'error', text: error.message });
+      this.onEvent({ type: 'status', text: 'ACP agent disconnected' });
+    });
   }
 
   async sendPrompt(text: string): Promise<void> {
@@ -145,6 +198,7 @@ export class TuiController {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     for (const terminal of this.terminals.values()) {
       if (!terminal.released) {
         terminal.process.kill();

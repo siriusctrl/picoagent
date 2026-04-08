@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PicoAgent } from '../../src/acp/session-agent.js';
@@ -43,9 +43,9 @@ test('ACP sessions report tool failures for out-of-root locations instead of abo
   const updates: any[] = [];
 
   try {
-    writeFileSync(join(root, 'config.md'), '---\nprovider: openai\nmodel: gpt-4o\n---\n', 'utf8');
+    mkdirSync(join(root, '.pico'), { recursive: true });
+    writeFileSync(join(root, '.pico', 'config.jsonc'), '{ "provider": "echo", "model": "echo" }\n', 'utf8');
     process.chdir(root);
-    process.env.OPENAI_API_KEY = 'test-key';
 
     const connection = {
       signal: new AbortController().signal,
@@ -82,11 +82,8 @@ test('ACP sessions report tool failures for out-of-root locations instead of abo
     assert.match(toolCallUpdate.update.content[0].content.text, /outside the session roots/);
   } finally {
     process.chdir(previousCwd);
-    if (previousApiKey === undefined) {
-      delete process.env.OPENAI_API_KEY;
-    } else {
-      process.env.OPENAI_API_KEY = previousApiKey;
-    }
+    if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousApiKey;
     rmSync(root, { recursive: true, force: true });
   }
 });

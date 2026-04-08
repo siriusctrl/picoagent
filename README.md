@@ -69,29 +69,54 @@ npm run typecheck
 
 ## Usage
 
-Create `config.md` in the workspace you want to operate on:
+Pico looks for config in:
 
-```md
----
-provider: openai
-model: gpt-4o
----
+- `./.pico/config.jsonc`
+- `~/.pico/config.jsonc`
+
+Workspace config overrides user config. If neither file exists, pico falls back to the built-in `echo` provider.
+
+Example workspace config:
+
+```jsonc
+{
+  "provider": "openai",
+  "model": "gpt-4o"
+}
 ```
 
 Supported providers:
 - `anthropic`
 - `openai`
 - `gemini`
+- `echo`
 
 Environment variables:
 - `ANTHROPIC_API_KEY`
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 
+For local TUI smoke-testing without a real model, use:
+
+```jsonc
+{
+  "provider": "echo",
+  "model": "echo"
+}
+```
+
+The built-in `echo` provider streams back `received: <your prompt>` and does not require an API key.
+
 Run the local TUI:
 
 ```bash
 OPENAI_API_KEY=... npm run dev
+```
+
+With `provider: echo`, or with no config file at all, you can just run:
+
+```bash
+npm run dev
 ```
 
 Run only the ACP agent:

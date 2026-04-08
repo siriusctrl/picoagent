@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SessionModeId, Tool } from '../core/types.js';
@@ -13,6 +14,10 @@ function readOptional(filePath: string): string | null {
   }
 
   return readFileSync(filePath, 'utf8').trim();
+}
+
+function readOptionalMany(filePaths: string[]): string[] {
+  return filePaths.map((filePath) => readOptional(filePath)).filter((value): value is string => value !== null);
 }
 
 function scanMerged(subdir: string, workspaceDir: string): DocMeta[] {
@@ -79,9 +84,12 @@ export function buildSystemPrompt(controlDir: string, mode: SessionModeId, tools
     }
   }
 
-  const memory = readOptional(join(controlDir, 'memory', 'memory.md'));
-  if (memory) {
-    sections.push(`## Core Memory\n${memory}`);
+  const memories = readOptionalMany([
+    join(homedir(), '.pico', 'memory', 'memory.md'),
+    join(controlDir, '.pico', 'memory', 'memory.md'),
+  ]);
+  if (memories.length > 0) {
+    sections.push(`## Core Memory\n${memories.join('\n\n')}`);
   }
 
   const skills = buildSummary('Available Skills', scanMerged('skills', controlDir));

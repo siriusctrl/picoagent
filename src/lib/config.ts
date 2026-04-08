@@ -1,51 +1,202 @@
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
-import { parseFrontmatter } from './frontmatter.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 export interface PicoConfig {
-  provider: 'anthropic' | 'openai' | 'gemini';
+  provider: 'anthropic' | 'openai' | 'gemini' | 'echo';
   model: string;
   maxTokens: number;
   contextWindow: number;
-  baseURL?: string;  // for OpenAI-compatible APIs
+  baseURL?: string;
 }
 
-const DEFAULTS: Record<string, Partial<PicoConfig>> = {
+const PICO_DIR = '.pico';
+const CONFIG_FILE = 'config.jsonc';
+
+const DEFAULTS: Record<PicoConfig['provider'], Partial<PicoConfig>> = {
   anthropic: { model: 'claude-sonnet-4-20250514' },
   openai: { model: 'gpt-4o' },
   gemini: { model: 'gemini-2.5-flash' },
+  echo: { model: 'echo' },
 };
 
+function defaultConfig(): PicoConfig {
+  return {
+    provider: 'echo',
+    model: DEFAULTS.echo.model ?? 'echo',
+    maxTokens: 4096,
+    contextWindow: 200000,
+    baseURL: undefined,
+  };
+}
+
+function stripJsonComments(input: string): string {
+  let output = '';
+  let inString = false;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+    const next = input[index + 1];
+
+    if (lineComment) {
+      if (char === '\n') {
+        lineComment = false;
+        output += char;
+      }
+      continue;
+    }
+
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        index += 1;
+      } else if (char === '\n') {
+        output += char;
+      }
+      continue;
+    }
+
+    if (inString) {
+      output += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '/' && next === '/') {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    }
+
+    output += char;
+  }
+
+  return output;
+}
+
+function stripTrailingCommas(input: string): string {
+  let output = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+
+    if (inString) {
+      output += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      output += char;
+      continue;
+    }
+
+    if (char === ',') {
+      let lookahead = index + 1;
+      while (lookahead < input.length && /\s/.test(input[lookahead])) {
+        lookahead += 1;
+      }
+
+      if (input[lookahead] === '}' || input[lookahead] === ']') {
+        continue;
+      }
+    }
+
+    output += char;
+  }
+
+  return output;
+}
+
+function parseJsonc(raw: string, filePath: string): Record<string, unknown> {
+  try {
+    return JSON.parse(stripTrailingCommas(stripJsonComments(raw))) as Record<string, unknown>;
+  } catch (error: unknown) {
+    throw new Error(
+      `Invalid JSONC in ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function readConfigFile(filePath: string): Record<string, unknown> | null {
+  if (!existsSync(filePath)) {
+    return null;
+  }
+
+  return parseJsonc(readFileSync(filePath, 'utf8'), filePath);
+}
+
+function configPath(root: string): string {
+  return join(root, PICO_DIR, CONFIG_FILE);
+}
+
+export function workspaceConfigPath(workspaceDir: string): string {
+  return configPath(workspaceDir);
+}
+
+export function userConfigPath(): string {
+  return configPath(homedir());
+}
+
+function mergedFrontmatter(workspaceDir: string): Record<string, unknown> {
+  return {
+    ...readConfigFile(userConfigPath()),
+    ...readConfigFile(workspaceConfigPath(workspaceDir)),
+  };
+}
+
 /**
- * Load config from workspace/config.md.
- * Frontmatter fields: provider, model, max_tokens, context_window, base_url
+ * Load config from `./.pico/config.jsonc` and `~/.pico/config.jsonc`.
+ * Workspace config overrides user config. If neither exists, use built-in defaults.
  */
 export function loadConfig(workspaceDir: string): PicoConfig {
-  const configPath = join(workspaceDir, 'config.md');
+  const raw = mergedFrontmatter(workspaceDir);
+  const providerValue = typeof raw.provider === 'string' ? raw.provider : defaultConfig().provider;
 
-  if (!existsSync(configPath)) {
-    console.error(`Error: config.md not found in ${workspaceDir}`);
-    console.error('Create a config.md with at least:\n---\nprovider: anthropic\n---');
-    process.exit(1);
+  if (!['anthropic', 'openai', 'gemini', 'echo'].includes(providerValue)) {
+    throw new Error(
+      `invalid provider "${providerValue}" in ${workspaceConfigPath(workspaceDir)} or ${userConfigPath()}. ` +
+        'Use: anthropic, openai, gemini, echo',
+    );
   }
 
-  const raw = readFileSync(configPath, 'utf-8');
-  const { frontmatter } = parseFrontmatter(raw);
-
-  const provider = String(frontmatter.provider || '');
-  if (!['anthropic', 'openai', 'gemini'].includes(provider)) {
-    console.error(`Error: invalid provider "${provider}" in config.md. Use: anthropic, openai, gemini`);
-    process.exit(1);
-  }
-
-  const defaults = DEFAULTS[provider];
+  const provider = providerValue as PicoConfig['provider'];
+  const providerDefaults = DEFAULTS[provider];
 
   return {
-    provider: provider as PicoConfig['provider'],
-    model: String(frontmatter.model || defaults?.model || ''),
-    maxTokens: Number(frontmatter.max_tokens || 4096),
-    contextWindow: Number(frontmatter.context_window || 200000),
-    baseURL: frontmatter.base_url ? String(frontmatter.base_url) : undefined,
+    provider,
+    model: typeof raw.model === 'string' ? raw.model : providerDefaults.model ?? defaultConfig().model,
+    maxTokens: typeof raw.maxTokens === 'number' ? raw.maxTokens : defaultConfig().maxTokens,
+    contextWindow: typeof raw.contextWindow === 'number' ? raw.contextWindow : defaultConfig().contextWindow,
+    baseURL: typeof raw.baseURL === 'string' ? raw.baseURL : undefined,
   };
 }
 
@@ -59,16 +210,18 @@ export function resolveApiKey(provider: string): string {
     gemini: 'GEMINI_API_KEY',
   };
 
+  if (provider === 'echo') {
+    return '';
+  }
+
   const envVar = envMap[provider];
   if (!envVar) {
-    console.error(`Error: unknown provider "${provider}"`);
-    process.exit(1);
+    throw new Error(`unknown provider "${provider}"`);
   }
 
   const key = process.env[envVar];
   if (!key) {
-    console.error(`Error: ${envVar} environment variable is required for ${provider} provider`);
-    process.exit(1);
+    throw new Error(`${envVar} environment variable is required for ${provider} provider`);
   }
 
   return key;

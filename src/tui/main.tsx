@@ -22,6 +22,19 @@ function toolOutputText(rawOutput: unknown, fallback?: string): string | undefin
   return fallback;
 }
 
+function enableTerminalScreen(): (() => void) | undefined {
+  if (!process.stdout.isTTY) {
+    return undefined;
+  }
+
+  process.stdout.write('\u001b[?1049h\u001b[2J\u001b[H');
+  return () => {
+    process.stdout.write('\u001b[?1049l');
+  };
+}
+
+const restoreTerminalScreen = enableTerminalScreen();
+
 function App() {
   const { exit } = useApp();
   const [controller, setController] = useState<TuiController | null>(null);
@@ -198,4 +211,10 @@ function App() {
   );
 }
 
-render(<App />);
+const instance = render(<App />);
+
+const cleanup = () => {
+  restoreTerminalScreen?.();
+};
+
+instance.waitUntilExit().finally(cleanup);
