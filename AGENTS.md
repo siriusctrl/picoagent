@@ -27,6 +27,13 @@ Build a minimal coding agent that is:
    - Prefer plain functions and small modules over framework-looking layers.
    - Build the strongest clear end state directly instead of layering compatibility shims.
 
+5. **Conventional Commits with real bodies**
+   - Use Conventional Commits for every commit.
+   - Do not write title-only commits.
+   - In the commit body, explain both:
+     - what changed
+     - why the change was made
+
 ## Navigation
 
 Start with docs, then inspect code once you know which boundary matters.
