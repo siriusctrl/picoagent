@@ -8,24 +8,25 @@ Build a minimal coding agent that is:
 
 ## Core Principles
 
-1. **Single-session agent**
-   - Keep one agent loop per ACP session.
-   - Do not reintroduce frontend-agent / backend-agent role splitting.
-   - Do not reintroduce worker orchestration unless explicitly requested.
+1. **KISS**
+   - Prefer the simplest solution that works.
+   - Avoid premature abstraction.
+   - If a function is enough, do not create a class.
+   - If one clear module is enough, do not invent a framework.
 
-2. **Mode gates tools, not architecture**
-   - Keep one general tool registry.
-   - `ask` and `exec` decide which tools are equipped for the session.
-   - Do not scatter mode checks across unrelated code when the registry boundary is enough.
+2. **No speculative forward-compatibility**
+   - Do not add extension points, plugin systems, compatibility shims, or worker orchestration unless explicitly requested.
+   - Do not reintroduce frontend-agent / backend-agent splitting.
+   - Build for the current design, not hypothetical future variants.
 
-3. **ACP is the transport contract**
+3. **Prefer strongest end-state solutions**
+   - When the right design is clear and requested, implement the coherent end state directly.
+   - Do not intentionally land transitional layers or partial architectures as stepping stones.
+
+4. **ACP is the transport contract**
    - Treat stdio ACP as the agent/client boundary.
    - Keep `src/core` transport-agnostic.
-   - Keep ACP-specific adaptation in `src/acp` and UI-specific behavior in `src/tui`.
-
-4. **Keep it legible**
-   - Prefer plain functions and small modules over framework-looking layers.
-   - Build the strongest clear end state directly instead of layering compatibility shims.
+   - Keep ACP-specific behavior in `src/acp` and UI-specific behavior in `src/tui`.
 
 5. **Conventional Commits with real bodies**
    - Use Conventional Commits for every commit.
@@ -36,52 +37,53 @@ Build a minimal coding agent that is:
 
 ## Navigation
 
-Start with docs, then inspect code once you know which boundary matters.
+Use docs to understand constraints first. Use source directories only after you know which boundary matters.
+
+Keep this file coarse-grained. Do not try to mirror every subdirectory here. For detailed structure or local rules inside a source area, inspect that directory's local `AGENTS.md` when it exists.
 
 ### Read these docs first
 
 - `README.md`
-- `docs/INDEX.md`
 - `docs/architecture.md`
 - `docs/golden-principles.md`
 
 ### Read these docs when the task matches
 
 - Session behavior, mode behavior, or tool access:
-  - read `docs/runtime-model.md`
+  - Read `docs/runtime-model.md`
 - ACP or local UI entrypoints:
-  - read `docs/entrypoints.md`
-- directory-boundary or responsibility changes:
-  - read `docs/architecture.md`
+  - Read `docs/entrypoints.md`
+- Architecture or boundary changes:
+  - Read `docs/architecture.md`
 
 ## Top-level Source Map
 
-- `src/core` - provider contract, loop, tool registry, shared types
+- `src/core` - loop, provider contract, tool registry, shared types
 - `src/acp` - ACP agent entrypoint and ACP-backed environment
-- `src/tui` - Ink client and local terminal UX
+- `src/tui` - local Ink ACP client
 - `src/providers` - model SDK adapters
 - `src/tools` - LLM-facing tools
-- `src/lib` - config, prompt, frontmatter, filesystem helpers
-- `src/app` - bootstrap for provider plus registry assembly
-- `defaults` - built-in skill and agent metadata
+- `src/lib` - filesystem, prompt, config, and shared helpers
+- `src/app` - bootstrap and registry assembly
 - `tests` - focused contract tests
 
 ## Task Routing
 
 - For loop, tool, or provider-contract work, inspect `src/core` first.
-- For mode changes or tool availability changes, inspect `src/app/bootstrap.ts` and `src/core/tool-registry.ts`.
 - For ACP behavior, inspect `src/acp`.
 - For terminal UI changes, inspect `src/tui`.
-- For prompt framing, inspect `src/lib/prompt.ts` and `defaults/`.
+- For tool behavior, inspect `src/tools`.
+- For shared helpers, inspect `src/lib`.
+- For mode wiring or registry assembly, inspect `src/app/bootstrap.ts` and `src/core/tool-registry.ts`.
 
 ## Engineering Rules
 
 - TypeScript everywhere.
+- Validate external, model, and tool input at boundaries.
 - Keep provider SDK imports out of `src/core`.
-- Validate model/tool input at the boundary.
 - Keep tools focused: one tool, one capability.
-- Update docs when architecture, mode behavior, or entrypoint behavior changes.
-- Prefer changing the registry or prompt contract over adding special cases.
+- Update docs when architecture, runtime behavior, or entrypoints change.
+- Prefer moving detailed local guidance into directory-level `AGENTS.md` files instead of growing this file.
 
 ## Verification Requirements
 
@@ -94,6 +96,6 @@ Start with docs, then inspect code once you know which boundary matters.
 
 ## Collaboration Preferences
 
-- Keep implementations small and explicit.
-- Optimize for future agents reading the code in one pass.
-- If the requested target is architectural, implement the coherent end state directly.
+- Keep implementations small and legible.
+- Optimize for code that future agents can read in one pass.
+- Hold the architectural bar requested by the user; do not quietly retreat to a weaker design for convenience.
