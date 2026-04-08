@@ -1,64 +1,127 @@
 import { z } from 'zod';
-import { Provider } from './provider.js';
 import { AgentHooks } from './hooks.js';
+import { Provider } from './provider.js';
 import {
   AssistantMessage,
+  ExecutedToolResult,
   Message,
   Tool,
   ToolContext,
   ToolDefinition,
-  ToolResultMessage
+  ToolLocation,
 } from './types.js';
 
-/** Convert Tool[] (Zod schemas) to ToolDefinition[] (JSON Schema) for the provider */
 function toToolDefinitions(tools: Tool[]): ToolDefinition[] {
-  return tools.map(t => ({
-    name: t.name,
-    description: t.description,
-    parameters: z.toJSONSchema(t.parameters) as Record<string, unknown>
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: z.toJSONSchema(tool.parameters) as Record<string, unknown>,
   }));
 }
 
 export function truncateOutput(content: string): string {
-  if (content.length > 32000) {
-    const head = content.substring(0, 24000);
-    const tail = content.substring(content.length - 6000);
-    return `${head}\n... [${content.length - 30000} chars truncated] ...\n${tail}`;
+  if (content.length <= 32000) {
+    return content;
   }
-  return content;
+
+  const head = content.slice(0, 24000);
+  const tail = content.slice(content.length - 6000);
+  return `${head}\n... [${content.length - 30000} chars truncated] ...\n${tail}`;
+}
+
+function resolveTitle(tool: Tool | undefined, args: Record<string, unknown>, context: ToolContext): string {
+  if (!tool) {
+    return 'Unknown tool';
+  }
+
+  if (typeof tool.title === 'function') {
+    return tool.title(args, context);
+  }
+
+  return tool.title ?? tool.name;
+}
+
+function fallbackTitle(tool: Tool | undefined): string {
+  if (!tool) {
+    return 'Unknown tool';
+  }
+
+  return typeof tool.title === 'string' ? tool.title : tool.name;
+}
+
+function resolveLocations(
+  tool: Tool | undefined,
+  args: Record<string, unknown>,
+  context: ToolContext,
+) {
+  if (!tool?.locations) {
+    return [];
+  }
+
+  return tool.locations(args, context);
 }
 
 async function executeTool(
-    toolCall: import('./types.js').ToolCall,
-    tools: Tool[],
-    context: ToolContext
-): Promise<ToolResultMessage> {
-      const tool = tools.find(t => t.name === toolCall.name);
-      let resultContent = 'Tool not found';
-      let isError = true;
+  toolCall: import('./types.js').ToolCall,
+  tools: Tool[],
+  context: ToolContext,
+): Promise<ExecutedToolResult> {
+  const tool = tools.find((candidate) => candidate.name === toolCall.name);
 
-      if (tool) {
-        try {
-          // Validate LLM-generated args through Zod schema
-          const validatedArgs = tool.parameters.parse(toolCall.arguments);
-          const result = await tool.execute(validatedArgs, context);
-          resultContent = result.content;
-          isError = result.isError || false;
-        } catch (error: unknown) {
-          if (error instanceof z.ZodError) {
-            resultContent = `Invalid arguments: ${error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ')}`;
-          } else {
-            resultContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
-          }
-        }
-      }
-      
-      return {
+  if (!tool) {
+    return {
+      title: fallbackTitle(tool),
+      kind: 'other',
+      locations: [],
+      message: {
         role: 'toolResult',
         toolCallId: toolCall.id,
-        content: truncateOutput(resultContent),
-        isError
-      };
+        content: 'Tool not found',
+        isError: true,
+      },
+    };
+  }
+
+  let title = fallbackTitle(tool);
+  let locations: ToolLocation[] = [];
+
+  try {
+    const validatedArgs = tool.parameters.parse(toolCall.arguments) as Record<string, unknown>;
+    title = resolveTitle(tool, validatedArgs, context);
+    locations = resolveLocations(tool, validatedArgs, context);
+    const result = await tool.execute(validatedArgs, context);
+
+    return {
+      title: result.title ?? title,
+      kind: result.kind ?? tool.kind,
+      locations: result.locations ?? locations,
+      display: result.display,
+      rawOutput: result.rawOutput,
+      message: {
+        role: 'toolResult',
+        toolCallId: toolCall.id,
+        content: truncateOutput(result.content),
+        isError: result.isError ?? false,
+      },
+    };
+  } catch (error: unknown) {
+    const content =
+      error instanceof z.ZodError
+        ? `Invalid arguments: ${error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join(', ')}`
+        : `Error: ${error instanceof Error ? error.message : String(error)}`;
+
+    return {
+      title,
+      kind: tool.kind,
+      locations,
+      message: {
+        role: 'toolResult',
+        toolCallId: toolCall.id,
+        content: truncateOutput(content),
+        isError: true,
+      },
+    };
+  }
 }
 
 export async function runAgentLoop(
@@ -67,46 +130,46 @@ export async function runAgentLoop(
   provider: Provider,
   context: ToolContext,
   systemPrompt?: string,
-  hooks?: AgentHooks
+  hooks?: AgentHooks,
+  maxTurns = 24,
 ): Promise<AssistantMessage> {
-  const toolDefs = toToolDefinitions(tools);
+  const toolDefinitions = toToolDefinitions(tools);
   let turns = 0;
-  
+
   await hooks?.onLoopStart?.();
 
   try {
-    while (true) {
-      turns++;
-      
+    while (turns < maxTurns) {
+      turns += 1;
       await hooks?.onLlmStart?.(messages);
 
-      const startLlm = Date.now();
+      const startedAt = Date.now();
       let response: AssistantMessage | undefined;
-      
-      if (hooks?.onTextDelta) {
-          const stream = provider.stream(messages, toolDefs, systemPrompt);
-          for await (const event of stream) {
-              if (event.type === 'text_delta' && event.text) {
-                  hooks.onTextDelta(event.text);
-              } else if (event.type === 'done' && event.message) {
-                  response = event.message;
-              }
-          }
-          if (!response) {
-            throw new Error("Stream ended without a final message");
-          }
-      } else {
-          response = await provider.complete(messages, toolDefs, systemPrompt);
-      }
-      
-      const llmDuration = Date.now() - startLlm;
-      
-      await hooks?.onLlmEnd?.(response, llmDuration);
 
+      if (hooks?.onTextDelta) {
+        const stream = provider.stream(messages, toolDefinitions, systemPrompt, context.signal);
+        for await (const event of stream) {
+          if (event.type === 'text_delta' && event.text) {
+            await hooks.onTextDelta(event.text);
+          }
+
+          if (event.type === 'done' && event.message) {
+            response = event.message;
+          }
+        }
+      } else {
+        response = await provider.complete(messages, toolDefinitions, systemPrompt, context.signal);
+      }
+
+      if (!response) {
+        throw new Error('Provider stream ended without a final message');
+      }
+
+      await hooks?.onLlmEnd?.(response, Date.now() - startedAt);
       messages.push(response);
 
       const toolCalls = response.content.filter(
-        (block): block is import('./types.js').ToolCall => block.type === 'toolCall'
+        (block): block is import('./types.js').ToolCall => block.type === 'toolCall',
       );
 
       if (toolCalls.length === 0) {
@@ -115,57 +178,25 @@ export async function runAgentLoop(
       }
 
       for (const toolCall of toolCalls) {
-        await hooks?.onToolStart?.(toolCall);
+        const tool = tools.find((candidate) => candidate.name === toolCall.name);
+        await hooks?.onToolStart?.(toolCall, tool);
 
-        const startTool = Date.now();
-        let toolResult = await executeTool(toolCall, tools, context);
-        const toolDuration = Date.now() - startTool;
-
-        const hookResult = await hooks?.onToolEnd?.(toolCall, toolResult, toolDuration);
+        const startedToolAt = Date.now();
+        let result = await executeTool(toolCall, tools, context);
+        const hookResult = await hooks?.onToolEnd?.(toolCall, tool, result, Date.now() - startedToolAt);
         if (hookResult) {
-            // Typescript allows void return, so we check if it returned a value
-            // but the interface says ToolResultMessage | void.
-            // If it returns a modified result, use it.
-            // Wait, the interface says: ToolResultMessage | void | Promise<ToolResultMessage | void>
-            // So if it returns an object that looks like a ToolResultMessage, we use it.
-            if ((hookResult as ToolResultMessage).role === 'toolResult') {
-                toolResult = hookResult as ToolResultMessage;
-            }
+          result = hookResult;
         }
 
-        messages.push(toolResult);
+        messages.push(result.message);
       }
-      
+
       await hooks?.onTurnEnd?.(messages);
     }
+
+    throw new Error(`Agent loop exceeded ${maxTurns} turns`);
   } catch (error) {
-    if (error instanceof Error) {
-        await hooks?.onError?.(error);
-    } else {
-        await hooks?.onError?.(new Error(String(error)));
-    }
+    await hooks?.onError?.(error instanceof Error ? error : new Error(String(error)));
     throw error;
   }
-}
-
-// Deprecated: use runAgentLoop with hooks.onTextDelta
-export const runAgentLoopStreaming = (
-    messages: Message[],
-    tools: Tool[],
-    provider: Provider,
-    context: ToolContext,
-    systemPrompt?: string,
-    onTextDelta?: (text: string) => void,
-    // tracer parameter removed, effectively breaking compatibility if used with tracer
-    // but the task says "actually, MERGE the two functions into ONE"
-    // so I will implement it as a wrapper for backward compat if needed, 
-    // but the instruction implies removing it or merging it.
-    // "MERGE the two functions into ONE runAgentLoop"
-    // I will keep runAgentLoopStreaming as a wrapper for now to avoid breaking too many tests at once before I fix them,
-    // or I can just remove it and fix tests. The instructions say "Refactor src/core/agent-loop.ts".
-    // I'll export it for now as a wrapper that constructs hooks.
-): Promise<AssistantMessage> => {
-    return runAgentLoop(messages, tools, provider, context, systemPrompt, {
-        onTextDelta
-    });
 }

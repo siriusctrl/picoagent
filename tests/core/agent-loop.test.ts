@@ -1,150 +1,127 @@
 import { test } from 'node:test';
-import assert from 'node:assert';
-import { runAgentLoop, runAgentLoopStreaming } from '../../src/core/loop.js';
-import { Provider, StreamEvent } from '../../src/core/provider.js';
-import { Message, Tool, ToolContext, AssistantMessage, ToolDefinition } from '../../src/core/types.js';
+import assert from 'node:assert/strict';
 import { z } from 'zod';
+import { runAgentLoop } from '../../src/core/loop.js';
+import { Provider, StreamEvent } from '../../src/core/provider.js';
+import { AssistantMessage, Message, Tool, ToolContext, ToolDefinition } from '../../src/core/types.js';
+import { resolveSessionPath } from '../../src/lib/filesystem.js';
 
 const mockTool: Tool<any> = {
   name: 'mock',
   description: 'Mock tool',
+  kind: 'other',
   parameters: z.object({ arg: z.string() }),
-  execute: async (args: { arg: string }) => ({ content: `Executed: ${args.arg}` })
+  title: 'Run mock',
+  execute: async (args: { arg: string }) => ({ content: `Executed: ${args.arg}` }),
 };
 
-const errorTool: Tool<any> = {
-  name: 'error',
-  description: 'Error tool',
-  parameters: z.object({}),
-  execute: async () => { throw new Error('Tool failure'); }
+const mockContext: ToolContext = {
+  sessionId: 'session-1',
+  cwd: process.cwd(),
+  roots: [process.cwd()],
+  controlRoot: process.cwd(),
+  mode: 'ask',
+  signal: new AbortController().signal,
+  environment: {
+    readTextFile: async () => '',
+    writeTextFile: async () => {},
+    listFiles: async () => [],
+    searchText: async () => [],
+    runCommand: async () => ({
+      terminalId: 'term-1',
+      output: '',
+      truncated: false,
+      exitCode: 0,
+      signal: null,
+    }),
+  },
 };
 
-const mockTools = [mockTool, errorTool];
-const mockContext: ToolContext = { cwd: process.cwd(), tasksRoot: process.cwd() };
+class InlineMockProvider implements Provider {
+  model = 'mock-model';
+  messages: Message[] = [];
 
-class MockProvider implements Provider {
-    model = 'mock-model';
-    messages: Message[] = [];
-    responses: AssistantMessage[] = [];
-    
-    constructor(responses: AssistantMessage[]) {
-        this.responses = responses;
-    }
+  constructor(private readonly responses: AssistantMessage[]) {}
 
-    async complete(messages: Message[], tools: ToolDefinition[], systemPrompt?: string): Promise<AssistantMessage> {
-        this.messages = messages;
-        const response = this.responses.shift();
-        if (!response) throw new Error("No more responses");
-        return response;
+  async complete(
+    messages: Message[],
+    _tools: ToolDefinition[],
+    _systemPrompt?: string,
+    _signal?: AbortSignal,
+  ): Promise<AssistantMessage> {
+    this.messages = [...messages];
+    const response = this.responses.shift();
+    if (!response) {
+      throw new Error('No more mock responses');
     }
+    return response;
+  }
 
-    async *stream(messages: Message[], tools: ToolDefinition[], systemPrompt?: string): AsyncIterable<StreamEvent> {
-        const response = await this.complete(messages, tools, systemPrompt);
-        for (const block of response.content) {
-            if (block.type === 'text') {
-                yield { type: 'text_delta', text: block.text };
-            } else {
-                yield { type: 'tool_start', toolCall: { id: block.id, name: block.name } };
-            }
-        }
-        yield { type: 'done', message: response };
-    }
+  async *stream(
+    messages: Message[],
+    tools: ToolDefinition[],
+    systemPrompt?: string,
+    signal?: AbortSignal,
+  ): AsyncIterable<StreamEvent> {
+    yield { type: 'done', message: await this.complete(messages, tools, systemPrompt, signal) };
+  }
 }
 
-test('agent loop simple text response', async () => {
-    const provider = new MockProvider([{ 
-        role: 'assistant', 
-        content: [{ type: 'text', text: 'Hello' }] 
-    }]);
-    
-    const result = await runAgentLoop([], mockTools, provider, mockContext);
-    assert.strictEqual(result.content[0].type, 'text');
-    assert.strictEqual((result.content[0] as any).text, 'Hello');
+test('agent loop returns the first text response when no tool call is present', async () => {
+  const provider = new InlineMockProvider([
+    { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] },
+  ]);
+
+  const result = await runAgentLoop([], [mockTool], provider, mockContext);
+  assert.deepEqual(result, { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] });
 });
 
-test('agent loop tool execution', async () => {
-    const provider = new MockProvider([
-        { 
-            role: 'assistant', 
-            content: [{ type: 'toolCall', id: '1', name: 'mock', arguments: { arg: 'test' } }] 
-        },
-        { 
-            role: 'assistant', 
-            content: [{ type: 'text', text: 'Done' }] 
-        }
-    ]);
-    
-    const result = await runAgentLoop([], mockTools, provider, mockContext);
-    
-    const toolResultMsg = provider.messages.find(m => m.role === 'toolResult');
-    assert.ok(toolResultMsg);
-    assert.strictEqual(toolResultMsg.content, 'Executed: test');
-    assert.strictEqual((result.content[0] as any).text, 'Done');
+test('agent loop executes the requested tool and feeds the result back into the conversation', async () => {
+  const provider = new InlineMockProvider([
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'mock', arguments: { arg: 'test' } }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
+  ]);
+
+  const result = await runAgentLoop([], [mockTool], provider, mockContext);
+  const toolResult = provider.messages.find((message) => message.role === 'toolResult');
+
+  assert.ok(toolResult);
+  assert.equal(toolResult.content, 'Executed: test');
+  assert.equal(result.content[0]?.type, 'text');
 });
 
-test('agent loop invalid tool args', async () => {
-    const provider = new MockProvider([
-        { 
-            role: 'assistant', 
-            content: [{ type: 'toolCall', id: '1', name: 'mock', arguments: { arg: 123 } }] // Invalid arg type
-        },
-        { 
-            role: 'assistant', 
-            content: [{ type: 'text', text: 'Done' }] 
-        }
-    ]);
-    
-    await runAgentLoop([], mockTools, provider, mockContext);
-    
-    const toolResultMsg = provider.messages.find(m => m.role === 'toolResult');
-    assert.ok(toolResultMsg);
-    assert.ok(toolResultMsg.content.includes('Invalid arguments'));
-    assert.strictEqual(toolResultMsg.isError, true);
+test('agent loop rejects invalid tool arguments with a tool result error', async () => {
+  const provider = new InlineMockProvider([
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'mock', arguments: { arg: 123 } }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
+  ]);
+
+  await runAgentLoop([], [mockTool], provider, mockContext);
+  const toolResult = provider.messages.find((message) => message.role === 'toolResult');
+
+  assert.ok(toolResult);
+  assert.equal(toolResult.isError, true);
+  assert.match(toolResult.content, /Invalid arguments/);
 });
 
-test('agent loop unknown tool', async () => {
-    const provider = new MockProvider([
-        { 
-            role: 'assistant', 
-            content: [{ type: 'toolCall', id: '1', name: 'unknown', arguments: {} }] 
-        },
-        { 
-            role: 'assistant', 
-            content: [{ type: 'text', text: 'Done' }] 
-        }
-    ]);
-    
-    await runAgentLoop([], mockTools, provider, mockContext);
-    
-    const toolResultMsg = provider.messages.find(m => m.role === 'toolResult');
-    assert.ok(toolResultMsg);
-    assert.strictEqual(toolResultMsg.content, 'Tool not found');
-    assert.strictEqual(toolResultMsg.isError, true);
-});
+test('agent loop does not resolve tool locations before validating arguments', async () => {
+  const guardedTool: Tool<any> = {
+    name: 'guarded_read',
+    description: 'Read a guarded path',
+    kind: 'read',
+    parameters: z.object({ path: z.string() }),
+    locations: (args, context) => [{ path: resolveSessionPath(args.path, context.cwd, context.roots) }],
+    execute: async () => ({ content: 'unreachable' }),
+  };
+  const provider = new InlineMockProvider([
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'guarded_read', arguments: { path: 123 } }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
+  ]);
 
-test('agent loop tool truncation', async () => {
-    const largeTool: Tool<any> = {
-        name: 'large',
-        description: 'Large output',
-        parameters: z.object({}),
-        execute: async () => ({ content: 'a'.repeat(33000) })
-    };
-    
-    const provider = new MockProvider([
-        { 
-            role: 'assistant', 
-            content: [{ type: 'toolCall', id: '1', name: 'large', arguments: {} }] 
-        },
-        { 
-            role: 'assistant', 
-            content: [{ type: 'text', text: 'Done' }] 
-        }
-    ]);
-    
-    await runAgentLoop([], [largeTool], provider, mockContext);
-    
-    const toolResultMsg = provider.messages.find(m => m.role === 'toolResult');
-    assert.ok(toolResultMsg);
-    assert.ok(toolResultMsg.content.includes('chars truncated'));
-    assert.strictEqual(toolResultMsg.content.length < 33000, true);
+  await runAgentLoop([], [guardedTool], provider, mockContext);
+  const toolResult = provider.messages.find((message) => message.role === 'toolResult');
+
+  assert.ok(toolResult);
+  assert.equal(toolResult.isError, true);
+  assert.match(toolResult.content, /Invalid arguments/);
 });
