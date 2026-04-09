@@ -60,7 +60,7 @@ export function filterGlob(paths: string[], pattern: string, limit = paths.lengt
     .slice(0, limit);
 }
 
-export function grepTextBlobs(blobs: TextBlob[], query: string, limit: number): SearchMatch[] {
+export function grepTextBlobs(blobs: TextBlob[], query: string, limit: number, context = 0): SearchMatch[] {
   const needle = query.toLowerCase();
   const matches: SearchMatch[] = [];
 
@@ -70,19 +70,30 @@ export function grepTextBlobs(blobs: TextBlob[], query: string, limit: number): 
     }
 
     const lines = blob.content.split(/\r?\n/);
-    for (let index = 0; index < lines.length; index += 1) {
-      if (matches.length >= limit) {
-        break;
-      }
+    const selected = new Map<number, SearchMatch['kind']>();
 
+    for (let index = 0; index < lines.length; index += 1) {
       if (!lines[index].toLowerCase().includes(needle)) {
         continue;
+      }
+
+      const start = Math.max(index - context, 0);
+      const end = Math.min(index + context, lines.length - 1);
+      for (let candidate = start; candidate <= end; candidate += 1) {
+        selected.set(candidate, selected.get(candidate) === 'match' || candidate === index ? 'match' : 'context');
+      }
+    }
+
+    for (const [index, kind] of selected) {
+      if (matches.length >= limit) {
+        break;
       }
 
       matches.push({
         path: normalizePath(blob.path),
         line: index + 1,
         text: lines[index],
+        kind,
       });
     }
   }

@@ -59,6 +59,31 @@ test('grep searches a target file-view', async () => {
   assert.equal(result.content, 'src/http/server.ts:12: needle here');
 });
 
+test('grep renders surrounding context lines distinctly', async () => {
+  const contextWithSurrounding: ToolContext = {
+    ...context,
+    fileView: {
+      ...context.fileView,
+      grep: async () => [
+        { path: '/workspace/src/http/server.ts', line: 11, text: 'before', kind: 'context' },
+        { path: '/workspace/src/http/server.ts', line: 12, text: 'needle here', kind: 'match' },
+        { path: '/workspace/src/http/server.ts', line: 13, text: 'after', kind: 'context' },
+      ],
+    },
+  };
+
+  const result = await grepTool.execute(
+    { target: 'workspace', query: 'needle', context: 1 },
+    contextWithSurrounding,
+  );
+
+  assert.equal(
+    result.content,
+    'src/http/server.ts-11- before\nsrc/http/server.ts:12: needle here\nsrc/http/server.ts-13- after',
+  );
+  assert.deepEqual(result.locations, [{ path: '/workspace/src/http/server.ts', line: 12 }]);
+});
+
 test('read reads one target-relative path', async () => {
   const result = await readTool.execute({ target: 'session', path: 'summary.md' }, context);
   assert.match(result.content, /session:summary.md/);

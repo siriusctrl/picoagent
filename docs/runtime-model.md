@@ -88,6 +88,9 @@ Equipped tools:
 - `grep`
 - `read`
 
+`grep` is a case-insensitive literal line search with optional surrounding context lines.
+On the executable workspace target it prefers `rg` when available and falls back to the built-in file-view search when it is not.
+
 Use it for:
 - exploration
 - search

@@ -34,7 +34,11 @@ export interface FilePatchChange {
 
 export interface FileViewAccess {
   glob(target: FileViewTarget, pattern: string, limit?: number): Promise<string[]>;
-  grep(target: FileViewTarget, query: string, options?: { path?: string; limit?: number }): Promise<SearchMatch[]>;
+  grep(
+    target: FileViewTarget,
+    query: string,
+    options?: { path?: string; limit?: number; context?: number },
+  ): Promise<SearchMatch[]>;
   read(target: FileViewTarget, path: string, options?: FileViewReadOptions): Promise<string>;
   patch(target: FileViewTarget, operations: FilePatchOperation[]): Promise<FilePatchChange[]>;
   cmd(target: FileViewTarget, request: Omit<RunCommandRequest, 'sessionId'>): Promise<RunCommandResult>;

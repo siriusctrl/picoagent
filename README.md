@@ -173,6 +173,7 @@ The model can browse session history through the session file-view with:
 - `read`
 
 That file-view is read-only. Raw event logs and compaction stay on the session or HTTP side, not the model tool surface.
+For the executable workspace target, `grep` prefers `rg` when available and falls back to the built-in file-view search when it is not.
 
 ## HTTP API
 

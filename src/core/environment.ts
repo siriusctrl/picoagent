@@ -2,6 +2,7 @@ export interface SearchMatch {
   path: string;
   line: number;
   text: string;
+  kind?: 'match' | 'context';
 }
 
 export interface RunCommandRequest {

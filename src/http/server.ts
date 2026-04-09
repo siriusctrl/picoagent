@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { buildSessionControlSnapshot, computeControlVersion, SessionControlSnapshot } from '../runtime/control-snapshot.js';
 import { createRuntimeContext } from '../runtime/index.js';
 import type { AgentEnvironment, SearchMatch } from '../core/environment.js';
@@ -333,13 +333,20 @@ class HttpRuntimeService {
     roots: string[],
     signal: AbortSignal,
     sessionId?: string,
-    options?: { path?: string; limit?: number },
+    options?: { path?: string; limit?: number; context?: number },
   ): Promise<SearchMatch[]> {
+    if (target === 'workspace') {
+      const ripgrepMatches = await this.tryGrepWorkspaceWithRipgrep(runId, cwd, roots, query, options);
+      if (ripgrepMatches) {
+        return ripgrepMatches;
+      }
+    }
+
     const blobs = target === 'workspace'
       ? await this.readWorkspaceFileViewBlobs(runId, cwd, roots, signal, options?.path)
       : this.readSessionFileViewBlobs(this.requireSessionId(sessionId), options?.path);
 
-    return grepTextBlobs(blobs, query, options?.limit ?? 50);
+    return grepTextBlobs(blobs, query, options?.limit ?? 50, options?.context ?? 0);
   }
 
   private async readFileView(
@@ -497,6 +504,54 @@ class HttpRuntimeService {
     });
   }
 
+  private async tryGrepWorkspaceWithRipgrep(
+    runId: string,
+    cwd: string,
+    roots: string[],
+    query: string,
+    options?: { path?: string; limit?: number; context?: number },
+  ): Promise<SearchMatch[] | null> {
+    const requests = this.workspaceRipgrepRequests(cwd, roots, options?.path);
+    const limit = options?.limit ?? 50;
+    const matches: SearchMatch[] = [];
+
+    try {
+      for (const request of requests) {
+        const result = await this.environment.runCommand({
+          sessionId: runId,
+          command: 'rg',
+          args: [
+            '--json',
+            '--line-number',
+            '--hidden',
+            '-F',
+            '-i',
+            ...(options?.context ? ['-C', String(options.context)] : []),
+            '--',
+            query,
+            ...(request.searchPath ? [request.searchPath] : []),
+          ],
+          cwd: request.root,
+          outputByteLimit: 256000,
+        });
+
+        if (result.exitCode !== 0 && result.exitCode !== 1) {
+          return null;
+        }
+
+        const parsed = parseRipgrepJsonLines(result.output, request.root, cwd, limit - matches.length);
+        matches.push(...parsed);
+        if (matches.length >= limit) {
+          break;
+        }
+      }
+
+      return matches;
+    } catch {
+      return null;
+    }
+  }
+
   private requireSessionId(sessionId?: string): string {
     if (!sessionId) {
       throw new ValidationError('session target requires a persistent session');
@@ -507,6 +562,27 @@ class HttpRuntimeService {
 
   private listSessionFileViewPathsOrThrow(sessionId?: string): string[] {
     return this.listSessionFileView(this.requireSessionId(sessionId));
+  }
+
+  private workspaceRipgrepRequests(
+    cwd: string,
+    roots: string[],
+    pathFilter?: string,
+  ): Array<{ root: string; searchPath?: string }> {
+    if (!pathFilter) {
+      return roots.map((root) => ({ root }));
+    }
+
+    const resolved = resolveSessionPath(pathFilter, cwd, roots);
+    return roots
+      .filter((root) => {
+        const candidate = relative(root, resolved);
+        return candidate === '' || (!candidate.startsWith('..') && !isAbsolute(candidate));
+      })
+      .map((root) => ({
+        root,
+        searchPath: relative(root, resolved) || '.',
+      }));
   }
 
   private async listWorkspaceFileViewPaths(
@@ -733,6 +809,57 @@ class HttpRuntimeService {
       }
     }
   }
+}
+
+function parseRipgrepJsonLines(
+  output: string,
+  root: string,
+  cwd: string,
+  limit: number,
+): SearchMatch[] {
+  if (limit <= 0 || !output.trim()) {
+    return [];
+  }
+
+  const matches: SearchMatch[] = [];
+
+  for (const rawLine of output.split(/\r?\n/)) {
+    if (!rawLine.trim() || matches.length >= limit) {
+      continue;
+    }
+
+    let record: Record<string, unknown>;
+    try {
+      record = JSON.parse(rawLine) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    const type = record.type;
+    if (type !== 'match' && type !== 'context') {
+      continue;
+    }
+
+    const data = typeof record.data === 'object' && record.data ? record.data as Record<string, unknown> : null;
+    const pathRecord = data && typeof data.path === 'object' && data.path ? data.path as Record<string, unknown> : null;
+    const pathText = typeof pathRecord?.text === 'string' ? pathRecord.text : null;
+    const lineNumber = typeof data?.line_number === 'number' ? data.line_number : null;
+    const linesRecord = data && typeof data.lines === 'object' && data.lines ? data.lines as Record<string, unknown> : null;
+    const lineText = typeof linesRecord?.text === 'string' ? linesRecord.text.replace(/\r?\n$/, '') : null;
+
+    if (!pathText || !lineNumber || lineText === null) {
+      continue;
+    }
+
+    matches.push({
+      path: relativeToCwd(join(root, pathText), cwd),
+      line: lineNumber,
+      text: lineText,
+      kind: type,
+    });
+  }
+
+  return matches;
 }
 
 export async function startHttpServer(options: HttpServerOptions = {}): Promise<http.Server> {
