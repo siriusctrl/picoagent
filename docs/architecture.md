@@ -8,7 +8,7 @@ The architectural goal is to keep three concerns explicit and separate:
 
 - `session` manages context
 - `runtime` executes one run through the agent loop
-- `resources` provide files or history the runtime can read through tools
+- `resource` provides external files and, when supported, command execution
 
 ## Current Scope
 
@@ -97,12 +97,13 @@ Runtime state should sit behind explicit store boundaries rather than live in HT
 
 Current shape:
 
-- an in-memory runtime store owns sessions, runs, subscriptions, and append-only run events
+- a file-backed runtime store owns sessions, runs, subscriptions, and append-only run events
 - each session stores a cached control snapshot derived from its bound workspace
 - sessions may also store checkpoints that compact older conversation history into summaries
 - HTTP reads snapshots and event streams from that store
 - clients observe projections, not handler-local state
-- session history can be exposed back to the model as virtual session resources instead of being forced into the prompt every time
+- tools can browse a read-only session file-view built from summaries, checkpoints, and past runs
+- HTTP separately exposes session history resources and run event streams for clients
 
 ## Current Gaps
 
@@ -110,10 +111,8 @@ The separation is in place, but it is not complete yet.
 
 Known missing pieces:
 
-- runtime state is still in-memory only rather than durable across process restarts
-- session-history resources are available to tools, but not yet exposed as first-class HTTP resources
 - the workspace filesystem boundary only covers tool-facing file access; control snapshot reads still use the local filesystem directly
-- `run_command` is still tied to the local OS process boundary rather than a general resource-backed execution boundary
+- `cmd` is still tied to the local OS process boundary rather than a general resource-backed execution boundary
 - event streaming exists for runs, but not yet for whole-session history
 
 ### `src/config`
@@ -163,7 +162,7 @@ Responsibilities:
 - define tool parameters
 - validate tool arguments
 - call into the environment or filesystem helpers
-- expose session history browsing or compaction through small focused tools when the runtime model needs it
+- expose the model-facing file-view tools and command execution tools
 
 ## Runtime Hands
 

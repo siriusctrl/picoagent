@@ -23,27 +23,17 @@ const mockContext: ToolContext = {
   controlRoot: process.cwd(),
   agent: 'ask',
   signal: new AbortController().signal,
-  environment: {
-    readTextFile: async () => '',
-    writeTextFile: async () => {},
-    listFiles: async () => [],
-    searchText: async () => [],
-    runCommand: async () => ({
+  fileView: {
+    glob: async () => [],
+    grep: async () => [],
+    read: async () => '',
+    patch: async () => [],
+    cmd: async () => ({
       terminalId: 'term-1',
       output: '',
       truncated: false,
       exitCode: 0,
       signal: null,
-    }),
-  },
-  sessionAccess: {
-    listResources: async () => [],
-    readResource: async () => '',
-    compactSession: async () => ({
-      checkpointId: 'cp-1',
-      summary: '',
-      compactedMessages: 0,
-      keptMessages: 0,
     }),
   },
 };

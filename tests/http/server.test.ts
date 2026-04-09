@@ -10,6 +10,7 @@ type RunEvent = { type: string; [key: string]: unknown };
 type RunStatus = 'running' | 'completed' | 'failed';
 
 const servers = new Set<http.Server>();
+const runtimeRoots = new Set<string>();
 
 afterEach(async () => {
   await Promise.all(
@@ -25,13 +26,37 @@ afterEach(async () => {
     })),
   );
   servers.clear();
+
+  for (const runtimeRoot of runtimeRoots) {
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+  runtimeRoots.clear();
 });
 
-async function startServer(cwd = process.cwd()): Promise<{ baseUrl: string }> {
+async function stopServer(server: http.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+  servers.delete(server);
+}
+
+async function startServer(
+  cwd = process.cwd(),
+  runtimeRoot = mkdtempSync(join(tmpdir(), 'picoagent-http-runtime-')),
+): Promise<{ baseUrl: string; server: http.Server; runtimeRoot: string }> {
+  runtimeRoots.add(runtimeRoot);
   const server = await startHttpServer({
     cwd,
     hostname: '127.0.0.1',
     port: 0,
+    runtimeRoot,
   });
   servers.add(server);
 
@@ -42,6 +67,8 @@ async function startServer(cwd = process.cwd()): Promise<{ baseUrl: string }> {
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
+    server,
+    runtimeRoot,
   };
 }
 
@@ -389,6 +416,8 @@ test('GET /openapi.json documents the async run and event endpoints', async () =
   assert.ok(document.paths['/runs']);
   assert.ok(document.paths['/events/{runId}']?.get?.description?.includes('Accept: text/event-stream'));
   assert.ok(document.paths['/sessions/{sessionId}/runs']);
+  assert.ok(document.paths['/sessions/{sessionId}/resources']);
+  assert.ok(document.paths['/sessions/{sessionId}/resources/{resourcePath}']);
   assert.ok(document.paths['/sessions/{sessionId}/agent']);
   assert.ok(document.paths['/sessions/{sessionId}/compact']);
 });
@@ -511,4 +540,104 @@ test('sessions compact into checkpoints and expose the compacted snapshot over H
   };
   assert.equal(snapshot.activeCheckpointId, compacted.checkpoint.checkpointId);
   assert.equal(snapshot.checkpointCount, 1);
+});
+
+test('session history resources are available over HTTP', async () => {
+  const { baseUrl } = await startServer();
+
+  const createSessionResponse = await fetch(`${baseUrl}/sessions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ agent: 'exec' }),
+  });
+  const session = (await createSessionResponse.json()) as { id: string };
+
+  const runResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: 'resource test prompt' }),
+  });
+  const run = (await runResponse.json()) as { runId: string };
+  await waitForRun(baseUrl, run.runId);
+
+  await fetch(`${baseUrl}/sessions/${session.id}/compact`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ keepLastMessages: 1 }),
+  });
+
+  const listResponse = await fetch(`${baseUrl}/sessions/${session.id}/resources`);
+  assert.equal(listResponse.status, 200);
+  const listing = (await listResponse.json()) as { entries: string[] };
+  assert.deepEqual(listing.entries, ['summary.md', 'checkpoints/', 'runs/', 'events/']);
+
+  const runsListResponse = await fetch(`${baseUrl}/sessions/${session.id}/resources?path=runs`);
+  assert.equal(runsListResponse.status, 200);
+  const runsListing = (await runsListResponse.json()) as { entries: string[] };
+  assert.deepEqual(runsListing.entries, [`${run.runId}.md`]);
+
+  const summaryResponse = await fetch(`${baseUrl}/sessions/${session.id}/resources/summary.md`);
+  assert.equal(summaryResponse.status, 200);
+  assert.match(summaryResponse.headers.get('content-type') ?? '', /^text\/plain\b/);
+  assert.match(await summaryResponse.text(), /# Checkpoint/);
+
+  const eventsResponse = await fetch(`${baseUrl}/sessions/${session.id}/resources/events/${run.runId}.jsonl`);
+  assert.equal(eventsResponse.status, 200);
+  assert.match(eventsResponse.headers.get('content-type') ?? '', /^application\/x-ndjson\b/);
+  assert.match(await eventsResponse.text(), /"type":"run_started"/);
+});
+
+test('sessions and runs survive a server restart through the file runtime store', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'picoagent-http-persist-workspace-'));
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'picoagent-http-persist-runtime-'));
+  runtimeRoots.add(root);
+
+  try {
+    const first = await startServer(root, runtimeRoot);
+
+    const createSessionResponse = await fetch(`${first.baseUrl}/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agent: 'ask' }),
+    });
+    const session = (await createSessionResponse.json()) as { id: string };
+
+    const runResponse = await fetch(`${first.baseUrl}/sessions/${session.id}/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: 'persist across restart' }),
+    });
+    const run = (await runResponse.json()) as { runId: string };
+    await waitForRun(first.baseUrl, run.runId);
+
+    const compactResponse = await fetch(`${first.baseUrl}/sessions/${session.id}/compact`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ keepLastMessages: 1 }),
+    });
+    assert.equal(compactResponse.status, 200);
+
+    await stopServer(first.server);
+
+    const second = await startServer(root, runtimeRoot);
+
+    const sessionResponse = await fetch(`${second.baseUrl}/sessions/${session.id}`);
+    assert.equal(sessionResponse.status, 200);
+    const snapshot = (await sessionResponse.json()) as { checkpointCount: number; runs: Array<{ id: string }> };
+    assert.equal(snapshot.checkpointCount, 1);
+    assert.deepEqual(snapshot.runs.map((item) => item.id), [run.runId]);
+
+    const runSnapshotResponse = await fetch(`${second.baseUrl}/runs/${run.runId}`);
+    assert.equal(runSnapshotResponse.status, 200);
+    const runSnapshot = (await runSnapshotResponse.json()) as { status: RunStatus; output: string };
+    assert.equal(runSnapshot.status, 'completed');
+    assert.equal(runSnapshot.output, 'received: persist across restart');
+
+    const eventsResponse = await fetch(`${second.baseUrl}/sessions/${session.id}/resources/events/${run.runId}.jsonl`);
+    assert.equal(eventsResponse.status, 200);
+    assert.match(await eventsResponse.text(), /"type":"done"/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    runtimeRoots.delete(root);
+  }
 });

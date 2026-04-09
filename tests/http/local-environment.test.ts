@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { LocalEnvironment } from '../../src/http/local-environment.js';
 import { WorkspaceFileSystem } from '../../src/fs/workspace-fs.js';
 
@@ -29,6 +32,28 @@ test('local environment delegates file reads and writes to the workspace filesys
     'read:/workspace/a.ts:2:3',
     'write:/workspace/a.ts:updated',
   ]);
+});
+
+test('local environment deletes files directly from the filesystem', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'picoagent-local-env-'));
+
+  try {
+    const filePath = join(root, 'delete-me.txt');
+    writeFileSync(filePath, 'bye', 'utf8');
+
+    const environment = new LocalEnvironment({
+      readTextFile: async () => '',
+      writeTextFile: async () => {},
+      listFiles: async () => [],
+      searchText: async () => [],
+    });
+
+    await environment.deleteTextFile('session-1', filePath);
+
+    assert.throws(() => readFileSync(filePath, 'utf8'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('local environment delegates listing and text search to the workspace filesystem', async () => {

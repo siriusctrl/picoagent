@@ -7,6 +7,7 @@ In practice that means:
 - sessions stay the context boundary
 - runs stay the execution boundary
 - resources stay readable through explicit HTTP or tool surfaces
+- sessions expose event streams to clients and a read-only file-view to tools
 
 ## HTTP Server
 
@@ -27,6 +28,8 @@ Current endpoints:
 - `GET /events/:runId`
 - `POST /sessions`
 - `GET /sessions/:id`
+- `GET /sessions/:id/resources`
+- `GET /sessions/:id/resources/<resource_path>`
 - `POST /sessions/:id/agent`
 - `POST /sessions/:id/runs`
 - `POST /sessions/:id/compact`
@@ -42,6 +45,8 @@ HTTP resource model:
 - session runs inherit the session default agent unless the request overrides it
 - session runs refresh the cached control snapshot automatically if the workspace changed
 - `events` are the ordered records for one run
+- session history stays readable to clients through HTTP resource routes
+- the model reads session history through a read-only session file-view, not through raw event logs
 - compaction creates a checkpoint plus recent tail without deleting run or event history
 - set `Accept: text/event-stream` on `GET /events/:runId` for streaming
 - omit that header to read the same event log as JSON

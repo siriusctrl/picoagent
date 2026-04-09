@@ -10,7 +10,7 @@ The core design goal is to keep three concerns explicit and separate:
 
 - context management through sessions
 - execution through the agent runtime
-- file or history access through resources and tools
+- file or command access through resources and tools
 
 The current reference shape is:
 
@@ -32,14 +32,14 @@ What is already present:
 
 - explicit session objects for context management
 - one shared runtime loop model for runs
-- workspace and session-history resources that tools can read without collapsing them into the live prompt
+- file-backed runtime state under `.pico/runtime/`
+- a model-facing session file-view for browsing compacted history without forcing it all into the live prompt
 
 What is still incomplete:
 
-- runtime state is still in-memory only
-- session-history resources are not yet exposed as HTTP resources
 - control snapshot reads still come from the local filesystem directly
-- `run_command` still assumes a local OS process boundary
+- `cmd` still assumes a local OS process boundary
+- event streaming exists per run, but not yet for the whole session
 
 ## Quick Start
 
@@ -51,6 +51,7 @@ npm run dev
 ```
 
 That starts the HTTP server from the current working directory.
+Persistent runtime state is stored under `.pico/runtime/`.
 
 Build and run the compiled output:
 
@@ -106,22 +107,21 @@ The important split is:
 
 - `session` manages context
 - `runtime` executes runs
-- `workspace` and session-history resources provide inputs the runtime can read
+- `resource` provides files and, when supported, command execution
 
 HTTP is the main surface that ties those pieces together without collapsing them into one module.
+For model-side history lookup, a session also exposes a read-only file-view built from summaries, checkpoints, and past runs.
 
 `picoagent` exposes two built-in agent presets:
 
 - `ask`
-  - list files
-  - read files
-  - search text
-  - browse session history
+  - `glob`
+  - `grep`
+  - `read`
 - `exec`
   - everything in `ask`
-  - compact session history
-  - write files
-  - run commands
+  - `patch`
+  - `cmd`
 
 Agent presets do not create separate runtimes. They only choose which tools a run equips.
 
@@ -158,14 +158,15 @@ After compaction:
 
 - older conversation turns move into a checkpoint summary
 - recent messages stay active as the live tail
-- full run and event history remains available as virtual session resources
+- full run and event history remains available to clients over HTTP
 
-The model can browse session history through:
+The model can browse session history through the session file-view with:
 
-- `list_session_resources`
-- `read_session_resource`
+- `glob`
+- `grep`
+- `read`
 
-The `exec` preset can also call `compact_session`.
+That file-view is read-only. Raw event logs and compaction stay on the session or HTTP side, not the model tool surface.
 
 ## HTTP API
 
@@ -184,6 +185,8 @@ Current endpoints:
 - `GET /events/:runId`
 - `POST /sessions`
 - `GET /sessions/:id`
+- `GET /sessions/:id/resources`
+- `GET /sessions/:id/resources/<resource_path>`
 - `POST /sessions/:id/agent`
 - `POST /sessions/:id/runs`
 - `POST /sessions/:id/compact`
@@ -210,6 +213,18 @@ Compact a session:
 curl -X POST http://127.0.0.1:4096/sessions/<session_id>/compact \
   -H 'content-type: application/json' \
   -d '{"keepLastMessages":8}'
+```
+
+List session resources:
+
+```bash
+curl http://127.0.0.1:4096/sessions/<session_id>/resources
+```
+
+Read one session resource:
+
+```bash
+curl http://127.0.0.1:4096/sessions/<session_id>/resources/summary.md
 ```
 
 OpenAPI is available at:
@@ -269,7 +284,7 @@ src/
   runtime/    runtime context assembly and session control snapshots
   core/       loop, provider contract, tool registry, shared types
   http/       async HTTP server for runs, sessions, and events
-  tools/      LLM-facing file, session, write, and command tools
+  tools/      LLM-facing glob, grep, read, patch, and cmd tools
   providers/  Anthropic, OpenAI-compatible, Gemini, and echo adapters
   config/     config loading and provider env resolution
   fs/         filesystem traversal, path safety, and workspace FS boundary

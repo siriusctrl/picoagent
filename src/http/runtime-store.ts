@@ -1,7 +1,17 @@
 import { randomUUID } from 'node:crypto';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
 import { PicoConfig } from '../config/config.js';
 import { AgentPresetId, Message } from '../core/types.js';
-import { SessionCompactResult } from '../core/session-access.js';
 
 export type RunStatus = 'running' | 'completed' | 'failed';
 
@@ -142,12 +152,49 @@ export interface SessionCheckpointRecord {
   summary: string;
 }
 
+export interface SessionCompactResult {
+  checkpointId: string;
+  summary: string;
+  compactedMessages: number;
+  keptMessages: number;
+}
+
+export interface RuntimeStore {
+  createSession(record: SessionRecord): SessionRecord;
+  getSession(id: string): SessionRecord | undefined;
+  setSessionAgent(sessionId: string, agent: AgentPresetId): void;
+  refreshSessionControl(
+    sessionId: string,
+    control: {
+      controlVersion: string;
+      controlConfig: PicoConfig;
+      systemPrompts: Record<AgentPresetId, string>;
+    },
+  ): void;
+  attachRunToSession(sessionId: string, runId: string): void;
+  finishSessionRun(sessionId: string, runId: string, messages: Message[]): void;
+  clearSessionActiveRun(sessionId: string, runId: string): void;
+  createRun(record: RunRecord): RunRecord;
+  getRun(id: string): RunRecord | undefined;
+  updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): RunRecord | undefined;
+  appendRunEvent(runId: string, event: PendingRunEvent): RunEvent | undefined;
+  getRunEvents(runId: string): { runId: string; status: RunStatus; events: RunEvent[] } | undefined;
+  subscribeToRun(runId: string, listener: RunListener): (() => void) | undefined;
+  getRunSnapshot(runId: string): RunSnapshot | undefined;
+  getSessionSnapshot(sessionId: string): SessionSnapshot | undefined;
+  listSessionResources(sessionId: string, resourcePath?: string): string[] | undefined;
+  readSessionResource(sessionId: string, resourcePath: string): string | undefined;
+  compactSession(sessionId: string, keepLastMessages?: number): SessionCompactResult | undefined;
+}
+
 type RunListener = (event: RunEvent) => void;
 
-export class InMemoryRuntimeStore {
-  private readonly sessions = new Map<string, SessionRecord>();
-  private readonly runs = new Map<string, RunRecord>();
-  private readonly runListeners = new Map<string, Set<RunListener>>();
+interface PersistedRunRecord extends Omit<RunRecord, 'events'> {}
+
+export class InMemoryRuntimeStore implements RuntimeStore {
+  protected readonly sessions = new Map<string, SessionRecord>();
+  protected readonly runs = new Map<string, RunRecord>();
+  protected readonly runListeners = new Map<string, Set<RunListener>>();
 
   createSession(record: SessionRecord): SessionRecord {
     this.sessions.set(record.id, record);
@@ -192,7 +239,9 @@ export class InMemoryRuntimeStore {
     }
 
     session.activeRunId = runId;
-    session.runIds.push(runId);
+    if (!session.runIds.includes(runId)) {
+      session.runIds.push(runId);
+    }
   }
 
   finishSessionRun(sessionId: string, runId: string, messages: Message[]): void {
@@ -318,7 +367,7 @@ export class InMemoryRuntimeStore {
       return undefined;
     }
 
-    const normalized = resourcePath.replace(/^\/+|\/+$/g, '');
+    const normalized = normalizeResourcePath(resourcePath);
     if (normalized === '' || normalized === '.') {
       return ['summary.md', 'checkpoints/', 'runs/', 'events/'];
     }
@@ -332,7 +381,7 @@ export class InMemoryRuntimeStore {
     }
 
     if (normalized === 'events') {
-      return session.runIds.map((runId) => `${runId}.ndjson`);
+      return session.runIds.map((runId) => `${runId}.jsonl`);
     }
 
     return undefined;
@@ -344,7 +393,7 @@ export class InMemoryRuntimeStore {
       return undefined;
     }
 
-    const normalized = resourcePath.replace(/^\/+/, '');
+    const normalized = normalizeResourcePath(resourcePath);
     if (normalized === 'summary.md') {
       const checkpoint = session.activeCheckpointId
         ? session.checkpoints.find((candidate) => candidate.id === session.activeCheckpointId)
@@ -368,7 +417,7 @@ export class InMemoryRuntimeStore {
       return run ? formatRun(run) : undefined;
     }
 
-    const eventsMatch = normalized.match(/^events\/([^/]+)\.ndjson$/);
+    const eventsMatch = normalized.match(/^events\/([^/]+)\.jsonl$/);
     if (eventsMatch) {
       const run = this.runs.get(eventsMatch[1]);
       return run ? run.events.map((event) => JSON.stringify(event)).join('\n') : undefined;
@@ -428,6 +477,227 @@ export class InMemoryRuntimeStore {
   }
 }
 
+export class FileRuntimeStore extends InMemoryRuntimeStore {
+  constructor(private readonly runtimeRoot: string) {
+    super();
+    mkdirSync(this.sessionsDir(), { recursive: true });
+    mkdirSync(this.runsDir(), { recursive: true });
+    this.loadFromDisk();
+    this.markInterruptedRuns();
+  }
+
+  override createSession(record: SessionRecord): SessionRecord {
+    const session = super.createSession(record);
+    this.persistSession(session);
+    return session;
+  }
+
+  override setSessionAgent(sessionId: string, agent: AgentPresetId): void {
+    super.setSessionAgent(sessionId, agent);
+    const session = this.getSession(sessionId);
+    if (session) {
+      this.persistSession(session);
+    }
+  }
+
+  override refreshSessionControl(
+    sessionId: string,
+    control: {
+      controlVersion: string;
+      controlConfig: PicoConfig;
+      systemPrompts: Record<AgentPresetId, string>;
+    },
+  ): void {
+    super.refreshSessionControl(sessionId, control);
+    const session = this.getSession(sessionId);
+    if (session) {
+      this.persistSession(session);
+    }
+  }
+
+  override attachRunToSession(sessionId: string, runId: string): void {
+    super.attachRunToSession(sessionId, runId);
+    const session = this.getSession(sessionId);
+    if (session) {
+      this.persistSession(session);
+    }
+  }
+
+  override finishSessionRun(sessionId: string, runId: string, messages: Message[]): void {
+    super.finishSessionRun(sessionId, runId, messages);
+    const session = this.getSession(sessionId);
+    if (session) {
+      this.persistSession(session);
+    }
+  }
+
+  override clearSessionActiveRun(sessionId: string, runId: string): void {
+    super.clearSessionActiveRun(sessionId, runId);
+    const session = this.getSession(sessionId);
+    if (session) {
+      this.persistSession(session);
+    }
+  }
+
+  override createRun(record: RunRecord): RunRecord {
+    const run = super.createRun(record);
+    this.persistRun(run);
+    return run;
+  }
+
+  override updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): RunRecord | undefined {
+    const run = super.updateRun(runId, patch);
+    if (run) {
+      this.persistRun(run);
+    }
+    return run;
+  }
+
+  override appendRunEvent(runId: string, event: PendingRunEvent): RunEvent | undefined {
+    const record = super.appendRunEvent(runId, event);
+    const run = this.getRun(runId);
+    if (record && run) {
+      this.appendRunEventRecord(runId, record);
+      this.persistRun(run);
+    }
+    return record;
+  }
+
+  override compactSession(sessionId: string, keepLastMessages = 8): SessionCompactResult | undefined {
+    const result = super.compactSession(sessionId, keepLastMessages);
+    const session = this.getSession(sessionId);
+    if (result && session) {
+      this.persistSession(session);
+    }
+    return result;
+  }
+
+  private loadFromDisk(): void {
+    for (const entry of readdirSync(this.sessionsDir(), { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      const sessionPath = join(this.sessionsDir(), entry.name, 'session.json');
+      if (!existsSync(sessionPath)) {
+        continue;
+      }
+
+      const session = parseJsonFile<SessionRecord>(sessionPath);
+      this.sessions.set(session.id, session);
+    }
+
+    for (const entry of readdirSync(this.runsDir(), { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json') || entry.name.endsWith('.events.jsonl')) {
+        continue;
+      }
+
+      const runPath = join(this.runsDir(), entry.name);
+      const stored = parseJsonFile<PersistedRunRecord>(runPath);
+      const runId = entry.name.slice(0, -'.json'.length);
+      const events = this.loadRunEvents(runId);
+      this.runs.set(runId, { ...stored, events });
+    }
+  }
+
+  private loadRunEvents(runId: string): RunEvent[] {
+    const eventsPath = this.runEventsPath(runId);
+    if (!existsSync(eventsPath)) {
+      return [];
+    }
+
+    const content = readFileSync(eventsPath, 'utf8').trim();
+    if (!content) {
+      return [];
+    }
+
+    return content
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as RunEvent);
+  }
+
+  private markInterruptedRuns(): void {
+    const timestamp = new Date().toISOString();
+
+    for (const run of this.runs.values()) {
+      if (run.status !== 'running') {
+        continue;
+      }
+
+      run.status = 'failed';
+      run.error = 'Run interrupted by server restart';
+      run.finishedAt = timestamp;
+      const event = super.appendRunEvent(run.id, {
+        type: 'error',
+        timestamp,
+        runId: run.id,
+        sessionId: run.sessionId,
+        message: run.error,
+      });
+      if (event) {
+        this.appendRunEventRecord(run.id, event);
+      }
+
+      if (run.sessionId) {
+        const session = this.sessions.get(run.sessionId);
+        if (session?.activeRunId === run.id) {
+          session.activeRunId = undefined;
+          this.persistSession(session);
+        }
+      }
+
+      this.persistRun(run);
+    }
+  }
+
+  private sessionsDir(): string {
+    return join(this.runtimeRoot, 'sessions');
+  }
+
+  private runsDir(): string {
+    return join(this.runtimeRoot, 'runs');
+  }
+
+  private sessionPath(sessionId: string): string {
+    return join(this.sessionsDir(), sessionId, 'session.json');
+  }
+
+  private runPath(runId: string): string {
+    return join(this.runsDir(), `${runId}.json`);
+  }
+
+  private runEventsPath(runId: string): string {
+    return join(this.runsDir(), `${runId}.events.jsonl`);
+  }
+
+  private persistSession(session: SessionRecord): void {
+    writeJsonFileAtomic(this.sessionPath(session.id), session);
+  }
+
+  private persistRun(run: RunRecord): void {
+    const persisted: PersistedRunRecord = {
+      id: run.id,
+      sessionId: run.sessionId,
+      agent: run.agent,
+      prompt: run.prompt,
+      status: run.status,
+      output: run.output,
+      error: run.error,
+      createdAt: run.createdAt,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+    };
+    writeJsonFileAtomic(this.runPath(run.id), persisted);
+  }
+
+  private appendRunEventRecord(runId: string, event: RunEvent): void {
+    const eventsPath = this.runEventsPath(runId);
+    mkdirSync(dirname(eventsPath), { recursive: true });
+    appendFileSync(eventsPath, `${JSON.stringify(event)}\n`, 'utf8');
+  }
+}
+
 export function projectRunSnapshot(run: RunRecord): RunSnapshot {
   return {
     id: run.id,
@@ -468,6 +738,10 @@ export function projectSessionSnapshot(
       .filter((run): run is RunRecord => run !== undefined)
       .map((run) => projectRunSnapshot(run)),
   };
+}
+
+function normalizeResourcePath(value: string): string {
+  return value.replace(/^\/+|\/+$/g, '');
 }
 
 function summarizeMessages(messages: Message[]): string {
@@ -529,4 +803,19 @@ function formatRun(run: RunRecord): string {
     run.output || '(empty)',
     ...(run.error ? ['', '## Error', run.error] : []),
   ].join('\n');
+}
+
+function parseJsonFile<T>(path: string): T {
+  return JSON.parse(readFileSync(path, 'utf8')) as T;
+}
+
+function writeJsonFileAtomic(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tempPath = join(dirname(path), `${randomUUID()}.tmp`);
+  writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  renameSync(tempPath, path);
+}
+
+export function resetFileRuntimeStore(runtimeRoot: string): void {
+  rmSync(runtimeRoot, { recursive: true, force: true });
 }

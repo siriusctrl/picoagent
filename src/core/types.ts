@@ -1,6 +1,5 @@
 import type { z } from 'zod';
-import type { AgentEnvironment } from './environment.js';
-import type { SessionAccess } from './session-access.js';
+import type { FileViewAccess } from './file-view.js';
 
 export interface TextContent {
   type: 'text';
@@ -75,8 +74,7 @@ export interface ToolContext {
   controlRoot: string;
   agent: AgentPresetId;
   signal: AbortSignal;
-  environment: AgentEnvironment;
-  sessionAccess: SessionAccess;
+  fileView: FileViewAccess;
 }
 
 export interface ToolResult {

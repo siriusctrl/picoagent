@@ -2,27 +2,27 @@ import { z } from 'zod';
 import { Tool } from '../core/types.js';
 import { resolveSessionPath } from '../fs/filesystem.js';
 
-const RunCommandParams = z.object({
+const CmdParams = z.object({
+  target: z.enum(['workspace', 'session']).describe('Which target to execute against.'),
   command: z.string().min(1).describe('Shell command to run with bash -lc.'),
-  cwd: z.string().optional().describe('Optional relative working directory for the command.'),
+  cwd: z.string().optional().describe('Optional target-relative working directory for the command.'),
 });
 
-export const runCommandTool: Tool<typeof RunCommandParams> = {
-  name: 'run_command',
-  description: 'Run a shell command inside the workspace.',
+export const cmdTool: Tool<typeof CmdParams> = {
+  name: 'cmd',
+  description: 'Run a shell command against a target that supports execution.',
   kind: 'execute',
-  parameters: RunCommandParams,
-  title: (args) => `Run ${args.command}`,
-  locations: (args, context) => [
-    { path: resolveSessionPath(args.cwd ?? '.', context.cwd, context.roots) },
-  ],
+  parameters: CmdParams,
+  title: (args) => `Cmd ${args.target}:${args.command}`,
+  locations: (args, context) =>
+    args.target === 'workspace' && args.cwd
+      ? [{ path: resolveSessionPath(args.cwd, context.cwd, context.roots) }]
+      : [],
   async execute(args, context) {
-    const commandCwd = resolveSessionPath(args.cwd ?? '.', context.cwd, context.roots);
-    const result = await context.environment.runCommand({
-      sessionId: context.runId,
+    const result = await context.fileView.cmd(args.target, {
       command: 'bash',
       args: ['-lc', args.command],
-      cwd: commandCwd,
+      cwd: args.cwd,
       outputByteLimit: 32000,
     });
 
@@ -33,7 +33,6 @@ export const runCommandTool: Tool<typeof RunCommandParams> = {
           ? `signal ${result.signal}`
           : 'completed';
 
-    const isError = (result.exitCode ?? 0) !== 0 || result.signal !== null;
     return {
       content: `${result.output}\n\nCommand finished with ${status}.`.trim(),
       display: [{ type: 'terminal', terminalId: result.terminalId }],
@@ -43,8 +42,7 @@ export const runCommandTool: Tool<typeof RunCommandParams> = {
         signal: result.signal ?? null,
         truncated: result.truncated,
       },
-      locations: [{ path: commandCwd }],
-      isError,
+      isError: (result.exitCode ?? 0) !== 0 || result.signal !== null,
     };
   },
 };

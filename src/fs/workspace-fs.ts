@@ -47,5 +47,5 @@ export class LocalWorkspaceFileSystem implements WorkspaceFileSystem {
 
 // TODO: Move control-workspace reads for config and prompt docs behind a filesystem boundary too
 // if we want a fully virtualized workspace instead of only virtual tool-facing files.
-// TODO: `run_command` remains an OS process boundary. Virtual workspaces will need a separate
+// TODO: `cmd` remains an OS process boundary. Virtual workspaces will need a separate
 // command strategy rather than treating command execution as part of the filesystem abstraction.

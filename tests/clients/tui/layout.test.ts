@@ -10,11 +10,11 @@ test('countWrappedLines accounts for wrapping and blank content', () => {
 
 test('estimateEntryHeight does not add a phantom output row for pending tool calls', () => {
   assert.equal(
-    estimateEntryHeight({ type: 'tool', title: 'read_file', status: 'pending' }, 40),
+    estimateEntryHeight({ type: 'tool', title: 'read', status: 'pending' }, 40),
     2,
   );
   assert.equal(
-    estimateEntryHeight({ type: 'tool', title: 'read_file', status: 'done', output: 'ok' }, 40),
+    estimateEntryHeight({ type: 'tool', title: 'read', status: 'done', output: 'ok' }, 40),
     3,
   );
 });

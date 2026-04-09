@@ -2,14 +2,14 @@
 
 The runtime model is built around a simple split:
 
-- `workspace` is the source of files and control inputs
 - `session` owns context
+- `resource` provides file-backed inputs and, when supported, command execution
 - `run` is one execution through the runtime
-- resources such as workspace files or session history stay readable without having to force everything into the live prompt
+- a session may also project a read-only file-view so the model can inspect history without forcing everything into the live prompt
 
-## Workspace
+## Resource
 
-The directory where you launch `picoagent`.
+The current concrete resource is the workspace rooted at the directory where you launch `picoagent`.
 
 It owns prompt framing and local configuration:
 - `.pico/config.jsonc`
@@ -19,8 +19,9 @@ It owns prompt framing and local configuration:
 - `.pico/memory/`
 - `skills/`
 - `agents/`
+- `.pico/runtime/`
 
-This directory is the source of intent.
+This workspace is the current source of intent and the current executable target for `cmd`.
 
 ## Session
 
@@ -57,9 +58,7 @@ The session is not owned by one request handler.
 Runtime state lives behind a store boundary and is projected back out as session and run snapshots.
 
 What is still missing:
-- session state is not yet durable across process restarts
-- session history is not yet exposed as an HTTP resource surface, only through tools
-- control snapshots are still rebuilt from the local filesystem rather than a general workspace resource contract
+- control snapshots are still rebuilt from the local filesystem rather than a general resource contract
 
 ## Session History
 
@@ -71,11 +70,12 @@ New runs use:
 - latest checkpoint summary when present
 - tail messages after that checkpoint
 
-Full history still remains available for inspection as session resources:
+For model-side inspection, the session exposes a read-only file-view:
 - `summary.md`
 - `checkpoints/<id>.md`
 - `runs/<id>.md`
-- `events/<runId>.ndjson`
+
+Raw event logs remain available to clients over HTTP session resources and run event endpoints.
 
 ## Agent Presets
 
@@ -84,11 +84,9 @@ Full history still remains available for inspection as session resources:
 ### `ask`
 
 Equipped tools:
-- `list_files`
-- `read_file`
-- `search_text`
-- `list_session_resources`
-- `read_session_resource`
+- `glob`
+- `grep`
+- `read`
 
 Use it for:
 - exploration
@@ -100,9 +98,8 @@ Use it for:
 
 Equipped tools:
 - everything in `ask`
-- `compact_session`
-- `write_file`
-- `run_command`
+- `patch`
+- `cmd`
 
 Use it for:
 - implementation
@@ -145,6 +142,7 @@ For tool execution:
 - filesystem traversal and text search use local deterministic helpers
 
 Today this means:
-- tool-facing workspace files can be virtualized behind the workspace filesystem boundary
+- tool-facing resources can be virtualized behind the workspace filesystem boundary
+- sessions can reuse the same file-view logic for read-only history inspection
 - session control snapshots are still built from the local workspace directly
-- `run_command` is still an OS process boundary rather than a virtual workspace command layer
+- `cmd` is still an OS process boundary rather than a virtual workspace command layer

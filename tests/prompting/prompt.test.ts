@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildSystemPrompt } from '../../src/prompting/prompt.js';
-import { searchTextTool } from '../../src/tools/search-text.js';
+import { grepTool } from '../../src/tools/grep.js';
 
 function withHome<T>(homeDir: string, fn: () => T): T {
   const previousHome = process.env.HOME;
@@ -36,7 +36,7 @@ test('buildSystemPrompt keeps root prompt docs and reads memory from .pico direc
     mkdirSync(join(home, '.pico', 'memory'), { recursive: true });
     writeFileSync(join(home, '.pico', 'memory', 'memory.md'), 'user memory', 'utf8');
 
-    const prompt = withHome(home, () => buildSystemPrompt(root, 'ask', [searchTextTool]));
+    const prompt = withHome(home, () => buildSystemPrompt(root, 'ask', [grepTool]));
 
     assert.match(prompt, /workspace soul/);
     assert.match(prompt, /workspace user/);

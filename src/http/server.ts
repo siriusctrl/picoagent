@@ -1,19 +1,24 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
+import { join } from 'node:path';
 import { buildSessionControlSnapshot, computeControlVersion, SessionControlSnapshot } from '../runtime/control-snapshot.js';
 import { createRuntimeContext } from '../runtime/index.js';
-import type { AgentEnvironment } from '../core/environment.js';
+import type { AgentEnvironment, SearchMatch } from '../core/environment.js';
+import { FilePatchChange, FilePatchOperation, FileViewAccess, FileViewTarget } from '../core/file-view.js';
 import { runAgentLoop } from '../core/loop.js';
-import { SessionAccess } from '../core/session-access.js';
 import { AgentPresetId, AssistantMessage, Message } from '../core/types.js';
+import { filterGlob, grepTextBlobs, TextBlob } from '../fs/file-view.js';
+import { relativeToCwd, resolveSessionPath } from '../fs/filesystem.js';
 import { createProvider } from '../providers/index.js';
 import { LocalEnvironment } from './local-environment.js';
 import { buildOpenApiDocument } from './openapi.js';
 import {
   EmittedRunEvent,
+  FileRuntimeStore,
   InMemoryRuntimeStore,
   RunEvent,
   RunSnapshot,
+  RuntimeStore,
   RunStatus,
   SessionRecord,
   SessionSnapshot,
@@ -24,6 +29,8 @@ export interface HttpServerOptions {
   hostname?: string;
   port?: number;
   environment?: AgentEnvironment;
+  runtimeRoot?: string;
+  persistentRuntime?: boolean;
 }
 
 class NotFoundError extends Error {}
@@ -66,6 +73,12 @@ function sendJson(response: http.ServerResponse, status: number, payload: unknow
   response.end(JSON.stringify(payload));
 }
 
+function sendText(response: http.ServerResponse, status: number, contentType: string, payload: string): void {
+  response.statusCode = status;
+  response.setHeader('content-type', contentType);
+  response.end(payload);
+}
+
 function sendSse(response: http.ServerResponse, event: RunEvent): void {
   response.write(`event: ${event.type}\n`);
   response.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -105,13 +118,18 @@ function requirePrompt(value: unknown): string {
 
 class HttpRuntimeService {
   private readonly runtime;
-  private readonly store = new InMemoryRuntimeStore();
+  private readonly store: RuntimeStore;
 
   constructor(
     private readonly cwd: string,
     private readonly environment: AgentEnvironment,
+    runtimeRoot = join(cwd, '.pico', 'runtime'),
+    persistentRuntime = true,
   ) {
     this.runtime = createRuntimeContext(cwd);
+    this.store = persistentRuntime
+      ? new FileRuntimeStore(runtimeRoot)
+      : new InMemoryRuntimeStore();
   }
 
   createSession(agent: AgentPresetId = 'ask'): SessionRecord {
@@ -220,7 +238,7 @@ class HttpRuntimeService {
     this.getSession(sessionId);
     const entries = this.store.listSessionResources(sessionId, path);
     if (!entries) {
-      throw new NotFoundError(`Session ${sessionId} not found`);
+      throw new NotFoundError(`Session resource directory not found: ${path}`);
     }
 
     return entries;
@@ -234,6 +252,24 @@ class HttpRuntimeService {
     }
 
     return content;
+  }
+
+  listSessionFileView(sessionId: string): string[] {
+    const session = this.getSession(sessionId);
+    return [
+      'summary.md',
+      ...session.checkpoints.map((checkpoint) => `checkpoints/${checkpoint.id}.md`),
+      ...session.runIds.map((runId) => `runs/${runId}.md`),
+    ];
+  }
+
+  readSessionFileView(sessionId: string, path: string): string {
+    const normalized = path.replace(/^\/+|\/+$/g, '');
+    if (!this.listSessionFileView(sessionId).includes(normalized)) {
+      throw new NotFoundError(`Session file-view path not found: ${path}`);
+    }
+
+    return this.readSessionResource(sessionId, normalized);
   }
 
   compactSession(sessionId: string, keepLastMessages = 8) {
@@ -255,6 +291,283 @@ class HttpRuntimeService {
       checkpoint: result,
       session: this.getSessionSnapshot(sessionId),
     };
+  }
+
+  private fileView(
+    runId: string,
+    cwd: string,
+    roots: string[],
+    signal: AbortSignal,
+    sessionId?: string,
+  ): FileViewAccess {
+    return {
+      glob: async (target, pattern, limit) => this.globFileView(target, pattern, cwd, roots, signal, sessionId, limit),
+      grep: async (target, query, options) => this.grepFileView(target, query, runId, cwd, roots, signal, sessionId, options),
+      read: async (target, path, options) => this.readFileView(target, path, runId, cwd, roots, sessionId, options),
+      patch: async (target, operations) => this.patchFileView(target, operations, runId, cwd, roots),
+      cmd: async (target, request) => this.cmdFileView(target, request, runId, cwd, roots),
+    };
+  }
+
+  private async globFileView(
+    target: FileViewTarget,
+    pattern: string,
+    cwd: string,
+    roots: string[],
+    signal: AbortSignal,
+    sessionId?: string,
+    limit = 200,
+  ): Promise<string[]> {
+    const paths = target === 'workspace'
+      ? await this.listWorkspaceFileViewPaths(cwd, roots, signal)
+      : this.listSessionFileViewPathsOrThrow(sessionId);
+
+    return filterGlob(paths, pattern, limit);
+  }
+
+  private async grepFileView(
+    target: FileViewTarget,
+    query: string,
+    runId: string,
+    cwd: string,
+    roots: string[],
+    signal: AbortSignal,
+    sessionId?: string,
+    options?: { path?: string; limit?: number },
+  ): Promise<SearchMatch[]> {
+    const blobs = target === 'workspace'
+      ? await this.readWorkspaceFileViewBlobs(runId, cwd, roots, signal, options?.path)
+      : this.readSessionFileViewBlobs(this.requireSessionId(sessionId), options?.path);
+
+    return grepTextBlobs(blobs, query, options?.limit ?? 50);
+  }
+
+  private async readFileView(
+    target: FileViewTarget,
+    path: string,
+    runId: string,
+    cwd: string,
+    roots: string[],
+    sessionId?: string,
+    options?: { line?: number; limit?: number },
+  ): Promise<string> {
+    if (target === 'workspace') {
+      const fullPath = resolveSessionPath(path, cwd, roots);
+      return this.environment.readTextFile(runId, fullPath, options);
+    }
+
+    const sessionContent = this.readSessionFileView(this.requireSessionId(sessionId), path);
+    if (!options?.line && !options?.limit) {
+      return sessionContent;
+    }
+
+    const lines = sessionContent.split(/\r?\n/);
+    const start = Math.max((options.line ?? 1) - 1, 0);
+    const end = options.limit ? start + options.limit : undefined;
+    return lines.slice(start, end).join('\n');
+  }
+
+  private async patchFileView(
+    target: FileViewTarget,
+    operations: FilePatchOperation[],
+    runId: string,
+    cwd: string,
+    roots: string[],
+  ): Promise<FilePatchChange[]> {
+    if (target !== 'workspace') {
+      throw new ValidationError('patch is only supported for the workspace target');
+    }
+
+    const state = new Map<string, { exists: boolean; content: string }>();
+
+    for (const operation of operations) {
+      const fullPath = resolveSessionPath(operation.path, cwd, roots);
+      if (!state.has(fullPath)) {
+        try {
+          state.set(fullPath, {
+            exists: true,
+            content: await this.environment.readTextFile(runId, fullPath),
+          });
+        } catch {
+          state.set(fullPath, {
+            exists: false,
+            content: '',
+          });
+        }
+      }
+
+      const current = state.get(fullPath)!;
+      if (operation.type === 'create') {
+        if (current.exists) {
+          throw new ValidationError(`File already exists: ${operation.path}`);
+        }
+
+        state.set(fullPath, {
+          exists: true,
+          content: operation.content,
+        });
+        continue;
+      }
+
+      if (operation.type === 'delete') {
+        if (!current.exists) {
+          throw new ValidationError(`File not found: ${operation.path}`);
+        }
+
+        state.set(fullPath, {
+          exists: false,
+          content: current.content,
+        });
+        continue;
+      }
+
+      if (!current.exists) {
+        throw new ValidationError(`File not found: ${operation.path}`);
+      }
+
+      if (!current.content.includes(operation.oldText)) {
+        throw new ValidationError(`Text not found in ${operation.path}`);
+      }
+
+      const nextContent = operation.all
+        ? current.content.split(operation.oldText).join(operation.newText)
+        : current.content.replace(operation.oldText, operation.newText);
+      state.set(fullPath, {
+        exists: true,
+        content: nextContent,
+      });
+    }
+
+    const changes: FilePatchChange[] = [];
+    for (const operation of operations) {
+      const fullPath = resolveSessionPath(operation.path, cwd, roots);
+      const finalState = state.get(fullPath)!;
+
+      if (changes.some((change) => change.path === fullPath)) {
+        continue;
+      }
+
+      let oldText = '';
+      try {
+        oldText = await this.environment.readTextFile(runId, fullPath);
+      } catch {
+        oldText = '';
+      }
+
+      if (!finalState.exists) {
+        await this.environment.deleteTextFile(runId, fullPath);
+        changes.push({
+          path: fullPath,
+          action: 'delete',
+          oldText,
+          newText: '',
+        });
+        continue;
+      }
+
+      await this.environment.writeTextFile(runId, fullPath, finalState.content);
+      changes.push({
+        path: fullPath,
+        action: oldText === '' ? 'create' : 'update',
+        oldText: oldText || undefined,
+        newText: finalState.content,
+      });
+    }
+
+    return changes;
+  }
+
+  private cmdFileView(
+    target: FileViewTarget,
+    request: { command: string; args?: string[]; cwd?: string; outputByteLimit?: number },
+    runId: string,
+    cwd: string,
+    roots: string[],
+  ) {
+    if (target !== 'workspace') {
+      throw new ValidationError('cmd is only supported for the workspace target');
+    }
+
+    return this.environment.runCommand({
+      sessionId: runId,
+      command: request.command,
+      args: request.args,
+      cwd: request.cwd ? resolveSessionPath(request.cwd, cwd, roots) : cwd,
+      outputByteLimit: request.outputByteLimit,
+    });
+  }
+
+  private requireSessionId(sessionId?: string): string {
+    if (!sessionId) {
+      throw new ValidationError('session target requires a persistent session');
+    }
+
+    return sessionId;
+  }
+
+  private listSessionFileViewPathsOrThrow(sessionId?: string): string[] {
+    return this.listSessionFileView(this.requireSessionId(sessionId));
+  }
+
+  private async listWorkspaceFileViewPaths(
+    cwd: string,
+    roots: string[],
+    signal: AbortSignal,
+  ): Promise<string[]> {
+    const seen = new Set<string>();
+    const results: string[] = [];
+
+    for (const root of roots) {
+      const files = await this.environment.listFiles(root, 5000, signal);
+      for (const filePath of files) {
+        const relative = relativeToCwd(filePath, cwd);
+        if (relative === '.' || seen.has(relative)) {
+          continue;
+        }
+
+        seen.add(relative);
+        results.push(relative);
+      }
+    }
+
+    return results.sort((left, right) => left.localeCompare(right));
+  }
+
+  private async readWorkspaceFileViewBlobs(
+    runId: string,
+    cwd: string,
+    roots: string[],
+    signal: AbortSignal,
+    pathFilter?: string,
+  ): Promise<TextBlob[]> {
+    const paths = await this.listWorkspaceFileViewPaths(cwd, roots, signal);
+    const selected = pathFilter
+      ? paths.filter((candidate) => candidate === pathFilter || candidate.startsWith(`${pathFilter}/`))
+      : paths;
+
+    const blobs: TextBlob[] = [];
+    for (const relativePath of selected) {
+      const fullPath = resolveSessionPath(relativePath, cwd, roots);
+      try {
+        blobs.push({
+          path: fullPath,
+          content: await this.environment.readTextFile(runId, fullPath),
+        });
+      } catch {
+        continue;
+      }
+    }
+
+    return blobs;
+  }
+
+  private readSessionFileViewBlobs(sessionId: string, pathFilter?: string): TextBlob[] {
+    return this.listSessionFileView(sessionId)
+      .filter((candidate) => !pathFilter || candidate === pathFilter || candidate.startsWith(`${pathFilter}/`))
+      .map((path) => ({
+        path,
+        content: this.readSessionFileView(sessionId, path),
+      }));
   }
 
   private createRun(prompt: string, agent: AgentPresetId, sessionId?: string) {
@@ -307,14 +620,6 @@ class HttpRuntimeService {
     });
   }
 
-  private sessionAccess(): SessionAccess {
-    return {
-      listResources: async (sessionId, path) => this.listSessionResources(sessionId, path),
-      readResource: async (sessionId, path) => this.readSessionResource(sessionId, path),
-      compactSession: async (sessionId, keepLastMessages) => this.compactSession(sessionId, keepLastMessages).checkpoint,
-    };
-  }
-
   private async executeRun(
     run: ReturnType<HttpRuntimeService['createRun']>,
     control: SessionControlSnapshot,
@@ -352,8 +657,7 @@ class HttpRuntimeService {
           controlRoot: control.workspaceRoot,
           agent: run.agent,
           signal: controller.signal,
-          environment: this.environment,
-          sessionAccess: this.sessionAccess(),
+          fileView: this.fileView(run.id, session?.cwd ?? this.cwd, session?.roots ?? [this.cwd], controller.signal, session?.id),
         },
         systemPrompt,
         {
@@ -434,7 +738,13 @@ class HttpRuntimeService {
 export async function startHttpServer(options: HttpServerOptions = {}): Promise<http.Server> {
   const hostname = options.hostname ?? '127.0.0.1';
   const port = options.port ?? 4096;
-  const service = new HttpRuntimeService(options.cwd ?? process.cwd(), options.environment ?? new LocalEnvironment());
+  const cwd = options.cwd ?? process.cwd();
+  const service = new HttpRuntimeService(
+    cwd,
+    options.environment ?? new LocalEnvironment(),
+    options.runtimeRoot ?? join(cwd, '.pico', 'runtime'),
+    options.persistentRuntime ?? true,
+  );
 
   const server = http.createServer(async (request, response) => {
     try {
@@ -545,6 +855,31 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
           body.agent === undefined ? undefined : parseAgent(body.agent),
         );
         sendJson(response, 202, { runId: run.id, status: run.status, sessionId: run.sessionId });
+        return;
+      }
+
+      const sessionResourcesMatch = pathname.match(/^\/sessions\/([^/]+)\/resources$/);
+      if (request.method === 'GET' && sessionResourcesMatch) {
+        const path = url.searchParams.get('path') ?? '.';
+        sendJson(response, 200, {
+          sessionId: sessionResourcesMatch[1],
+          path,
+          entries: service.listSessionResources(sessionResourcesMatch[1], path),
+        });
+        return;
+      }
+
+      const sessionResourceMatch = pathname.match(/^\/sessions\/([^/]+)\/resources\/(.+)$/);
+      if (request.method === 'GET' && sessionResourceMatch) {
+        const resourcePath = decodeURIComponent(sessionResourceMatch[2]);
+        sendText(
+          response,
+          200,
+          resourcePath.endsWith('.jsonl')
+            ? 'application/x-ndjson; charset=utf-8'
+            : 'text/plain; charset=utf-8',
+          service.readSessionResource(sessionResourceMatch[1], resourcePath),
+        );
         return;
       }
 

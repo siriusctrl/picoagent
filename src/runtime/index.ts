@@ -1,13 +1,10 @@
 import { resolve } from 'node:path';
 import { ToolRegistry } from '../core/tool-registry.js';
-import { listFilesTool } from '../tools/list-files.js';
-import { listSessionResourcesTool } from '../tools/list-session-resources.js';
-import { readSessionResourceTool } from '../tools/read-session-resource.js';
-import { readFileTool } from '../tools/read-file.js';
-import { runCommandTool } from '../tools/run-command.js';
-import { searchTextTool } from '../tools/search-text.js';
-import { compactSessionTool } from '../tools/compact-session.js';
-import { writeFileTool } from '../tools/write-file.js';
+import { cmdTool } from '../tools/cmd.js';
+import { globTool } from '../tools/glob.js';
+import { grepTool } from '../tools/grep.js';
+import { patchTool } from '../tools/patch.js';
+import { readTool } from '../tools/read.js';
 
 export interface RuntimeContext {
   controlDir: string;
@@ -18,26 +15,20 @@ export function createRuntimeContext(controlDir = process.cwd()): RuntimeContext
   const resolvedControlDir = resolve(controlDir);
   const registry = new ToolRegistry({
     tools: [
-      listFilesTool,
-      readFileTool,
-      searchTextTool,
-      listSessionResourcesTool,
-      readSessionResourceTool,
-      compactSessionTool,
-      writeFileTool,
-      runCommandTool,
+      globTool,
+      grepTool,
+      readTool,
+      patchTool,
+      cmdTool,
     ],
     agentTools: {
-      ask: ['list_files', 'read_file', 'search_text', 'list_session_resources', 'read_session_resource'],
+      ask: ['glob', 'grep', 'read'],
       exec: [
-        'list_files',
-        'read_file',
-        'search_text',
-        'list_session_resources',
-        'read_session_resource',
-        'compact_session',
-        'write_file',
-        'run_command',
+        'glob',
+        'grep',
+        'read',
+        'patch',
+        'cmd',
       ],
     },
   });

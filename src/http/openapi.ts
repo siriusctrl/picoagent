@@ -78,6 +78,19 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     },
   };
 
+  const sessionResourceListSchema = {
+    type: 'object',
+    required: ['sessionId', 'path', 'entries'],
+    properties: {
+      sessionId: { type: 'string' },
+      path: { type: 'string' },
+      entries: {
+        type: 'array',
+        items: { type: 'string' },
+      },
+    },
+  };
+
   return {
     openapi: '3.1.0',
     info: {
@@ -316,6 +329,75 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             },
             '409': {
               description: 'Session already has an active run',
+            },
+          },
+        },
+      },
+      '/sessions/{sessionId}/resources': {
+        get: {
+          summary: 'List one session history resource directory',
+          parameters: [
+            {
+              name: 'sessionId',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+            },
+            {
+              name: 'path',
+              in: 'query',
+              required: false,
+              schema: { type: 'string' },
+              description: 'Optional session resource directory. Defaults to the session root.',
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'Directory listing for one session resource path',
+              content: {
+                'application/json': {
+                  schema: sessionResourceListSchema,
+                },
+              },
+            },
+            '404': {
+              description: 'Unknown session or resource directory',
+            },
+          },
+        },
+      },
+      '/sessions/{sessionId}/resources/{resourcePath}': {
+        get: {
+          summary: 'Read one session history resource',
+          parameters: [
+            {
+              name: 'sessionId',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+            },
+            {
+              name: 'resourcePath',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+              description: 'Session resource path such as summary.md or events/<runId>.jsonl.',
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'Session resource content as plain text or jsonl',
+              content: {
+                'text/plain': {
+                  schema: { type: 'string' },
+                },
+                'application/x-ndjson': {
+                  schema: { type: 'string' },
+                },
+              },
+            },
+            '404': {
+              description: 'Unknown session or resource',
             },
           },
         },

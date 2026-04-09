@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { InMemoryRuntimeStore } from '../../src/http/runtime-store.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { FileRuntimeStore, InMemoryRuntimeStore } from '../../src/http/runtime-store.js';
 
 const controlConfig = {
   provider: 'echo' as const,
@@ -198,4 +201,83 @@ test('runtime store compacts session messages into checkpoints and exposes sessi
   assert.deepEqual(store.listSessionResources('session-1', 'checkpoints'), [`${session.checkpoints[0]?.id}.md`]);
   assert.match(store.readSessionResource('session-1', 'summary.md') ?? '', /# Checkpoint/);
   assert.match(store.readSessionResource('session-1', 'runs/run-1.md') ?? '', /# Run run-1/);
+  assert.equal(store.listSessionResources('session-1', 'events')?.[0], 'run-1.jsonl');
+});
+
+test('file runtime store reloads sessions, runs, checkpoints, and event logs from disk', () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'picoagent-runtime-store-'));
+
+  try {
+    {
+      const store = new FileRuntimeStore(runtimeRoot);
+      store.createSession({
+        id: 'session-1',
+        cwd: '/workspace',
+        roots: ['/workspace'],
+        agent: 'exec',
+        controlVersion: 'v1',
+        controlConfig,
+        systemPrompts,
+        createdAt: '2025-01-01T00:00:00.000Z',
+        runIds: [],
+        messages: [],
+        checkpoints: [],
+      });
+
+      store.createRun({
+        id: 'run-1',
+        sessionId: 'session-1',
+        agent: 'exec',
+        prompt: 'persist me',
+        status: 'running',
+        output: '',
+        createdAt: '2025-01-01T00:00:01.000Z',
+        events: [],
+      });
+      store.attachRunToSession('session-1', 'run-1');
+      store.appendRunEvent('run-1', {
+        type: 'run_started',
+        timestamp: '2025-01-01T00:00:01.000Z',
+        runId: 'run-1',
+        sessionId: 'session-1',
+        agent: 'exec',
+        prompt: 'persist me',
+      });
+      store.finishSessionRun('session-1', 'run-1', [
+        { role: 'user', content: 'persist me' },
+        { role: 'assistant', content: [{ type: 'text', text: 'persisted' }] },
+      ]);
+      store.updateRun('run-1', {
+        status: 'completed',
+        output: 'persisted',
+        finishedAt: '2025-01-01T00:00:02.000Z',
+      });
+      store.appendRunEvent('run-1', {
+        type: 'done',
+        timestamp: '2025-01-01T00:00:02.000Z',
+        runId: 'run-1',
+        sessionId: 'session-1',
+        output: 'persisted',
+      });
+      store.compactSession('session-1', 1);
+    }
+
+    const reloaded = new FileRuntimeStore(runtimeRoot);
+    const session = reloaded.getSessionSnapshot('session-1');
+    assert.ok(session);
+    assert.equal(session.checkpointCount, 1);
+
+    const run = reloaded.getRunSnapshot('run-1');
+    assert.ok(run);
+    assert.equal(run.status, 'completed');
+    assert.equal(run.output, 'persisted');
+
+    const events = reloaded.getRunEvents('run-1');
+    assert.ok(events);
+    assert.equal(events.events.at(-1)?.type, 'done');
+    assert.match(reloaded.readSessionResource('session-1', 'summary.md') ?? '', /# Checkpoint/);
+    assert.match(reloaded.readSessionResource('session-1', 'events/run-1.jsonl') ?? '', /"type":"run_started"/);
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true });
+  }
 });

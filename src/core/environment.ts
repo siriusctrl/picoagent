@@ -27,6 +27,7 @@ export interface AgentEnvironment {
     options?: { line?: number; limit?: number },
   ): Promise<string>;
   writeTextFile(sessionId: string, path: string, content: string): Promise<void>;
+  deleteTextFile(sessionId: string, path: string): Promise<void>;
   listFiles(root: string, limit: number, signal: AbortSignal): Promise<string[]>;
   searchText(root: string, query: string, limit: number, signal: AbortSignal): Promise<SearchMatch[]>;
   runCommand(request: RunCommandRequest): Promise<RunCommandResult>;

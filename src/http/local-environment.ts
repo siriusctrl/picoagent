@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { promises as fs } from 'node:fs';
 import { AgentEnvironment, RunCommandRequest, RunCommandResult, SearchMatch } from '../core/environment.js';
 import { ReadTextFileOptions, LocalWorkspaceFileSystem, WorkspaceFileSystem } from '../fs/workspace-fs.js';
 
@@ -27,6 +28,10 @@ export class LocalEnvironment implements AgentEnvironment {
 
   async writeTextFile(_sessionId: string, filePath: string, content: string): Promise<void> {
     await this.fileSystem.writeTextFile(filePath, content);
+  }
+
+  async deleteTextFile(_sessionId: string, filePath: string): Promise<void> {
+    await fs.rm(filePath, { force: true });
   }
 
   listFiles(root: string, limit: number, signal: AbortSignal): Promise<string[]> {
