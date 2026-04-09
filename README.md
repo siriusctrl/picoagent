@@ -150,7 +150,9 @@ HTTP is async-first:
 - `GET /events/:runId` returns the run event log as JSON
 - set `Accept: text/event-stream` on `GET /events/:runId` to stream the same events over SSE
 
-Sessions are context containers. Each session has a default agent preset. Session runs inherit that preset unless the run request overrides it with its own `agent`.
+Sessions are context containers bound to one workspace root. Each session has a default agent preset plus a cached control snapshot resolved from workspace control files like `AGENTS.md`, `USER.md`, `SOUL.md`, and `.pico/config.jsonc`. Session runs inherit the default agent unless the run request overrides it with its own `agent`.
+
+Before starting a session run, the server checks whether the bound workspace changed. If it did, the session control snapshot is refreshed automatically before the run starts.
 
 ### Run The CLI
 

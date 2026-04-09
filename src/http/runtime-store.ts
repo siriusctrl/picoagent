@@ -1,3 +1,4 @@
+import { PicoConfig } from '../config/config.js';
 import { AgentPresetId, Message } from '../core/types.js';
 
 export type RunStatus = 'running' | 'completed' | 'failed';
@@ -92,6 +93,9 @@ export interface SessionRecord {
   cwd: string;
   roots: string[];
   agent: AgentPresetId;
+  controlVersion: string;
+  controlConfig: PicoConfig;
+  systemPrompts: Record<AgentPresetId, string>;
   createdAt: string;
   activeRunId?: string;
   runIds: string[];
@@ -115,6 +119,8 @@ export interface SessionSnapshot {
   id: string;
   cwd: string;
   agent: AgentPresetId;
+  controlVersion: string;
+  controlConfig: Pick<PicoConfig, 'provider' | 'model' | 'maxTokens' | 'contextWindow' | 'baseURL'>;
   createdAt: string;
   activeRunId?: string;
   runs: RunSnapshot[];
@@ -143,6 +149,24 @@ export class InMemoryRuntimeStore {
     }
 
     session.agent = agent;
+  }
+
+  refreshSessionControl(
+    sessionId: string,
+    control: {
+      controlVersion: string;
+      controlConfig: PicoConfig;
+      systemPrompts: Record<AgentPresetId, string>;
+    },
+  ): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+
+    session.controlVersion = control.controlVersion;
+    session.controlConfig = control.controlConfig;
+    session.systemPrompts = control.systemPrompts;
   }
 
   attachRunToSession(sessionId: string, runId: string): void {
@@ -296,6 +320,14 @@ export function projectSessionSnapshot(
     id: session.id,
     cwd: session.cwd,
     agent: session.agent,
+    controlVersion: session.controlVersion,
+    controlConfig: {
+      provider: session.controlConfig.provider,
+      model: session.controlConfig.model,
+      maxTokens: session.controlConfig.maxTokens,
+      contextWindow: session.controlConfig.contextWindow,
+      baseURL: session.controlConfig.baseURL,
+    },
     createdAt: session.createdAt,
     activeRunId: session.activeRunId,
     runs: session.runIds

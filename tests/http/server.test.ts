@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import type http from 'node:http';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { startHttpServer } from '../../src/http/server.js';
 
 type RunEvent = { type: string; [key: string]: unknown };
@@ -24,9 +27,9 @@ afterEach(async () => {
   servers.clear();
 });
 
-async function startServer(): Promise<{ baseUrl: string }> {
+async function startServer(cwd = process.cwd()): Promise<{ baseUrl: string }> {
   const server = await startHttpServer({
-    cwd: process.cwd(),
+    cwd,
     hostname: '127.0.0.1',
     port: 0,
   });
@@ -236,8 +239,14 @@ test('sessions keep ordered run history and expose the related run ids', async (
   });
   assert.equal(createSessionResponse.status, 201);
 
-  const session = (await createSessionResponse.json()) as { id: string; agent: string };
+  const session = (await createSessionResponse.json()) as {
+    id: string;
+    agent: string;
+    controlVersion: string;
+    controlConfig: { provider: string };
+  };
   assert.equal(session.agent, 'ask');
+  assert.equal(session.controlConfig.provider, 'echo');
 
   const firstRunResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
     method: 'POST',
@@ -266,11 +275,15 @@ test('sessions keep ordered run history and expose the related run ids', async (
   const snapshot = (await sessionResponse.json()) as {
     id: string;
     agent: string;
+    controlVersion: string;
+    controlConfig: { provider: string; model: string };
     runs: Array<{ id: string; agent: string; status: RunStatus; prompt: string; output: string }>;
   };
 
   assert.equal(snapshot.id, session.id);
   assert.equal(snapshot.agent, 'ask');
+  assert.match(snapshot.controlVersion, /^[0-9a-f]{64}$/);
+  assert.equal(snapshot.controlConfig.provider, 'echo');
   assert.deepEqual(
     snapshot.runs.map((run) => run.id),
     [firstRun.runId, secondRun.runId],
@@ -391,4 +404,52 @@ test('POST endpoints return 400 for malformed JSON bodies', async () => {
 
   const payload = (await response.json()) as { error: string };
   assert.match(payload.error, /^Invalid JSON body:/);
+});
+
+test('session runs automatically refresh control inputs when the workspace changes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'picoagent-http-workspace-'));
+
+  try {
+    mkdirSync(join(root, '.pico'), { recursive: true });
+    writeFileSync(join(root, '.pico', 'config.jsonc'), '{ "provider": "echo", "model": "echo" }\n', 'utf8');
+
+    const { baseUrl } = await startServer(root);
+
+    const createSessionResponse = await fetch(`${baseUrl}/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agent: 'ask' }),
+    });
+    assert.equal(createSessionResponse.status, 201);
+
+    const session = (await createSessionResponse.json()) as {
+      id: string;
+      controlVersion: string;
+      controlConfig: { provider: string };
+    };
+    assert.equal(session.controlConfig.provider, 'echo');
+
+    writeFileSync(join(root, '.pico', 'config.jsonc'), '{ "provider": "wat", "model": "echo" }\n', 'utf8');
+
+    const runResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: 'should fail after refresh' }),
+    });
+    assert.equal(runResponse.status, 500);
+
+    const errorPayload = (await runResponse.json()) as { error: string };
+    assert.match(errorPayload.error, /invalid provider "wat"/);
+
+    const sessionResponse = await fetch(`${baseUrl}/sessions/${session.id}`);
+    assert.equal(sessionResponse.status, 200);
+    const snapshot = (await sessionResponse.json()) as {
+      controlVersion: string;
+      controlConfig: { provider: string };
+    };
+    assert.equal(snapshot.controlVersion, session.controlVersion);
+    assert.equal(snapshot.controlConfig.provider, 'echo');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

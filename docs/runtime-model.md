@@ -1,6 +1,6 @@
 # Runtime Model
 
-## Control Workspace
+## Workspace
 
 The directory where you launch `picoagent`.
 
@@ -20,13 +20,24 @@ This directory is the source of intent.
 Each conversation is one HTTP session.
 
 A session carries:
-- `cwd`
+- bound workspace root
 - optional additional roots
 - conversation history
 - default agent preset
+- cached control snapshot
+
+The control snapshot is derived from workspace control files such as:
+- `.pico/config.jsonc`
+- `AGENTS.md`
+- `SOUL.md`
+- `USER.md`
+- `.pico/memory/`
+- `skills/`
+- `agents/`
 
 Each run records its own agent preset.
 Session runs inherit the session default unless the request overrides it.
+Before a session run starts, the runtime checks whether the bound workspace changed and refreshes the control snapshot automatically if needed.
 
 There is no worker graph behind the session.
 There is one agent loop for the session.
@@ -97,6 +108,11 @@ Session-wide event feeds can exist later without changing the underlying runtime
 ## Environment Boundary
 
 For tool execution:
-- file reads and writes go through the local environment
+- file reads and writes go through the environment and its workspace filesystem implementation
 - command execution goes through local command execution
 - filesystem traversal and text search use local deterministic helpers
+
+Today this means:
+- tool-facing workspace files can be virtualized behind the workspace filesystem boundary
+- session control snapshots are still built from the local workspace directly
+- `run_command` is still an OS process boundary rather than a virtual workspace command layer

@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
+import { buildSessionControlSnapshot, computeControlVersion, SessionControlSnapshot } from '../bootstrap/control-snapshot.js';
 import { createAppBootstrap } from '../bootstrap/index.js';
 import type { AgentEnvironment } from '../core/environment.js';
 import { runAgentLoop } from '../core/loop.js';
 import { AgentPresetId, AssistantMessage, Message } from '../core/types.js';
-import { buildSystemPrompt } from '../prompting/prompt.js';
+import { createProvider } from '../providers/index.js';
 import { LocalEnvironment } from './local-environment.js';
 import { buildOpenApiDocument } from './openapi.js';
 import {
@@ -113,11 +114,15 @@ class HttpRuntimeService {
   }
 
   createSession(agent: AgentPresetId = 'ask'): SessionRecord {
+    const control = buildSessionControlSnapshot(this.cwd, this.bootstrap.registry);
     const session: SessionRecord = {
       id: randomUUID(),
       cwd: this.cwd,
       roots: [this.cwd],
       agent,
+      controlVersion: control.controlVersion,
+      controlConfig: control.config,
+      systemPrompts: control.systemPrompts,
       createdAt: nowIso(),
       runIds: [],
       messages: [],
@@ -162,8 +167,9 @@ class HttpRuntimeService {
   }
 
   createStandaloneRun(prompt: string, agent: AgentPresetId): RunSnapshot {
+    const control = buildSessionControlSnapshot(this.cwd, this.bootstrap.registry);
     const run = this.createRun(prompt, agent);
-    this.startRun(run);
+    this.startRun(run, control);
     return this.getRunSnapshot(run.id);
   }
 
@@ -173,9 +179,10 @@ class HttpRuntimeService {
       throw new ConflictError(`Session ${sessionId} already has an active run`);
     }
 
+    const control = this.ensureSessionControlSnapshot(session);
     const run = this.createRun(prompt, agent ?? session.agent, session.id);
     this.store.attachRunToSession(session.id, run.id);
-    this.startRun(run, session);
+    this.startRun(run, control, session);
     return this.getRunSnapshot(run.id);
   }
 
@@ -227,13 +234,41 @@ class HttpRuntimeService {
     });
   }
 
-  private startRun(run: ReturnType<HttpRuntimeService['createRun']>, session?: SessionRecord): void {
-    void this.executeRun(run, session).catch(() => {
+  private ensureSessionControlSnapshot(session: SessionRecord): SessionControlSnapshot {
+    const latestVersion = computeControlVersion(session.cwd);
+    if (latestVersion === session.controlVersion) {
+      return {
+        workspaceRoot: session.cwd,
+        controlVersion: session.controlVersion,
+        config: session.controlConfig,
+        systemPrompts: session.systemPrompts,
+      };
+    }
+
+    const refreshed = buildSessionControlSnapshot(session.cwd, this.bootstrap.registry, latestVersion);
+    this.store.refreshSessionControl(session.id, {
+      controlVersion: refreshed.controlVersion,
+      controlConfig: refreshed.config,
+      systemPrompts: refreshed.systemPrompts,
+    });
+    return refreshed;
+  }
+
+  private startRun(
+    run: ReturnType<HttpRuntimeService['createRun']>,
+    control: SessionControlSnapshot,
+    session?: SessionRecord,
+  ): void {
+    void this.executeRun(run, control, session).catch(() => {
       // Run failures are captured in the run state and emitted as events.
     });
   }
 
-  private async executeRun(run: ReturnType<HttpRuntimeService['createRun']>, session?: SessionRecord): Promise<void> {
+  private async executeRun(
+    run: ReturnType<HttpRuntimeService['createRun']>,
+    control: SessionControlSnapshot,
+    session?: SessionRecord,
+  ): Promise<void> {
     const controller = new AbortController();
     const startedAt = nowIso();
     this.store.updateRun(run.id, { startedAt });
@@ -250,18 +285,19 @@ class HttpRuntimeService {
       : [{ role: 'user', content: run.prompt }];
 
     const tools = this.bootstrap.registry.forAgent(run.agent);
-    const systemPrompt = buildSystemPrompt(this.bootstrap.controlDir, run.agent, tools);
+    const systemPrompt = control.systemPrompts[run.agent];
+    const provider = createProvider(control.config);
 
     try {
       const finalMessage = await runAgentLoop(
         conversation,
         tools,
-        this.bootstrap.provider,
+        provider,
         {
           sessionId: run.id,
           cwd: session?.cwd ?? this.cwd,
           roots: session?.roots ?? [this.cwd],
-          controlRoot: this.bootstrap.controlDir,
+          controlRoot: control.workspaceRoot,
           agent: run.agent,
           signal: controller.signal,
           environment: this.environment,
@@ -427,6 +463,14 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
           id: session.id,
           agent: session.agent,
           cwd: session.cwd,
+          controlVersion: session.controlVersion,
+          controlConfig: {
+            provider: session.controlConfig.provider,
+            model: session.controlConfig.model,
+            maxTokens: session.controlConfig.maxTokens,
+            contextWindow: session.controlConfig.contextWindow,
+            baseURL: session.controlConfig.baseURL,
+          },
           createdAt: session.createdAt,
         });
         return;

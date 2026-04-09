@@ -78,9 +78,8 @@ Runtime assembly only.
 
 Responsibilities:
 
-- load config from the control workspace
-- create the provider
 - assemble the general tool registry
+- build session control snapshots from the bound workspace
 
 ### Runtime state
 
@@ -89,6 +88,7 @@ Runtime state should sit behind explicit store boundaries rather than live in HT
 Current shape:
 
 - an in-memory runtime store owns sessions, runs, subscriptions, and append-only run events
+- each session stores a cached control snapshot derived from its bound workspace
 - HTTP reads snapshots and event streams from that store
 - clients observe projections, not handler-local state
 
@@ -107,6 +107,7 @@ Deterministic filesystem helpers.
 
 Responsibilities:
 
+- define the workspace filesystem boundary used by tool-facing environments
 - resolve session-safe paths
 - traverse files
 - perform text search
@@ -146,6 +147,7 @@ The agent "hands" are represented by the environment boundary passed into the ru
 Rules:
 
 - the harness should depend on the `AgentEnvironment` interface, not one concrete local implementation
+- file-backed behavior inside that environment should depend on the `WorkspaceFileSystem` boundary
 - local filesystem and command execution are only the default implementation
 - future remote sandboxes should be a replacement implementation, not a rewrite of the HTTP layer
 

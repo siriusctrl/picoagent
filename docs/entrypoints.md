@@ -25,9 +25,12 @@ Current endpoints:
 HTTP resource model:
 
 - `session` is the context container
+- `session` binds one workspace root
 - `session` carries a default agent preset
+- `session` caches a control snapshot derived from workspace control files
 - `run` is one execution
 - session runs inherit the session default agent unless the request overrides it
+- session runs refresh the cached control snapshot automatically if the workspace changed
 - `events` are the ordered records for one run
 - set `Accept: text/event-stream` on `GET /events/:runId` for streaming
 - omit that header to read the same event log as JSON
@@ -62,10 +65,10 @@ This client is also thin. It should prefer reusing the existing runtime paths ov
 
 All entrypoints rely on the same bootstrap path:
 
-1. load config from the control workspace
-2. create the provider
-3. assemble the global tool registry
-4. build the system prompt for the active agent preset
+1. resolve the workspace root
+2. assemble the global tool registry
+3. build or refresh the session control snapshot when a session needs it
+4. create the provider for the current control snapshot
 5. create transport-specific run and session state only where needed
 
 The boundary is:

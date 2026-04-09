@@ -2,6 +2,19 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { InMemoryRuntimeStore } from '../../src/http/runtime-store.js';
 
+const controlConfig = {
+  provider: 'echo' as const,
+  model: 'echo',
+  maxTokens: 4096,
+  contextWindow: 200000,
+  baseURL: undefined,
+};
+
+const systemPrompts = {
+  ask: 'ask prompt',
+  exec: 'exec prompt',
+};
+
 test('runtime store projects ordered session and run snapshots', () => {
   const store = new InMemoryRuntimeStore();
 
@@ -10,6 +23,9 @@ test('runtime store projects ordered session and run snapshots', () => {
     cwd: '/workspace',
     roots: ['/workspace'],
     agent: 'ask',
+    controlVersion: 'v1',
+    controlConfig,
+    systemPrompts,
     createdAt: '2025-01-01T00:00:00.000Z',
     runIds: [],
     messages: [],
@@ -45,6 +61,8 @@ test('runtime store projects ordered session and run snapshots', () => {
   const session = store.getSessionSnapshot('session-1');
   assert.ok(session);
   assert.equal(session.activeRunId, 'run-2');
+  assert.equal(session.controlVersion, 'v1');
+  assert.equal(session.controlConfig.provider, 'echo');
   assert.deepEqual(
     session.runs.map((run) => [run.id, run.agent, run.status]),
     [
@@ -107,6 +125,9 @@ test('runtime store clears active session runs and persists conversation on comp
     cwd: '/workspace',
     roots: ['/workspace'],
     agent: 'exec',
+    controlVersion: 'v1',
+    controlConfig,
+    systemPrompts,
     createdAt: '2025-01-01T00:00:00.000Z',
     runIds: [],
     messages: [],

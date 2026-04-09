@@ -4,6 +4,18 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     enum: ['running', 'completed', 'failed'],
   };
 
+  const controlConfigSchema = {
+    type: 'object',
+    required: ['provider', 'model', 'maxTokens', 'contextWindow'],
+    properties: {
+      provider: { type: 'string', enum: ['anthropic', 'openai', 'gemini', 'echo'] },
+      model: { type: 'string' },
+      maxTokens: { type: 'number' },
+      contextWindow: { type: 'number' },
+      baseURL: { type: 'string' },
+    },
+  };
+
   const runSnapshotSchema = {
     type: 'object',
     required: ['id', 'agent', 'status', 'prompt', 'output', 'createdAt'],
@@ -23,22 +35,26 @@ export function buildOpenApiDocument(): Record<string, unknown> {
 
   const sessionSummarySchema = {
     type: 'object',
-    required: ['id', 'agent', 'cwd', 'createdAt'],
+    required: ['id', 'agent', 'cwd', 'controlVersion', 'controlConfig', 'createdAt'],
     properties: {
       id: { type: 'string' },
       agent: { type: 'string', enum: ['ask', 'exec'] },
       cwd: { type: 'string' },
+      controlVersion: { type: 'string' },
+      controlConfig: controlConfigSchema,
       createdAt: { type: 'string', format: 'date-time' },
     },
   };
 
   const sessionSnapshotSchema = {
     type: 'object',
-    required: ['id', 'cwd', 'agent', 'createdAt', 'runs'],
+    required: ['id', 'cwd', 'agent', 'controlVersion', 'controlConfig', 'createdAt', 'runs'],
     properties: {
       id: { type: 'string' },
       cwd: { type: 'string' },
       agent: { type: 'string', enum: ['ask', 'exec'] },
+      controlVersion: { type: 'string' },
+      controlConfig: controlConfigSchema,
       createdAt: { type: 'string', format: 'date-time' },
       activeRunId: { type: 'string' },
       runs: {
@@ -183,7 +199,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       '/sessions': {
         post: {
           summary: 'Create one persistent session',
-          description: 'Sessions preserve context across multiple runs and carry a default agent preset for future session runs.',
+          description:
+            'Sessions preserve context across multiple runs, bind to one workspace root, and cache the resolved control snapshot used for future session runs.',
           requestBody: {
             required: false,
             content: {
@@ -239,7 +256,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         post: {
           summary: 'Create one run inside a session',
           description:
-            'Starts an async run that appends to the session context after successful completion. When agent is omitted, the run inherits the session default agent preset.',
+            'Starts an async run that appends to the session context after successful completion. When agent is omitted, the run inherits the session default agent preset. The server refreshes the session control snapshot automatically if the bound workspace changed.',
           parameters: [
             {
               name: 'sessionId',
