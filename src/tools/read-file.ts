@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Tool } from '../core/types.js';
-import { formatLineNumberedText, resolveSessionPath } from '../lib/filesystem.js';
+import { formatLineNumberedText, resolveSessionPath } from '../fs/filesystem.js';
 
 const ReadFileParams = z.object({
   path: z.string().describe('Relative path to the file to read.'),

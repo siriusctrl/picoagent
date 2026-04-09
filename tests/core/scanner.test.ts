@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { join } from "path";
-import { parseFrontmatter, scan, load } from "../../src/lib/frontmatter.js";
+import { parseFrontmatter, scan, load } from "../../src/prompting/frontmatter.js";
 
 const fixturesDir = join(process.cwd(), "tests/fixtures");
 

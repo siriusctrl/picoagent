@@ -28,6 +28,9 @@ A session carries:
 There is no worker graph behind the session.
 There is one agent loop for the session.
 
+ACP is the durable runtime surface.
+Any UI around it should stay replaceable.
+
 ## Mode Model
 
 `picoagent` has two modes:
@@ -69,6 +72,9 @@ That keeps the model simple:
 - one registry
 - one provider
 - one transport
+
+The local TUI does not get its own runtime model.
+It is only one ACP client over the same session boundary.
 
 ## Environment Boundary
 

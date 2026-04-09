@@ -13,7 +13,7 @@ Read these when the task matches:
   - `ask` vs `exec`
   - tool access model
 - `docs/entrypoints.md`
-  - Ink TUI behavior
   - ACP stdio agent behavior
+  - local debug client behavior
 
 This repo is intentionally small. Keep docs coarse-grained and focused on durable contracts.

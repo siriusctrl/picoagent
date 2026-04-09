@@ -1,5 +1,5 @@
 import { Provider } from '../core/provider.js';
-import { PicoConfig, resolveApiKey } from '../lib/config.js';
+import { PicoConfig, resolveApiKey } from '../config/config.js';
 import { AnthropicProvider } from './anthropic.js';
 import { OpenAIProvider } from './openai.js';
 import { GeminiProvider } from './gemini.js';

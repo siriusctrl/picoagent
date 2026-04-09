@@ -1,6 +1,6 @@
 import * as acp from '@agentclientprotocol/sdk';
 import { AgentEnvironment, RunCommandRequest, RunCommandResult, SearchMatch } from '../core/environment.js';
-import { searchFiles, walkFiles } from '../lib/filesystem.js';
+import { searchFiles, walkFiles } from '../fs/filesystem.js';
 
 export class AcpEnvironment implements AgentEnvironment {
   constructor(private readonly connection: acp.AgentSideConnection) {}

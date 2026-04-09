@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Tool } from '../core/types.js';
-import { relativeToCwd, resolveSessionPath } from '../lib/filesystem.js';
+import { relativeToCwd, resolveSessionPath } from '../fs/filesystem.js';
 
 const ListFilesParams = z.object({
   path: z.string().optional().describe('Optional relative directory to list from. Defaults to the session cwd.'),

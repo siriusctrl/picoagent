@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createAppBootstrap } from '../../src/app/bootstrap.js';
+import { createAppBootstrap } from '../../src/bootstrap/index.js';
 
 test('tool registry equips ask and exec with different tool subsets', () => {
   const root = mkdtempSync(join(tmpdir(), 'picoagent-config-'));

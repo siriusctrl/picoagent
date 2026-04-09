@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Tool } from '../core/types.js';
-import { resolveSessionPath } from '../lib/filesystem.js';
+import { resolveSessionPath } from '../fs/filesystem.js';
 
 const WriteFileParams = z.object({
   path: z.string().describe('Relative path to the file to write.'),

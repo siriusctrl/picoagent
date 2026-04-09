@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { writeFileTool } from '../../src/tools/write-file.js';
 import { ToolContext } from '../../src/core/types.js';
-import { searchFiles, walkFiles } from '../../src/lib/filesystem.js';
+import { searchFiles, walkFiles } from '../../src/fs/filesystem.js';
 
 function createContext(root: string): ToolContext {
   return {

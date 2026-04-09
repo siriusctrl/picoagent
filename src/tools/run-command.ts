@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Tool } from '../core/types.js';
-import { resolveSessionPath } from '../lib/filesystem.js';
+import { resolveSessionPath } from '../fs/filesystem.js';
 
 const RunCommandParams = z.object({
   command: z.string().min(1).describe('Shell command to run with bash -lc.'),

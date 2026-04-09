@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { runAgentLoop } from '../../src/core/loop.js';
 import { Provider, StreamEvent } from '../../src/core/provider.js';
 import { AssistantMessage, Message, Tool, ToolContext, ToolDefinition } from '../../src/core/types.js';
-import { resolveSessionPath } from '../../src/lib/filesystem.js';
+import { resolveSessionPath } from '../../src/fs/filesystem.js';
 
 const mockTool: Tool<any> = {
   name: 'mock',

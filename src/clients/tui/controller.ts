@@ -5,7 +5,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { SessionModeId } from '../core/types.js';
+import { SessionModeId } from '../../core/types.js';
 
 export type UiEvent =
   | { type: 'status'; text: string }
@@ -49,7 +49,7 @@ function resolveAgentCommand(): { command: string; args: string[] } {
   const currentFile = fileURLToPath(import.meta.url);
   const compiled = currentFile.endsWith('.js');
   const extension = compiled ? 'js' : 'ts';
-  const agentPath = path.join(path.dirname(currentFile), '..', 'acp', `main.${extension}`);
+  const agentPath = path.join(path.dirname(currentFile), '..', '..', 'acp', `main.${extension}`);
 
   if (compiled) {
     return { command: process.execPath, args: [agentPath] };

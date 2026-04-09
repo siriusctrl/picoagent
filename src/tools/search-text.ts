@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Tool } from '../core/types.js';
-import { relativeToCwd, resolveSessionPath } from '../lib/filesystem.js';
+import { relativeToCwd, resolveSessionPath } from '../fs/filesystem.js';
 
 const SearchTextParams = z.object({
   query: z.string().min(1).describe('Case-insensitive text to search for.'),

@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { ToolRegistry } from '../core/tool-registry.js';
-import { loadConfig, PicoConfig } from '../lib/config.js';
+import { loadConfig, PicoConfig } from '../config/config.js';
 import { createProvider } from '../providers/index.js';
 import { listFilesTool } from '../tools/list-files.js';
 import { readFileTool } from '../tools/read-file.js';

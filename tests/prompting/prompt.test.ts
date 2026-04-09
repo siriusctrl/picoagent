@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildSystemPrompt } from '../../src/lib/prompt.js';
+import { buildSystemPrompt } from '../../src/prompting/prompt.js';
 import { searchTextTool } from '../../src/tools/search-text.js';
 
 function withHome<T>(homeDir: string, fn: () => T): T {

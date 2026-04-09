@@ -1,8 +1,8 @@
-Local guidance for `src/app`.
+Local guidance for `src/bootstrap`.
 
 ## Scope
 
-`src/app` is bootstrap only.
+`src/bootstrap` assembles runtime dependencies.
 
 ## Rules
 
@@ -13,4 +13,5 @@ Local guidance for `src/app`.
 ## Read First
 
 - `docs/runtime-model.md`
-- `src/app/bootstrap.ts`
+- `docs/architecture.md`
+- `src/bootstrap/index.ts`

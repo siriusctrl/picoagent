@@ -1,10 +1,10 @@
 import * as acp from '@agentclientprotocol/sdk';
 import { randomUUID } from 'node:crypto';
-import { createAppBootstrap } from '../app/bootstrap.js';
+import { createAppBootstrap } from '../bootstrap/index.js';
 import { AcpEnvironment } from './environment.js';
 import { runAgentLoop } from '../core/loop.js';
 import { Message, SessionModeId, ToolOutput } from '../core/types.js';
-import { buildSystemPrompt } from '../lib/prompt.js';
+import { buildSystemPrompt } from '../prompting/prompt.js';
 
 interface SessionState {
   id: string;

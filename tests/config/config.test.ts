@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadConfig, resolveApiKey } from '../../src/lib/config.js';
+import { loadConfig, resolveApiKey } from '../../src/config/config.js';
 
 function withHome<T>(homeDir: string, fn: () => T): T {
   const previousHome = process.env.HOME;
