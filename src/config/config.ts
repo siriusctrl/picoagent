@@ -174,8 +174,9 @@ function mergedFrontmatter(workspaceDir: string): Record<string, unknown> {
 }
 
 /**
- * Load config from `./.pico/config.jsonc` and `~/.pico/config.jsonc`.
- * Workspace config overrides user config. If neither exists, use built-in defaults.
+ * Load config by shallow-merging `$HOME/.pico/config.jsonc` with
+ * `<workspace>/.pico/config.jsonc`. Workspace fields override user fields.
+ * If neither file exists, use built-in defaults.
  */
 export function loadConfig(workspaceDir: string): PicoConfig {
   const raw = mergedFrontmatter(workspaceDir);

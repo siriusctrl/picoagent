@@ -70,12 +70,18 @@ npm run typecheck
 
 ## Config
 
-Pico looks for config in:
+Pico builds an effective config from up to two files:
 
-- `./.pico/config.jsonc`
-- `~/.pico/config.jsonc`
+- `<workspace>/.pico/config.jsonc`
+- `$HOME/.pico/config.jsonc`
 
-Workspace config overrides user config. If neither file exists, Pico falls back to the built-in `echo` provider.
+The merge is shallow:
+
+- user config provides defaults
+- workspace config overrides only the fields it sets
+- built-in defaults fill anything still missing
+
+Pico does not search parent directories. If neither file exists, it falls back to the built-in `echo` provider.
 
 Example:
 
