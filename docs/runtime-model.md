@@ -1,5 +1,12 @@
 # Runtime Model
 
+The runtime model is built around a simple split:
+
+- `workspace` is the source of files and control inputs
+- `session` owns context
+- `run` is one execution through the runtime
+- resources such as workspace files or session history stay readable without having to force everything into the live prompt
+
 ## Workspace
 
 The directory where you launch `picoagent`.
@@ -48,6 +55,11 @@ Any UI around it should stay replaceable.
 
 The session is not owned by one request handler.
 Runtime state lives behind a store boundary and is projected back out as session and run snapshots.
+
+What is still missing:
+- session state is not yet durable across process restarts
+- session history is not yet exposed as an HTTP resource surface, only through tools
+- control snapshots are still rebuilt from the local filesystem rather than a general workspace resource contract
 
 ## Session History
 

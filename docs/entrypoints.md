@@ -1,5 +1,13 @@
 # Entrypoints
 
+The entrypoints exist to expose the harness boundaries, not to redefine them.
+
+In practice that means:
+
+- sessions stay the context boundary
+- runs stay the execution boundary
+- resources stay readable through explicit HTTP or tool surfaces
+
 ## HTTP Server
 
 Primary entry file: `src/http/server.ts`
@@ -7,7 +15,7 @@ Primary entry file: `src/http/server.ts`
 Behavior:
 
 - serves a minimal local HTTP API
-- reuses the shared bootstrap path and core loop
+- reuses the shared runtime context assembly and core loop
 - exposes async-first run, session, and event resources
 - keeps streaming and non-streaming reads behind the same `/events/:runId` endpoint
 
@@ -64,9 +72,9 @@ Behavior:
 
 This client is also thin. It should prefer reusing the existing runtime paths over inventing a second agent architecture.
 
-## Shared Bootstrap
+## Shared Runtime Context
 
-All entrypoints rely on the same bootstrap path:
+All entrypoints rely on the same runtime context path:
 
 1. resolve the workspace root
 2. assemble the global tool registry
@@ -76,6 +84,6 @@ All entrypoints rely on the same bootstrap path:
 
 The boundary is:
 
-- bootstrap defines the agent shape
+- runtime context assembly defines the agent shape
 - HTTP defines protocol details
 - clients stay replaceable

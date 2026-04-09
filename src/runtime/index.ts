@@ -9,12 +9,12 @@ import { searchTextTool } from '../tools/search-text.js';
 import { compactSessionTool } from '../tools/compact-session.js';
 import { writeFileTool } from '../tools/write-file.js';
 
-export interface AppBootstrap {
+export interface RuntimeContext {
   controlDir: string;
   registry: ToolRegistry;
 }
 
-export function createAppBootstrap(controlDir = process.cwd()): AppBootstrap {
+export function createRuntimeContext(controlDir = process.cwd()): RuntimeContext {
   const resolvedControlDir = resolve(controlDir);
   const registry = new ToolRegistry({
     tools: [

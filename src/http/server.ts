@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
-import { buildSessionControlSnapshot, computeControlVersion, SessionControlSnapshot } from '../bootstrap/control-snapshot.js';
-import { createAppBootstrap } from '../bootstrap/index.js';
+import { buildSessionControlSnapshot, computeControlVersion, SessionControlSnapshot } from '../runtime/control-snapshot.js';
+import { createRuntimeContext } from '../runtime/index.js';
 import type { AgentEnvironment } from '../core/environment.js';
 import { runAgentLoop } from '../core/loop.js';
 import { SessionAccess } from '../core/session-access.js';
@@ -104,18 +104,18 @@ function requirePrompt(value: unknown): string {
 }
 
 class HttpRuntimeService {
-  private readonly bootstrap;
+  private readonly runtime;
   private readonly store = new InMemoryRuntimeStore();
 
   constructor(
     private readonly cwd: string,
     private readonly environment: AgentEnvironment,
   ) {
-    this.bootstrap = createAppBootstrap(cwd);
+    this.runtime = createRuntimeContext(cwd);
   }
 
   createSession(agent: AgentPresetId = 'ask'): SessionRecord {
-    const control = buildSessionControlSnapshot(this.cwd, this.bootstrap.registry);
+    const control = buildSessionControlSnapshot(this.cwd, this.runtime.registry);
     const session: SessionRecord = {
       id: randomUUID(),
       cwd: this.cwd,
@@ -169,7 +169,7 @@ class HttpRuntimeService {
   }
 
   createStandaloneRun(prompt: string, agent: AgentPresetId): RunSnapshot {
-    const control = buildSessionControlSnapshot(this.cwd, this.bootstrap.registry);
+    const control = buildSessionControlSnapshot(this.cwd, this.runtime.registry);
     const run = this.createRun(prompt, agent);
     this.startRun(run, control);
     return this.getRunSnapshot(run.id);
@@ -288,7 +288,7 @@ class HttpRuntimeService {
       };
     }
 
-    const refreshed = buildSessionControlSnapshot(session.cwd, this.bootstrap.registry, latestVersion);
+    const refreshed = buildSessionControlSnapshot(session.cwd, this.runtime.registry, latestVersion);
     this.store.refreshSessionControl(session.id, {
       controlVersion: refreshed.controlVersion,
       controlConfig: refreshed.config,
@@ -335,7 +335,7 @@ class HttpRuntimeService {
       ? [...session.messages, { role: 'user', content: run.prompt }]
       : [{ role: 'user', content: run.prompt }];
 
-    const tools = this.bootstrap.registry.forAgent(run.agent);
+    const tools = this.runtime.registry.forAgent(run.agent);
     const systemPrompt = control.systemPrompts[run.agent];
     const provider = createProvider(control.config);
 

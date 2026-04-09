@@ -15,5 +15,8 @@ Read these when the task matches:
 - `docs/entrypoints.md`
   - HTTP server behavior
   - local debug client behavior
+- `docs/source-map.md`
+  - source-area responsibilities
+  - which files to inspect first
 
 This repo is intentionally small. Keep docs coarse-grained and focused on durable contracts.

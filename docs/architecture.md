@@ -1,5 +1,15 @@
 # Architecture
 
+## Goal
+
+`picoagent` is meant to be a simple, controllable agent harness.
+
+The architectural goal is to keep three concerns explicit and separate:
+
+- `session` manages context
+- `runtime` executes one run through the agent loop
+- `resources` provide files or history the runtime can read through tools
+
 ## Current Scope
 
 The repository is intentionally a single TypeScript package with one core runtime, one thin HTTP transport adapter, and thin local clients.
@@ -39,7 +49,7 @@ Responsibilities:
 - expose async run and session resources
 - expose run events as JSON or SSE
 - project snapshots from the runtime store
-- reuse the same bootstrap path and agent loop as other transports
+- reuse the same runtime context path and agent loop as other transports
 
 Rules:
 
@@ -72,9 +82,9 @@ Rules:
 - do not move model logic here
 - do not let TUI constraints drive core architecture
 
-### `src/bootstrap`
+### `src/runtime`
 
-Runtime assembly only.
+Runtime context assembly.
 
 Responsibilities:
 
@@ -93,6 +103,18 @@ Current shape:
 - HTTP reads snapshots and event streams from that store
 - clients observe projections, not handler-local state
 - session history can be exposed back to the model as virtual session resources instead of being forced into the prompt every time
+
+## Current Gaps
+
+The separation is in place, but it is not complete yet.
+
+Known missing pieces:
+
+- runtime state is still in-memory only rather than durable across process restarts
+- session-history resources are available to tools, but not yet exposed as first-class HTTP resources
+- the workspace filesystem boundary only covers tool-facing file access; control snapshot reads still use the local filesystem directly
+- `run_command` is still tied to the local OS process boundary rather than a general resource-backed execution boundary
+- event streaming exists for runs, but not yet for whole-session history
 
 ### `src/config`
 
@@ -159,9 +181,9 @@ Rules:
  - `core` must stay independent of provider SDKs, HTTP, and Ink
 - `providers` may depend on `core`, but not vice versa
 - `tools` may depend on `core` and `fs`
-- `http` may depend on `core`, `tools`, `bootstrap`, `fs`, and `prompting`
+- `http` may depend on `core`, `tools`, `runtime`, `fs`, and `prompting`
 - `clients` should depend on HTTP behavior and local client concerns only
-- `bootstrap` may depend on `core`, `config`, `providers`, and `tools`
+- `runtime` may depend on `core`, `config`, `providers`, and `tools`
 
 ## Product Rule
 

@@ -1,6 +1,6 @@
 # Golden Principles
 
-1. Keep one agent loop per session.
+1. Keep `session`, `runtime`, and `resource` boundaries explicit.
 2. Keep one general tool registry for the whole app.
 3. Let `ask` and `exec` equip tool subsets instead of changing the architecture.
 4. Let sessions carry a default agent preset while each run records the actual preset it used.

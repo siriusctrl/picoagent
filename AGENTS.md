@@ -1,11 +1,5 @@
 Principles for agents contributing to this repository.
 
-## Mission
-
-Build a minimal coding agent that is:
-1. genuinely usable from a terminal
-2. small enough to audit in one sitting
-
 ## Core Principles
 
 1. **KISS**
@@ -39,7 +33,7 @@ Build a minimal coding agent that is:
 
 Use docs to understand constraints first. Use source directories only after you know which boundary matters.
 
-Keep this file coarse-grained. Do not try to mirror every subdirectory here. For detailed structure or local rules inside a source area, inspect that directory's local `AGENTS.md` when it exists.
+Keep this file coarse-grained. Do not try to mirror every subdirectory here. For source-area guidance, read `src/AGENTS.md` and `docs/source-map.md`.
 
 ### Read these docs first
 
@@ -66,7 +60,7 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
 - `src/config` - config loading and provider env resolution
 - `src/fs` - filesystem traversal and search helpers
 - `src/prompting` - prompt framing and frontmatter scanning
-- `src/bootstrap` - runtime assembly for config, provider, and tool registry
+- `src/runtime` - runtime context assembly and session control snapshots
 - `tests` - focused contract tests
 
 ## Task Routing
@@ -76,7 +70,7 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
 - For terminal UI changes, inspect `src/clients/tui`.
 - For tool behavior, inspect `src/tools`.
 - For shared helpers, inspect `src/config`, `src/fs`, and `src/prompting`.
-- For agent wiring or registry assembly, inspect `src/bootstrap/index.ts` and `src/core/tool-registry.ts`.
+- For agent wiring or runtime context assembly, inspect `src/runtime/index.ts` and `src/core/tool-registry.ts`.
 
 ## Engineering Rules
 
@@ -85,7 +79,7 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
 - Keep provider SDK imports out of `src/core`.
 - Keep tools focused: one tool, one capability.
 - Update docs when architecture, runtime behavior, or entrypoints change.
-- Prefer moving detailed local guidance into directory-level `AGENTS.md` files instead of growing this file.
+- Prefer keeping detailed source-area guidance in `src/AGENTS.md` and `docs/source-map.md`.
 
 ## Verification Requirements
 

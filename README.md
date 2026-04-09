@@ -1,79 +1,73 @@
 # picoagent
 
-Minimal coding agent with one core runtime and one async HTTP server.
+Simple, controllable agent harness with one HTTP API.
 
-## What This Is
+## What It Is
 
-`picoagent` is a small TypeScript agent stack with one core loop and one thin transport adapter:
+`picoagent` is a small TypeScript codebase for building a controllable agent harness.
 
-- minimal HTTP server for local automation and scripting
-- one provider contract
-- one tool-calling loop
-- one global tool registry with agent-based tool subsets
-- optional local Ink client for development smoke tests
+The core design goal is to keep three concerns explicit and separate:
 
-The project is intentionally narrow:
+- context management through sessions
+- execution through the agent runtime
+- file or history access through resources and tools
 
-- no multi-agent orchestration
+The current reference shape is:
+
+- one core agent loop
+- one global tool registry
+- one async HTTP runtime surface
+- thin local clients for debugging
+
+The current implementation stays intentionally small:
+
 - no UI-owned model logic
-- no requirement that Pico ship its own primary client
+- no transport-specific runtimes
+- no orchestration-first framework layers
 
-## Product Stance
+This does not rule out higher-level orchestration later, including multi-agent setups.
+The point is to keep the harness itself legible and fully controllable first.
 
-The durable asset in this repo is `core + HTTP`.
+What is already present:
 
-That means:
+- explicit session objects for context management
+- one shared runtime loop model for runs
+- workspace and session-history resources that tools can read without collapsing them into the live prompt
 
-- new behavior should land in `src/core` first
-- HTTP is the main product surface
-- the TUI exists as a thin local HTTP client
-- terminal UX work should stay minimal unless it directly supports runtime verification
+What is still incomplete:
 
-## Agents
+- runtime state is still in-memory only
+- session-history resources are not yet exposed as HTTP resources
+- control snapshot reads still come from the local filesystem directly
+- `run_command` still assumes a local OS process boundary
 
-`picoagent` exposes two built-in agent presets:
+## Quick Start
 
-- `ask`
-  - inspect files
-  - list files
-  - search text
-  - browse session history resources
-  - explain and plan
-- `exec`
-  - everything in `ask`
-  - compact session history into checkpoints
-  - write files
-  - run commands
-
-Agent presets do not create separate runtimes. They only choose which tools the run equips.
-
-## Layout
-
-```text
-src/
-  bootstrap/  runtime assembly for config, provider, and tool registry
-  clients/    thin replaceable clients
-    cli/      minimum command-line client and local entrypoint
-    tui/      local Ink smoke-test client for the HTTP server
-  core/       loop, provider contract, tool registry, shared types
-  config/     config loading and provider env resolution
-  fs/         deterministic filesystem traversal and search helpers
-  http/       minimal async HTTP adapter for runs, sessions, and events
-  prompting/  prompt assembly and frontmatter-backed prompt scanning
-  providers/  Anthropic, OpenAI-compatible, Gemini adapters
-  tools/      workspace, session-history, write, and command tools
-```
-
-## Development
+Install and run the local server:
 
 ```bash
 npm install
+npm run dev
+```
+
+That starts the HTTP server from the current working directory.
+
+Build and run the compiled output:
+
+```bash
 npm run build
-npm test
+npm run start
+```
+
+Verification:
+
+```bash
+npm run build
+npm run test
 npm run typecheck
 ```
 
-## Usage
+## Config
 
 Pico looks for config in:
 
@@ -82,7 +76,7 @@ Pico looks for config in:
 
 Workspace config overrides user config. If neither file exists, Pico falls back to the built-in `echo` provider.
 
-Example workspace config:
+Example:
 
 ```jsonc
 {
@@ -104,37 +98,85 @@ Environment variables:
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 
-### Run The HTTP Server
+The built-in `echo` provider streams back `received: <your prompt>` and does not require an API key.
 
-Development:
+## Runtime Model
 
-```bash
-npm run dev
-```
+The important split is:
 
-Built output:
+- `session` manages context
+- `runtime` executes runs
+- `workspace` and session-history resources provide inputs the runtime can read
 
-```bash
-npm run build
-npm run start
-```
+HTTP is the main surface that ties those pieces together without collapsing them into one module.
 
-Or explicitly:
+`picoagent` exposes two built-in agent presets:
 
-Development:
+- `ask`
+  - list files
+  - read files
+  - search text
+  - browse session history
+- `exec`
+  - everything in `ask`
+  - compact session history
+  - write files
+  - run commands
 
-```bash
-npm run dev:http
-```
+Agent presets do not create separate runtimes. They only choose which tools a run equips.
 
-Built output:
+### Workspace
 
-```bash
-npm run build
-npm run start:cli -- serve
-```
+The current directory is the workspace. It contains both ordinary files and control files such as:
 
-Endpoints:
+- `.pico/config.jsonc`
+- `AGENTS.md`
+- `USER.md`
+- `SOUL.md`
+- `.pico/memory/`
+- `skills/`
+- `agents/`
+
+### Session
+
+A session is a persistent context container bound to one workspace root.
+
+Each session stores:
+
+- a default agent preset
+- conversation history
+- a cached control snapshot resolved from workspace control files
+- optional checkpoints created by compaction
+
+Before a session run starts, the server checks whether the workspace changed. If it did, the session control snapshot is refreshed automatically.
+
+### Session History
+
+Session compaction uses `checkpoint + tail`, not history deletion.
+
+After compaction:
+
+- older conversation turns move into a checkpoint summary
+- recent messages stay active as the live tail
+- full run and event history remains available as virtual session resources
+
+The model can browse session history through:
+
+- `list_session_resources`
+- `read_session_resource`
+
+The `exec` preset can also call `compact_session`.
+
+## HTTP API
+
+The server is async-first:
+
+- `POST /runs` and `POST /sessions/:id/runs` return immediately with a `runId`
+- `GET /runs/:id` returns the latest run snapshot
+- `GET /events/:runId` returns the full event log as JSON
+- `GET /events/:runId` with `Accept: text/event-stream` streams the same events over SSE
+
+Current endpoints:
 
 - `GET /openapi.json`
 - `POST /runs`
@@ -146,20 +188,48 @@ Endpoints:
 - `POST /sessions/:id/runs`
 - `POST /sessions/:id/compact`
 
-HTTP is async-first:
+Create a session:
 
-- `POST /runs` and `POST /sessions/:id/runs` start work and immediately return a `runId`
-- `GET /runs/:id` returns the current run snapshot
-- `GET /events/:runId` returns the run event log as JSON
-- set `Accept: text/event-stream` on `GET /events/:runId` to stream the same events over SSE
+```bash
+curl -X POST http://127.0.0.1:4096/sessions \
+  -H 'content-type: application/json' \
+  -d '{"agent":"ask"}'
+```
 
-Sessions are context containers bound to one workspace root. Each session has a default agent preset plus a cached control snapshot resolved from workspace control files like `AGENTS.md`, `USER.md`, `SOUL.md`, and `.pico/config.jsonc`. Session runs inherit the default agent unless the run request overrides it with its own `agent`.
+Create a run in a session:
 
-Before starting a session run, the server checks whether the bound workspace changed. If it did, the session control snapshot is refreshed automatically before the run starts.
+```bash
+curl -X POST http://127.0.0.1:4096/sessions/<session_id>/runs \
+  -H 'content-type: application/json' \
+  -d '{"prompt":"summarize this repo"}'
+```
 
-Sessions can also be compacted into a checkpoint plus recent tail. The full run and event history stays available as virtual session resources that the model can browse with `list_session_resources` and `read_session_resource`.
+Compact a session:
 
-### Run The CLI
+```bash
+curl -X POST http://127.0.0.1:4096/sessions/<session_id>/compact \
+  -H 'content-type: application/json' \
+  -d '{"keepLastMessages":8}'
+```
+
+OpenAPI is available at:
+
+```text
+GET /openapi.json
+```
+
+## Local Clients
+
+### CLI
+
+The CLI is intentionally small. It starts the HTTP server and little else.
+
+Development:
+
+```bash
+npm run dev:cli -- help
+npm run dev:cli -- serve
+```
 
 Built output:
 
@@ -169,27 +239,20 @@ npm run start:cli -- help
 npm run start:cli -- serve
 ```
 
+### TUI
+
+The TUI is a thin local HTTP client for smoke tests and debugging, not the primary product surface.
+
 Development:
 
 ```bash
-npm run dev:cli -- help
-npm run dev:cli -- serve
+npm run dev:tui
 ```
-
-### Run The Local TUI
-
-The TUI is the local interactive client for the HTTP server, not the primary product surface.
 
 With a real provider:
 
 ```bash
 OPENAI_API_KEY=... npm run dev:tui
-```
-
-For local smoke tests with the built-in echo provider:
-
-```bash
-npm run dev:tui
 ```
 
 Built output:
@@ -199,16 +262,31 @@ npm run build
 npm run start:tui
 ```
 
-The built-in `echo` provider streams back `received: <your prompt>` and does not require an API key.
+## Source Layout
 
-## Documentation
+```text
+src/
+  runtime/    runtime context assembly and session control snapshots
+  core/       loop, provider contract, tool registry, shared types
+  http/       async HTTP server for runs, sessions, and events
+  tools/      LLM-facing file, session, write, and command tools
+  providers/  Anthropic, OpenAI-compatible, Gemini, and echo adapters
+  config/     config loading and provider env resolution
+  fs/         filesystem traversal, path safety, and workspace FS boundary
+  prompting/  prompt assembly and frontmatter scanning
+  clients/    thin CLI and TUI clients
+```
 
-Start here:
+## Docs
+
+Read in this order:
 
 - `docs/INDEX.md`
 - `docs/architecture.md`
+- `docs/golden-principles.md`
 - `docs/runtime-model.md`
 - `docs/entrypoints.md`
+- `docs/source-map.md`
 
 ## License
 
