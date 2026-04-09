@@ -22,7 +22,7 @@ export const readFileTool: Tool<typeof ReadFileParams> = {
   ],
   async execute(args, context) {
     const fullPath = resolveSessionPath(args.path, context.cwd, context.roots);
-    const content = await context.environment.readTextFile(context.sessionId, fullPath, {
+    const content = await context.environment.readTextFile(context.runId, fullPath, {
       line: args.line,
       limit: args.limit,
     });

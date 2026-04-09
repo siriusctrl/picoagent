@@ -14,8 +14,17 @@ test('tool registry equips ask and exec agent presets with different tool subset
   const askTools = app.registry.forAgent('ask').map((tool) => tool.name);
   const execTools = app.registry.forAgent('exec').map((tool) => tool.name);
 
-  assert.deepEqual(askTools, ['list_files', 'read_file', 'search_text']);
-  assert.deepEqual(execTools, ['list_files', 'read_file', 'search_text', 'write_file', 'run_command']);
+  assert.deepEqual(askTools, ['list_files', 'read_file', 'search_text', 'list_session_resources', 'read_session_resource']);
+  assert.deepEqual(execTools, [
+    'list_files',
+    'read_file',
+    'search_text',
+    'list_session_resources',
+    'read_session_resource',
+    'compact_session',
+    'write_file',
+    'run_command',
+  ]);
 
   rmSync(root, { recursive: true, force: true });
 });

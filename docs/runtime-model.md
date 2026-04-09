@@ -25,6 +25,7 @@ A session carries:
 - conversation history
 - default agent preset
 - cached control snapshot
+- optional active checkpoint plus recent tail messages
 
 The control snapshot is derived from workspace control files such as:
 - `.pico/config.jsonc`
@@ -48,6 +49,22 @@ Any UI around it should stay replaceable.
 The session is not owned by one request handler.
 Runtime state lives behind a store boundary and is projected back out as session and run snapshots.
 
+## Session History
+
+Session compaction does not replace the session.
+
+Instead it creates a checkpoint summary that covers older messages while the session keeps a recent tail for live interaction.
+New runs use:
+- cached control snapshot
+- latest checkpoint summary when present
+- tail messages after that checkpoint
+
+Full history still remains available for inspection as session resources:
+- `summary.md`
+- `checkpoints/<id>.md`
+- `runs/<id>.md`
+- `events/<runId>.ndjson`
+
 ## Agent Presets
 
 `picoagent` has two built-in agent presets:
@@ -58,6 +75,8 @@ Equipped tools:
 - `list_files`
 - `read_file`
 - `search_text`
+- `list_session_resources`
+- `read_session_resource`
 
 Use it for:
 - exploration
@@ -69,6 +88,7 @@ Use it for:
 
 Equipped tools:
 - everything in `ask`
+- `compact_session`
 - `write_file`
 - `run_command`
 

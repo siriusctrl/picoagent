@@ -16,6 +16,7 @@ const mockTool: Tool<any> = {
 };
 
 const mockContext: ToolContext = {
+  runId: 'run-1',
   sessionId: 'session-1',
   cwd: process.cwd(),
   roots: [process.cwd()],
@@ -33,6 +34,16 @@ const mockContext: ToolContext = {
       truncated: false,
       exitCode: 0,
       signal: null,
+    }),
+  },
+  sessionAccess: {
+    listResources: async () => [],
+    readResource: async () => '',
+    compactSession: async () => ({
+      checkpointId: 'cp-1',
+      summary: '',
+      compactedMessages: 0,
+      keptMessages: 0,
     }),
   },
 };

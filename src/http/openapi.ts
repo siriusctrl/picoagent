@@ -16,6 +16,17 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     },
   };
 
+  const checkpointSchema = {
+    type: 'object',
+    required: ['checkpointId', 'summary', 'compactedMessages', 'keptMessages'],
+    properties: {
+      checkpointId: { type: 'string' },
+      summary: { type: 'string' },
+      compactedMessages: { type: 'number' },
+      keptMessages: { type: 'number' },
+    },
+  };
+
   const runSnapshotSchema = {
     type: 'object',
     required: ['id', 'agent', 'status', 'prompt', 'output', 'createdAt'],
@@ -35,20 +46,21 @@ export function buildOpenApiDocument(): Record<string, unknown> {
 
   const sessionSummarySchema = {
     type: 'object',
-    required: ['id', 'agent', 'cwd', 'controlVersion', 'controlConfig', 'createdAt'],
+    required: ['id', 'agent', 'cwd', 'controlVersion', 'controlConfig', 'checkpointCount', 'createdAt'],
     properties: {
       id: { type: 'string' },
       agent: { type: 'string', enum: ['ask', 'exec'] },
       cwd: { type: 'string' },
       controlVersion: { type: 'string' },
       controlConfig: controlConfigSchema,
+      checkpointCount: { type: 'number' },
       createdAt: { type: 'string', format: 'date-time' },
     },
   };
 
   const sessionSnapshotSchema = {
     type: 'object',
-    required: ['id', 'cwd', 'agent', 'controlVersion', 'controlConfig', 'createdAt', 'runs'],
+    required: ['id', 'cwd', 'agent', 'controlVersion', 'controlConfig', 'checkpointCount', 'createdAt', 'runs'],
     properties: {
       id: { type: 'string' },
       cwd: { type: 'string' },
@@ -57,6 +69,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       controlConfig: controlConfigSchema,
       createdAt: { type: 'string', format: 'date-time' },
       activeRunId: { type: 'string' },
+      activeCheckpointId: { type: 'string' },
+      checkpointCount: { type: 'number' },
       runs: {
         type: 'array',
         items: runSnapshotSchema,
@@ -337,6 +351,55 @@ export function buildOpenApiDocument(): Record<string, unknown> {
               content: {
                 'application/json': {
                   schema: sessionSnapshotSchema,
+                },
+              },
+            },
+            '404': {
+              description: 'Unknown session',
+            },
+            '409': {
+              description: 'Session already has an active run',
+            },
+          },
+        },
+      },
+      '/sessions/{sessionId}/compact': {
+        post: {
+          summary: 'Compact one session into a checkpoint plus recent tail',
+          parameters: [
+            {
+              name: 'sessionId',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+            },
+          ],
+          requestBody: {
+            required: false,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    keepLastMessages: { type: 'number' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '200': {
+              description: 'Created checkpoint and updated session snapshot',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    required: ['checkpoint', 'session'],
+                    properties: {
+                      checkpoint: checkpointSchema,
+                      session: sessionSnapshotSchema,
+                    },
+                  },
                 },
               },
             },

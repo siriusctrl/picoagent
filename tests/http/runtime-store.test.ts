@@ -29,6 +29,7 @@ test('runtime store projects ordered session and run snapshots', () => {
     createdAt: '2025-01-01T00:00:00.000Z',
     runIds: [],
     messages: [],
+    checkpoints: [],
   });
 
   store.createRun({
@@ -63,6 +64,7 @@ test('runtime store projects ordered session and run snapshots', () => {
   assert.equal(session.activeRunId, 'run-2');
   assert.equal(session.controlVersion, 'v1');
   assert.equal(session.controlConfig.provider, 'echo');
+  assert.equal(session.checkpointCount, 0);
   assert.deepEqual(
     session.runs.map((run) => [run.id, run.agent, run.status]),
     [
@@ -131,6 +133,7 @@ test('runtime store clears active session runs and persists conversation on comp
     createdAt: '2025-01-01T00:00:00.000Z',
     runIds: [],
     messages: [],
+    checkpoints: [],
   });
 
   store.attachRunToSession('session-1', 'run-1');
@@ -143,4 +146,56 @@ test('runtime store clears active session runs and persists conversation on comp
   assert.ok(session);
   assert.equal(session.activeRunId, undefined);
   assert.equal(session.messages.length, 2);
+});
+
+test('runtime store compacts session messages into checkpoints and exposes session resources', () => {
+  const store = new InMemoryRuntimeStore();
+
+  store.createSession({
+    id: 'session-1',
+    cwd: '/workspace',
+    roots: ['/workspace'],
+    agent: 'exec',
+    controlVersion: 'v1',
+    controlConfig,
+    systemPrompts,
+    createdAt: '2025-01-01T00:00:00.000Z',
+    runIds: ['run-1'],
+    messages: [
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] },
+      { role: 'user', content: 'second question' },
+      { role: 'assistant', content: [{ type: 'text', text: 'second answer' }] },
+    ],
+    checkpoints: [],
+  });
+
+  store.createRun({
+    id: 'run-1',
+    sessionId: 'session-1',
+    agent: 'exec',
+    prompt: 'second question',
+    status: 'completed',
+    output: 'second answer',
+    createdAt: '2025-01-01T00:00:01.000Z',
+    finishedAt: '2025-01-01T00:00:02.000Z',
+    events: [],
+  });
+
+  const compacted = store.compactSession('session-1', 2);
+  assert.ok(compacted);
+  assert.equal(compacted.checkpointId.length > 0, true);
+  assert.equal(compacted.compactedMessages, 2);
+  assert.equal(compacted.keptMessages, 2);
+
+  const session = store.getSession('session-1');
+  assert.ok(session);
+  assert.equal(session.checkpoints.length, 1);
+  assert.equal(session.activeCheckpointId, session.checkpoints[0]?.id);
+  assert.equal(session.messages.length, 3);
+
+  assert.deepEqual(store.listSessionResources('session-1', '.'), ['summary.md', 'checkpoints/', 'runs/', 'events/']);
+  assert.deepEqual(store.listSessionResources('session-1', 'checkpoints'), [`${session.checkpoints[0]?.id}.md`]);
+  assert.match(store.readSessionResource('session-1', 'summary.md') ?? '', /# Checkpoint/);
+  assert.match(store.readSessionResource('session-1', 'runs/run-1.md') ?? '', /# Run run-1/);
 });

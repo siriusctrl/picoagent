@@ -19,12 +19,12 @@ export const writeFileTool: Tool<typeof WriteFileParams> = {
 
     let oldText: string | undefined;
     try {
-      oldText = await context.environment.readTextFile(context.sessionId, fullPath);
+      oldText = await context.environment.readTextFile(context.runId, fullPath);
     } catch {
       oldText = undefined;
     }
 
-    await context.environment.writeTextFile(context.sessionId, fullPath, args.content);
+    await context.environment.writeTextFile(context.runId, fullPath, args.content);
 
     return {
       content: oldText === undefined ? `Created ${args.path}` : `Updated ${args.path}`,

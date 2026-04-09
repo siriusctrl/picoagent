@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { AgentEnvironment } from './environment.js';
+import type { SessionAccess } from './session-access.js';
 
 export interface TextContent {
   type: 'text';
@@ -67,13 +68,15 @@ export interface ToolOutputTerminal {
 export type ToolOutput = ToolOutputText | ToolOutputDiff | ToolOutputTerminal;
 
 export interface ToolContext {
-  sessionId: string;
+  runId: string;
+  sessionId?: string;
   cwd: string;
   roots: string[];
   controlRoot: string;
   agent: AgentPresetId;
   signal: AbortSignal;
   environment: AgentEnvironment;
+  sessionAccess: SessionAccess;
 }
 
 export interface ToolResult {

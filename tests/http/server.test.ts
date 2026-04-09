@@ -390,6 +390,7 @@ test('GET /openapi.json documents the async run and event endpoints', async () =
   assert.ok(document.paths['/events/{runId}']?.get?.description?.includes('Accept: text/event-stream'));
   assert.ok(document.paths['/sessions/{sessionId}/runs']);
   assert.ok(document.paths['/sessions/{sessionId}/agent']);
+  assert.ok(document.paths['/sessions/{sessionId}/compact']);
 });
 
 test('POST endpoints return 400 for malformed JSON bodies', async () => {
@@ -452,4 +453,62 @@ test('session runs automatically refresh control inputs when the workspace chang
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('sessions compact into checkpoints and expose the compacted snapshot over HTTP', async () => {
+  const { baseUrl } = await startServer();
+
+  const createSessionResponse = await fetch(`${baseUrl}/sessions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ agent: 'ask' }),
+  });
+  assert.equal(createSessionResponse.status, 201);
+
+  const session = (await createSessionResponse.json()) as { id: string };
+
+  const firstRunResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: 'first turn to compact' }),
+  });
+  assert.equal(firstRunResponse.status, 202);
+  const firstRun = (await firstRunResponse.json()) as { runId: string };
+  await waitForRun(baseUrl, firstRun.runId);
+
+  const secondRunResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: 'second turn to keep' }),
+  });
+  assert.equal(secondRunResponse.status, 202);
+  const secondRun = (await secondRunResponse.json()) as { runId: string };
+  await waitForRun(baseUrl, secondRun.runId);
+
+  const compactResponse = await fetch(`${baseUrl}/sessions/${session.id}/compact`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ keepLastMessages: 2 }),
+  });
+  assert.equal(compactResponse.status, 200);
+
+  const compacted = (await compactResponse.json()) as {
+    checkpoint: { checkpointId: string; compactedMessages: number; keptMessages: number; summary: string };
+    session: { id: string; activeCheckpointId?: string; checkpointCount: number };
+  };
+  assert.equal(compacted.session.id, session.id);
+  assert.equal(compacted.session.activeCheckpointId, compacted.checkpoint.checkpointId);
+  assert.equal(compacted.session.checkpointCount, 1);
+  assert.equal(compacted.checkpoint.compactedMessages, 2);
+  assert.equal(compacted.checkpoint.keptMessages, 2);
+  assert.match(compacted.checkpoint.summary, /first turn to compact/);
+
+  const sessionResponse = await fetch(`${baseUrl}/sessions/${session.id}`);
+  assert.equal(sessionResponse.status, 200);
+  const snapshot = (await sessionResponse.json()) as {
+    activeCheckpointId?: string;
+    checkpointCount: number;
+  };
+  assert.equal(snapshot.activeCheckpointId, compacted.checkpoint.checkpointId);
+  assert.equal(snapshot.checkpointCount, 1);
 });

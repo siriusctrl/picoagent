@@ -21,6 +21,7 @@ Current endpoints:
 - `GET /sessions/:id`
 - `POST /sessions/:id/agent`
 - `POST /sessions/:id/runs`
+- `POST /sessions/:id/compact`
 
 HTTP resource model:
 
@@ -28,10 +29,12 @@ HTTP resource model:
 - `session` binds one workspace root
 - `session` carries a default agent preset
 - `session` caches a control snapshot derived from workspace control files
+- `session` may also carry a checkpointed summary of older history
 - `run` is one execution
 - session runs inherit the session default agent unless the request overrides it
 - session runs refresh the cached control snapshot automatically if the workspace changed
 - `events` are the ordered records for one run
+- compaction creates a checkpoint plus recent tail without deleting run or event history
 - set `Accept: text/event-stream` on `GET /events/:runId` for streaming
 - omit that header to read the same event log as JSON
 

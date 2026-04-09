@@ -19,7 +19,7 @@ export const runCommandTool: Tool<typeof RunCommandParams> = {
   async execute(args, context) {
     const commandCwd = resolveSessionPath(args.cwd ?? '.', context.cwd, context.roots);
     const result = await context.environment.runCommand({
-      sessionId: context.sessionId,
+      sessionId: context.runId,
       command: 'bash',
       args: ['-lc', args.command],
       cwd: commandCwd,

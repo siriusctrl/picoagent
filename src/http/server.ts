@@ -4,6 +4,7 @@ import { buildSessionControlSnapshot, computeControlVersion, SessionControlSnaps
 import { createAppBootstrap } from '../bootstrap/index.js';
 import type { AgentEnvironment } from '../core/environment.js';
 import { runAgentLoop } from '../core/loop.js';
+import { SessionAccess } from '../core/session-access.js';
 import { AgentPresetId, AssistantMessage, Message } from '../core/types.js';
 import { createProvider } from '../providers/index.js';
 import { LocalEnvironment } from './local-environment.js';
@@ -126,6 +127,7 @@ class HttpRuntimeService {
       createdAt: nowIso(),
       runIds: [],
       messages: [],
+      checkpoints: [],
     };
     return this.store.createSession(session);
   }
@@ -214,6 +216,47 @@ class HttpRuntimeService {
     return unsubscribe;
   }
 
+  listSessionResources(sessionId: string, path = '.'): string[] {
+    this.getSession(sessionId);
+    const entries = this.store.listSessionResources(sessionId, path);
+    if (!entries) {
+      throw new NotFoundError(`Session ${sessionId} not found`);
+    }
+
+    return entries;
+  }
+
+  readSessionResource(sessionId: string, path: string): string {
+    this.getSession(sessionId);
+    const content = this.store.readSessionResource(sessionId, path);
+    if (content === undefined) {
+      throw new NotFoundError(`Session resource not found: ${path}`);
+    }
+
+    return content;
+  }
+
+  compactSession(sessionId: string, keepLastMessages = 8) {
+    if (!Number.isInteger(keepLastMessages) || keepLastMessages < 0) {
+      throw new ValidationError('keepLastMessages must be a non-negative integer');
+    }
+
+    const session = this.getSession(sessionId);
+    if (session.activeRunId) {
+      throw new ConflictError(`Session ${sessionId} already has an active run`);
+    }
+
+    const result = this.store.compactSession(sessionId, keepLastMessages);
+    if (!result) {
+      throw new NotFoundError(`Session ${sessionId} not found`);
+    }
+
+    return {
+      checkpoint: result,
+      session: this.getSessionSnapshot(sessionId),
+    };
+  }
+
   private createRun(prompt: string, agent: AgentPresetId, sessionId?: string) {
     return this.store.createRun({
       id: randomUUID(),
@@ -264,6 +307,14 @@ class HttpRuntimeService {
     });
   }
 
+  private sessionAccess(): SessionAccess {
+    return {
+      listResources: async (sessionId, path) => this.listSessionResources(sessionId, path),
+      readResource: async (sessionId, path) => this.readSessionResource(sessionId, path),
+      compactSession: async (sessionId, keepLastMessages) => this.compactSession(sessionId, keepLastMessages).checkpoint,
+    };
+  }
+
   private async executeRun(
     run: ReturnType<HttpRuntimeService['createRun']>,
     control: SessionControlSnapshot,
@@ -294,13 +345,15 @@ class HttpRuntimeService {
         tools,
         provider,
         {
-          sessionId: run.id,
+          runId: run.id,
+          sessionId: session?.id,
           cwd: session?.cwd ?? this.cwd,
           roots: session?.roots ?? [this.cwd],
           controlRoot: control.workspaceRoot,
           agent: run.agent,
           signal: controller.signal,
           environment: this.environment,
+          sessionAccess: this.sessionAccess(),
         },
         systemPrompt,
         {
@@ -471,6 +524,7 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
             contextWindow: session.controlConfig.contextWindow,
             baseURL: session.controlConfig.baseURL,
           },
+          checkpointCount: session.checkpoints.length,
           createdAt: session.createdAt,
         });
         return;
@@ -498,6 +552,19 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
       if (request.method === 'POST' && sessionAgentMatch) {
         const body = (await readJsonBody(request)) as { agent?: unknown };
         sendJson(response, 200, service.setSessionAgent(sessionAgentMatch[1], requireAgent(body.agent)));
+        return;
+      }
+
+      const sessionCompactMatch = pathname.match(/^\/sessions\/([^/]+)\/compact$/);
+      if (request.method === 'POST' && sessionCompactMatch) {
+        const body = (await readJsonBody(request)) as { keepLastMessages?: unknown };
+        const keepLastMessages =
+          body.keepLastMessages === undefined
+            ? undefined
+            : typeof body.keepLastMessages === 'number'
+              ? body.keepLastMessages
+              : Number.NaN;
+        sendJson(response, 200, service.compactSession(sessionCompactMatch[1], keepLastMessages));
         return;
       }
 

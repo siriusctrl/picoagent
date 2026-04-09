@@ -37,9 +37,11 @@ That means:
   - inspect files
   - list files
   - search text
+  - browse session history resources
   - explain and plan
 - `exec`
   - everything in `ask`
+  - compact session history into checkpoints
   - write files
   - run commands
 
@@ -59,7 +61,7 @@ src/
   http/       minimal async HTTP adapter for runs, sessions, and events
   prompting/  prompt assembly and frontmatter-backed prompt scanning
   providers/  Anthropic, OpenAI-compatible, Gemini adapters
-  tools/      list/read/search/write/run-command tools
+  tools/      workspace, session-history, write, and command tools
 ```
 
 ## Development
@@ -142,6 +144,7 @@ Endpoints:
 - `GET /sessions/:id`
 - `POST /sessions/:id/agent`
 - `POST /sessions/:id/runs`
+- `POST /sessions/:id/compact`
 
 HTTP is async-first:
 
@@ -153,6 +156,8 @@ HTTP is async-first:
 Sessions are context containers bound to one workspace root. Each session has a default agent preset plus a cached control snapshot resolved from workspace control files like `AGENTS.md`, `USER.md`, `SOUL.md`, and `.pico/config.jsonc`. Session runs inherit the default agent unless the run request overrides it with its own `agent`.
 
 Before starting a session run, the server checks whether the bound workspace changed. If it did, the session control snapshot is refreshed automatically before the run starts.
+
+Sessions can also be compacted into a checkpoint plus recent tail. The full run and event history stays available as virtual session resources that the model can browse with `list_session_resources` and `read_session_resource`.
 
 ### Run The CLI
 

@@ -89,8 +89,10 @@ Current shape:
 
 - an in-memory runtime store owns sessions, runs, subscriptions, and append-only run events
 - each session stores a cached control snapshot derived from its bound workspace
+- sessions may also store checkpoints that compact older conversation history into summaries
 - HTTP reads snapshots and event streams from that store
 - clients observe projections, not handler-local state
+- session history can be exposed back to the model as virtual session resources instead of being forced into the prompt every time
 
 ### `src/config`
 
@@ -139,6 +141,7 @@ Responsibilities:
 - define tool parameters
 - validate tool arguments
 - call into the environment or filesystem helpers
+- expose session history browsing or compaction through small focused tools when the runtime model needs it
 
 ## Runtime Hands
 

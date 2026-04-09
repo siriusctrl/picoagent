@@ -9,6 +9,7 @@ import { searchFiles, walkFiles } from '../../src/fs/filesystem.js';
 
 function createContext(root: string): ToolContext {
   return {
+    runId: 'run-1',
     sessionId: 'session-1',
     cwd: root,
     roots: [root],
@@ -30,6 +31,16 @@ function createContext(root: string): ToolContext {
         truncated: false,
         exitCode: 0,
         signal: null,
+      }),
+    },
+    sessionAccess: {
+      listResources: async () => [],
+      readResource: async () => '',
+      compactSession: async () => ({
+        checkpointId: 'cp-1',
+        summary: '',
+        compactedMessages: 0,
+        keptMessages: 0,
       }),
     },
   };
