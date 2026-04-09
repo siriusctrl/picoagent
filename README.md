@@ -160,7 +160,6 @@ Built output:
 npm run build
 npm run start:cli -- help
 npm run start:cli -- serve
-npm run start:cli -- run "hello"
 ```
 
 Development:
@@ -168,13 +167,11 @@ Development:
 ```bash
 npm run dev:cli -- help
 npm run dev:cli -- serve
-npm run dev:cli -- run "hello"
-npm run dev:cli -- run --agent exec "inspect the repo and summarize it"
 ```
 
 ### Run The Local TUI
 
-The TUI is a local smoke-test client for the HTTP server, not the primary product surface.
+The TUI is the local interactive client for the HTTP server, not the primary product surface.
 
 With a real provider:
 

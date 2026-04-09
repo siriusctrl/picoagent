@@ -1,126 +1,27 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { createAppBootstrap } from '../bootstrap/index.js';
+import type { AgentEnvironment } from '../core/environment.js';
 import { runAgentLoop } from '../core/loop.js';
 import { AgentPresetId, AssistantMessage, Message } from '../core/types.js';
 import { buildSystemPrompt } from '../prompting/prompt.js';
 import { LocalEnvironment } from './local-environment.js';
 import { buildOpenApiDocument } from './openapi.js';
+import {
+  EmittedRunEvent,
+  InMemoryRuntimeStore,
+  RunEvent,
+  RunSnapshot,
+  RunStatus,
+  SessionRecord,
+  SessionSnapshot,
+} from './runtime-store.js';
 
 export interface HttpServerOptions {
   cwd?: string;
   hostname?: string;
   port?: number;
-}
-
-type RunStatus = 'running' | 'completed' | 'failed';
-
-type RunEvent =
-  | {
-      type: 'run_started';
-      index: number;
-      timestamp: string;
-      runId: string;
-      sessionId?: string;
-      agent: AgentPresetId;
-      prompt: string;
-    }
-  | {
-      type: 'assistant_delta';
-      index: number;
-      timestamp: string;
-      runId: string;
-      sessionId?: string;
-      text: string;
-    }
-  | {
-      type: 'tool_call';
-      index: number;
-      timestamp: string;
-      runId: string;
-      sessionId?: string;
-      title: string;
-      toolCallId: string;
-      status: 'pending';
-      kind?: string;
-      rawInput?: unknown;
-    }
-  | {
-      type: 'tool_call_update';
-      index: number;
-      timestamp: string;
-      runId: string;
-      sessionId?: string;
-      toolCallId: string;
-      title?: string;
-      status?: string;
-      rawOutput?: unknown;
-      text?: string;
-    }
-  | {
-      type: 'done';
-      index: number;
-      timestamp: string;
-      runId: string;
-      sessionId?: string;
-      output: string;
-    }
-  | {
-      type: 'error';
-      index: number;
-      timestamp: string;
-      runId: string;
-      sessionId?: string;
-      message: string;
-    };
-
-interface RunState {
-  id: string;
-  sessionId?: string;
-  agent: AgentPresetId;
-  prompt: string;
-  status: RunStatus;
-  output: string;
-  error?: string;
-  createdAt: string;
-  startedAt?: string;
-  finishedAt?: string;
-  events: RunEvent[];
-  listeners: Set<(event: RunEvent) => void>;
-  controller?: AbortController;
-}
-
-interface SessionState {
-  id: string;
-  cwd: string;
-  roots: string[];
-  agent: AgentPresetId;
-  createdAt: string;
-  activeRunId?: string;
-  runIds: string[];
-  messages: Message[];
-}
-
-interface RunSnapshot {
-  id: string;
-  sessionId?: string;
-  agent: AgentPresetId;
-  status: RunStatus;
-  prompt: string;
-  output: string;
-  error?: string;
-  createdAt: string;
-  startedAt?: string;
-  finishedAt?: string;
-}
-
-interface SessionSnapshot {
-  id: string;
-  cwd: string;
-  agent: AgentPresetId;
-  createdAt: string;
-  activeRunId?: string;
-  runs: RunSnapshot[];
+  environment?: AgentEnvironment;
 }
 
 class NotFoundError extends Error {}
@@ -202,16 +103,17 @@ function requirePrompt(value: unknown): string {
 
 class HttpRuntimeService {
   private readonly bootstrap;
-  private readonly environment = new LocalEnvironment();
-  private readonly sessions = new Map<string, SessionState>();
-  private readonly runs = new Map<string, RunState>();
+  private readonly store = new InMemoryRuntimeStore();
 
-  constructor(private readonly cwd: string) {
+  constructor(
+    private readonly cwd: string,
+    private readonly environment: AgentEnvironment,
+  ) {
     this.bootstrap = createAppBootstrap(cwd);
   }
 
-  createSession(agent: AgentPresetId = 'ask'): SessionState {
-    const session: SessionState = {
+  createSession(agent: AgentPresetId = 'ask'): SessionRecord {
+    const session: SessionRecord = {
       id: randomUUID(),
       cwd: this.cwd,
       roots: [this.cwd],
@@ -220,12 +122,11 @@ class HttpRuntimeService {
       runIds: [],
       messages: [],
     };
-    this.sessions.set(session.id, session);
-    return session;
+    return this.store.createSession(session);
   }
 
-  getSession(id: string): SessionState {
-    const session = this.sessions.get(id);
+  getSession(id: string): SessionRecord {
+    const session = this.store.getSession(id);
     if (!session) {
       throw new NotFoundError(`Session ${id} not found`);
     }
@@ -233,8 +134,8 @@ class HttpRuntimeService {
     return session;
   }
 
-  getRun(id: string): RunState {
-    const run = this.runs.get(id);
+  getRun(id: string) {
+    const run = this.store.getRun(id);
     if (!run) {
       throw new NotFoundError(`Run ${id} not found`);
     }
@@ -243,28 +144,27 @@ class HttpRuntimeService {
   }
 
   getRunSnapshot(id: string): RunSnapshot {
-    return this.toRunSnapshot(this.getRun(id));
+    const run = this.store.getRunSnapshot(id);
+    if (!run) {
+      throw new NotFoundError(`Run ${id} not found`);
+    }
+
+    return run;
   }
 
   getSessionSnapshot(id: string): SessionSnapshot {
-    const session = this.getSession(id);
-    return {
-      id: session.id,
-      cwd: session.cwd,
-      agent: session.agent,
-      createdAt: session.createdAt,
-      activeRunId: session.activeRunId,
-      runs: session.runIds
-        .map((runId) => this.runs.get(runId))
-        .filter((run): run is RunState => Boolean(run))
-        .map((run) => this.toRunSnapshot(run)),
-    };
+    const session = this.store.getSessionSnapshot(id);
+    if (!session) {
+      throw new NotFoundError(`Session ${id} not found`);
+    }
+
+    return session;
   }
 
   createStandaloneRun(prompt: string, agent: AgentPresetId): RunSnapshot {
     const run = this.createRun(prompt, agent);
     this.startRun(run);
-    return this.toRunSnapshot(run);
+    return this.getRunSnapshot(run.id);
   }
 
   createSessionRun(sessionId: string, prompt: string, agent?: AgentPresetId): RunSnapshot {
@@ -274,10 +174,9 @@ class HttpRuntimeService {
     }
 
     const run = this.createRun(prompt, agent ?? session.agent, session.id);
-    session.activeRunId = run.id;
-    session.runIds.push(run.id);
+    this.store.attachRunToSession(session.id, run.id);
     this.startRun(run, session);
-    return this.toRunSnapshot(run);
+    return this.getRunSnapshot(run.id);
   }
 
   setSessionAgent(sessionId: string, agent: AgentPresetId): SessionSnapshot {
@@ -286,33 +185,30 @@ class HttpRuntimeService {
       throw new ConflictError(`Session ${sessionId} already has an active run`);
     }
 
-    session.agent = agent;
+    this.store.setSessionAgent(sessionId, agent);
     return this.getSessionSnapshot(sessionId);
   }
 
   getRunEvents(runId: string): { runId: string; status: RunStatus; events: RunEvent[] } {
-    const run = this.getRun(runId);
-    return {
-      runId,
-      status: run.status,
-      events: [...run.events],
-    };
+    const events = this.store.getRunEvents(runId);
+    if (!events) {
+      throw new NotFoundError(`Run ${runId} not found`);
+    }
+
+    return events;
   }
 
   subscribeToRun(runId: string, listener: (event: RunEvent) => void): () => void {
-    const run = this.getRun(runId);
-    run.listeners.add(listener);
-    for (const event of run.events) {
-      listener(event);
+    const unsubscribe = this.store.subscribeToRun(runId, listener);
+    if (!unsubscribe) {
+      throw new NotFoundError(`Run ${runId} not found`);
     }
 
-    return () => {
-      run.listeners.delete(listener);
-    };
+    return unsubscribe;
   }
 
-  private createRun(prompt: string, agent: AgentPresetId, sessionId?: string): RunState {
-    const run: RunState = {
+  private createRun(prompt: string, agent: AgentPresetId, sessionId?: string) {
+    return this.store.createRun({
       id: randomUUID(),
       sessionId,
       agent,
@@ -321,54 +217,30 @@ class HttpRuntimeService {
       output: '',
       createdAt: nowIso(),
       events: [],
-      listeners: new Set(),
-    };
-    this.runs.set(run.id, run);
-    return run;
+    });
   }
 
-  private toRunSnapshot(run: RunState): RunSnapshot {
-    return {
-      id: run.id,
-      sessionId: run.sessionId,
-      agent: run.agent,
-      status: run.status,
-      prompt: run.prompt,
-      output: run.output,
-      error: run.error,
-      createdAt: run.createdAt,
-      startedAt: run.startedAt,
-      finishedAt: run.finishedAt,
-    };
-  }
-
-  private emit(run: RunState, event: { type: RunEvent['type'] } & Record<string, unknown>): void {
-    const record = {
+  private emit(runId: string, event: EmittedRunEvent): void {
+    this.store.appendRunEvent(runId, {
       ...event,
-      index: run.events.length,
       timestamp: nowIso(),
-      runId: run.id,
-      sessionId: run.sessionId,
-    } as RunEvent;
-    run.events.push(record);
-
-    for (const listener of run.listeners) {
-      listener(record);
-    }
+    });
   }
 
-  private startRun(run: RunState, session?: SessionState): void {
+  private startRun(run: ReturnType<HttpRuntimeService['createRun']>, session?: SessionRecord): void {
     void this.executeRun(run, session).catch(() => {
       // Run failures are captured in the run state and emitted as events.
     });
   }
 
-  private async executeRun(run: RunState, session?: SessionState): Promise<void> {
+  private async executeRun(run: ReturnType<HttpRuntimeService['createRun']>, session?: SessionRecord): Promise<void> {
     const controller = new AbortController();
-    run.controller = controller;
-    run.startedAt = nowIso();
-    this.emit(run, {
+    const startedAt = nowIso();
+    this.store.updateRun(run.id, { startedAt });
+    this.emit(run.id, {
       type: 'run_started',
+      runId: run.id,
+      sessionId: run.sessionId,
       agent: run.agent,
       prompt: run.prompt,
     });
@@ -397,15 +269,20 @@ class HttpRuntimeService {
         systemPrompt,
         {
           onTextDelta: async (text) => {
-            run.output += text;
-            this.emit(run, {
+            const latestRun = this.getRun(run.id);
+            this.store.updateRun(run.id, { output: latestRun.output + text });
+            this.emit(run.id, {
               type: 'assistant_delta',
+              runId: run.id,
+              sessionId: run.sessionId,
               text,
             });
           },
           onToolStart: async (toolCall, tool) => {
-            this.emit(run, {
+            this.emit(run.id, {
               type: 'tool_call',
+              runId: run.id,
+              sessionId: run.sessionId,
               title: tool?.title && typeof tool.title === 'string' ? tool.title : tool?.name ?? toolCall.name,
               toolCallId: toolCall.id,
               status: 'pending',
@@ -414,8 +291,10 @@ class HttpRuntimeService {
             });
           },
           onToolEnd: async (toolCall, _tool, result) => {
-            this.emit(run, {
+            this.emit(run.id, {
               type: 'tool_call_update',
+              runId: run.id,
+              sessionId: run.sessionId,
               toolCallId: toolCall.id,
               title: result.title,
               status: result.message.isError ? 'failed' : 'completed',
@@ -426,29 +305,38 @@ class HttpRuntimeService {
         },
       );
 
-      run.output = assistantText(finalMessage);
-      run.status = 'completed';
-      run.finishedAt = nowIso();
-      this.emit(run, {
+      const finishedAt = nowIso();
+      this.store.updateRun(run.id, {
+        output: assistantText(finalMessage),
+        status: 'completed',
+        finishedAt,
+      });
+      this.emit(run.id, {
         type: 'done',
-        output: run.output,
+        runId: run.id,
+        sessionId: run.sessionId,
+        output: assistantText(finalMessage),
       });
 
       if (session) {
-        session.messages = conversation;
+        this.store.finishSessionRun(session.id, run.id, conversation);
       }
     } catch (error: unknown) {
-      run.status = 'failed';
-      run.error = error instanceof Error ? error.message : String(error);
-      run.finishedAt = nowIso();
-      this.emit(run, {
+      const message = error instanceof Error ? error.message : String(error);
+      this.store.updateRun(run.id, {
+        status: 'failed',
+        error: message,
+        finishedAt: nowIso(),
+      });
+      this.emit(run.id, {
         type: 'error',
-        message: run.error,
+        runId: run.id,
+        sessionId: run.sessionId,
+        message,
       });
     } finally {
-      run.controller = undefined;
-      if (session?.activeRunId === run.id) {
-        session.activeRunId = undefined;
+      if (session) {
+        this.store.clearSessionActiveRun(session.id, run.id);
       }
     }
   }
@@ -457,7 +345,7 @@ class HttpRuntimeService {
 export async function startHttpServer(options: HttpServerOptions = {}): Promise<http.Server> {
   const hostname = options.hostname ?? '127.0.0.1';
   const port = options.port ?? 4096;
-  const service = new HttpRuntimeService(options.cwd ?? process.cwd());
+  const service = new HttpRuntimeService(options.cwd ?? process.cwd(), options.environment ?? new LocalEnvironment());
 
   const server = http.createServer(async (request, response) => {
     try {

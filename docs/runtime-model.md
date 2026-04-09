@@ -34,6 +34,9 @@ There is one agent loop for the session.
 HTTP is the durable runtime surface.
 Any UI around it should stay replaceable.
 
+The session is not owned by one request handler.
+Runtime state lives behind a store boundary and is projected back out as session and run snapshots.
+
 ## Agent Presets
 
 `picoagent` has two built-in agent presets:
@@ -78,6 +81,18 @@ That keeps the model simple:
 
 The local TUI does not get its own runtime model.
 It is only one local HTTP client over the same session boundary.
+
+## Events
+
+Run events are append-only records for one execution.
+
+They are the shared source for:
+- run snapshots
+- run event reads
+- SSE streaming to clients
+
+Interactive clients should still primarily follow one run at a time.
+Session-wide event feeds can exist later without changing the underlying runtime model.
 
 ## Environment Boundary
 

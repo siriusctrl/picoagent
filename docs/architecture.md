@@ -38,12 +38,14 @@ Responsibilities:
 
 - expose async run and session resources
 - expose run events as JSON or SSE
+- project snapshots from the runtime store
 - reuse the same bootstrap path and agent loop as other transports
 
 Rules:
 
 - keep the surface narrow
 - keep resource boundaries explicit: session, run, events
+- do not let request handlers become the source of truth for runtime state
 - do not fork the runtime model away from `core`
 
 ### `src/clients`
@@ -58,8 +60,8 @@ Responsibilities:
 Current client:
 
 - `src/clients/cli`
-  - exposes a minimal command-line product surface
-  - starts the HTTP server or a one-shot HTTP-backed run
+  - exposes a minimal command-line service surface
+  - starts the HTTP server
 - `src/clients/tui`
   - starts the HTTP server locally
   - renders a terminal-native smoke-test UI
@@ -79,6 +81,16 @@ Responsibilities:
 - load config from the control workspace
 - create the provider
 - assemble the general tool registry
+
+### Runtime state
+
+Runtime state should sit behind explicit store boundaries rather than live in HTTP handlers.
+
+Current shape:
+
+- an in-memory runtime store owns sessions, runs, subscriptions, and append-only run events
+- HTTP reads snapshots and event streams from that store
+- clients observe projections, not handler-local state
 
 ### `src/config`
 
@@ -126,6 +138,16 @@ Responsibilities:
 - define tool parameters
 - validate tool arguments
 - call into the environment or filesystem helpers
+
+## Runtime Hands
+
+The agent "hands" are represented by the environment boundary passed into the runtime.
+
+Rules:
+
+- the harness should depend on the `AgentEnvironment` interface, not one concrete local implementation
+- local filesystem and command execution are only the default implementation
+- future remote sandboxes should be a replacement implementation, not a rewrite of the HTTP layer
 
 ## Dependency Rules
 

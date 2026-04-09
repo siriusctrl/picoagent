@@ -22,28 +22,12 @@ test('parseCliArgs parses serve host and port overrides', () => {
   });
 });
 
-test('parseCliArgs parses run with agent and prompt', () => {
-  assert.deepEqual(parseCliArgs(['run', '--agent', 'exec', 'fix', 'the', 'bug']), {
-    type: 'run',
-    agent: 'exec',
-    prompt: 'fix the bug',
-  });
-});
-
-test('parseCliArgs accepts --agent=ask form', () => {
-  assert.deepEqual(parseCliArgs(['run', '--agent=ask', 'hello']), {
-    type: 'run',
-    agent: 'ask',
-    prompt: 'hello',
-  });
-});
-
-test('parseCliArgs rejects unknown commands and invalid agents', () => {
+test('parseCliArgs rejects unknown commands', () => {
   assert.throws(() => parseCliArgs(['wat']), /Unknown command/);
-  assert.throws(() => parseCliArgs(['run', '--agent', 'plan']), /Unsupported agent/);
+  assert.throws(() => parseCliArgs(['run', 'hello']), /Unknown command/);
 });
 
 test('usage mentions the minimum command surface', () => {
   assert.match(usage(), /pico serve/);
-  assert.match(usage(), /pico run/);
+  assert.doesNotMatch(usage(), /pico run/);
 });

@@ -55,7 +55,6 @@ Behavior:
 
 - exposes a minimum command surface
 - `serve` starts the HTTP server in the foreground
-- `run` starts a local HTTP run, streams its events, and exits
 
 This client is also thin. It should prefer reusing the existing runtime paths over inventing a second agent architecture.
 
