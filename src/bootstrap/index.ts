@@ -21,7 +21,7 @@ export function createAppBootstrap(controlDir = process.cwd()): AppBootstrap {
   const provider = createProvider(config);
   const registry = new ToolRegistry({
     tools: [listFilesTool, readFileTool, searchTextTool, writeFileTool, runCommandTool],
-    modeTools: {
+    agentTools: {
       ask: ['list_files', 'read_file', 'search_text'],
       exec: ['list_files', 'read_file', 'search_text', 'write_file', 'run_command'],
     },

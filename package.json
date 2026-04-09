@@ -2,19 +2,22 @@
   "name": "picoagent",
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "pico": "dist/clients/cli/main.js"
+  },
   "scripts": {
     "build": "tsc",
-    "start": "node dist/acp/main.js",
+    "start": "node dist/clients/cli/main.js serve",
     "start:tui": "node dist/clients/tui/main.js",
-    "start:agent": "node dist/acp/main.js",
-    "dev": "npx tsx src/acp/main.ts",
+    "start:cli": "node dist/clients/cli/main.js",
+    "dev": "npx tsx src/clients/cli/main.ts serve",
+    "dev:cli": "npx tsx src/clients/cli/main.ts",
     "dev:tui": "npx tsx src/clients/tui/main.tsx",
-    "dev:agent": "npx tsx src/acp/main.ts",
+    "dev:http": "npx tsx src/clients/cli/main.ts serve",
     "test": "node --import tsx --test \"tests/**/*.test.ts\"",
     "typecheck": "npx tsc -p tsconfig.check.json"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.18.1",
     "@anthropic-ai/sdk": "^0.74.0",
     "@google/genai": "^1.40.0",
     "@types/react": "^19.2.14",

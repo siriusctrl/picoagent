@@ -15,25 +15,28 @@ It owns prompt framing and local configuration:
 
 This directory is the source of intent.
 
-## ACP Session
+## Session
 
-Each conversation is one ACP session.
+Each conversation is one HTTP session.
 
 A session carries:
 - `cwd`
 - optional additional roots
 - conversation history
-- current mode
+- default agent preset
+
+Each run records its own agent preset.
+Session runs inherit the session default unless the request overrides it.
 
 There is no worker graph behind the session.
 There is one agent loop for the session.
 
-ACP is the durable runtime surface.
+HTTP is the durable runtime surface.
 Any UI around it should stay replaceable.
 
-## Mode Model
+## Agent Presets
 
-`picoagent` has two modes:
+`picoagent` has two built-in agent presets:
 
 ### `ask`
 
@@ -64,8 +67,8 @@ Use it for:
 
 The tool registry is global.
 
-Mode changes do not swap out the runtime.
-They only change which tools are available for the session.
+Agent changes do not swap out the runtime.
+They only change which tools are available for the run.
 
 That keeps the model simple:
 - one loop
@@ -74,13 +77,11 @@ That keeps the model simple:
 - one transport
 
 The local TUI does not get its own runtime model.
-It is only one ACP client over the same session boundary.
+It is only one local HTTP client over the same session boundary.
 
 ## Environment Boundary
 
 For tool execution:
-- file reads and writes go through ACP client capabilities
-- command execution goes through ACP terminals
+- file reads and writes go through the local environment
+- command execution goes through local command execution
 - filesystem traversal and text search use local deterministic helpers
-
-This keeps the client in control of actual writes and terminal processes without reintroducing a second agent role.

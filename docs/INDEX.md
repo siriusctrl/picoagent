@@ -9,11 +9,11 @@ Read in this order when getting oriented:
 Read these when the task matches:
 
 - `docs/runtime-model.md`
-  - ACP session shape
-  - `ask` vs `exec`
+  - session shape
+  - agent presets
   - tool access model
 - `docs/entrypoints.md`
-  - ACP stdio agent behavior
+  - HTTP server behavior
   - local debug client behavior
 
 This repo is intentionally small. Keep docs coarse-grained and focused on durable contracts.

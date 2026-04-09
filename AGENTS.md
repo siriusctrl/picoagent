@@ -23,10 +23,10 @@ Build a minimal coding agent that is:
    - When the right design is clear and requested, implement the coherent end state directly.
    - Do not intentionally land transitional layers or partial architectures as stepping stones.
 
-4. **ACP is the transport contract**
-   - Treat stdio ACP as the agent/client boundary.
+4. **Keep transports thin**
+   - Treat `src/core` as the runtime boundary.
    - Keep `src/core` transport-agnostic.
-   - Keep ACP-specific behavior in `src/acp` and UI-specific behavior in `src/tui`.
+   - Keep HTTP-specific behavior in `src/http` and UI-specific behavior in `src/clients`.
 
 5. **Conventional Commits with real bodies**
    - Use Conventional Commits for every commit.
@@ -49,9 +49,9 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
 
 ### Read these docs when the task matches
 
-- Session behavior, mode behavior, or tool access:
+- Session behavior, agent behavior, or tool access:
   - Read `docs/runtime-model.md`
-- ACP or local UI entrypoints:
+- HTTP or local UI entrypoints:
   - Read `docs/entrypoints.md`
 - Architecture or boundary changes:
   - Read `docs/architecture.md`
@@ -59,22 +59,24 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
 ## Top-level Source Map
 
 - `src/core` - loop, provider contract, tool registry, shared types
-- `src/acp` - ACP agent entrypoint and ACP-backed environment
-- `src/tui` - local Ink ACP client
+- `src/http` - async HTTP server for runs, sessions, and events
+- `src/clients` - local CLI and TUI clients
 - `src/providers` - model SDK adapters
 - `src/tools` - LLM-facing tools
-- `src/lib` - filesystem, prompt, config, and shared helpers
-- `src/app` - bootstrap and registry assembly
+- `src/config` - config loading and provider env resolution
+- `src/fs` - filesystem traversal and search helpers
+- `src/prompting` - prompt framing and frontmatter scanning
+- `src/bootstrap` - runtime assembly for config, provider, and tool registry
 - `tests` - focused contract tests
 
 ## Task Routing
 
 - For loop, tool, or provider-contract work, inspect `src/core` first.
-- For ACP behavior, inspect `src/acp`.
-- For terminal UI changes, inspect `src/tui`.
+- For HTTP behavior, inspect `src/http`.
+- For terminal UI changes, inspect `src/clients/tui`.
 - For tool behavior, inspect `src/tools`.
-- For shared helpers, inspect `src/lib`.
-- For mode wiring or registry assembly, inspect `src/app/bootstrap.ts` and `src/core/tool-registry.ts`.
+- For shared helpers, inspect `src/config`, `src/fs`, and `src/prompting`.
+- For agent wiring or registry assembly, inspect `src/bootstrap/index.ts` and `src/core/tool-registry.ts`.
 
 ## Engineering Rules
 
@@ -91,8 +93,7 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
   - `npm run build`
   - `npm test`
   - `npm run typecheck`
-- If you change TUI behavior, manually run `npm run dev`.
-- If you change ACP session behavior or tool contracts, add or update deterministic tests.
+- If you change TUI behavior, manually run `npm run dev:tui`.
 
 ## Collaboration Preferences
 

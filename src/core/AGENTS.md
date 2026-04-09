@@ -11,7 +11,7 @@ Local guidance for `src/core`.
 ## Rules
 
 - Keep this directory transport-agnostic.
-- Keep ACP, Ink, and provider SDK details out of here.
+- Keep HTTP, Ink, and provider SDK details out of here.
 - Validate external and model-produced inputs before core logic assumes shape.
 - Prefer plain functions and small modules over framework-looking layers.
 - If behavior here changes outward contracts, update the relevant deterministic tests.

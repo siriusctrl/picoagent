@@ -56,7 +56,7 @@ test('parseTerminalInput maps keyboard editing and viewport keys to terminal act
     { type: 'history_page_down' },
     { type: 'history_home' },
     { type: 'history_end' },
-    { type: 'toggle_mode' },
+    { type: 'toggle_agent' },
     { type: 'submit' },
   ]);
 });

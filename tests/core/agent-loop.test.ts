@@ -20,7 +20,7 @@ const mockContext: ToolContext = {
   cwd: process.cwd(),
   roots: [process.cwd()],
   controlRoot: process.cwd(),
-  mode: 'ask',
+  agent: 'ask',
   signal: new AbortController().signal,
   environment: {
     readTextFile: async () => '',

@@ -7,7 +7,7 @@ Local guidance for `src/config`.
 ## Rules
 
 - Keep config parsing deterministic and narrowly scoped.
-- Avoid pulling ACP, Ink, or provider SDK concerns into this directory.
+- Avoid pulling HTTP, Ink, or provider SDK concerns into this directory.
 - Prefer explicit config behavior over broad utility abstractions.
 
 ## Read First

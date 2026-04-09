@@ -7,7 +7,7 @@ Local guidance for `src/prompting`.
 ## Rules
 
 - Keep prompt helpers deterministic and file-driven.
-- Avoid mixing provider, ACP, or client concerns into prompt construction.
+- Avoid mixing provider, HTTP, or client concerns into prompt construction.
 - Prefer explicit prompt composition over hidden magic.
 
 ## Read First

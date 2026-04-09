@@ -1,17 +1,17 @@
-import { SessionModeId, Tool } from './types.js';
+import { AgentPresetId, Tool } from './types.js';
 
 export interface ToolRegistryConfig {
   tools: Tool[];
-  modeTools: Record<SessionModeId, string[]>;
+  agentTools: Record<AgentPresetId, string[]>;
 }
 
 export class ToolRegistry {
   private readonly toolsByName: Map<string, Tool>;
-  private readonly modeTools: Record<SessionModeId, string[]>;
+  private readonly agentTools: Record<AgentPresetId, string[]>;
 
   constructor(config: ToolRegistryConfig) {
     this.toolsByName = new Map(config.tools.map((tool) => [tool.name, tool]));
-    this.modeTools = config.modeTools;
+    this.agentTools = config.agentTools;
   }
 
   all(): Tool[] {
@@ -22,8 +22,8 @@ export class ToolRegistry {
     return this.toolsByName.get(name);
   }
 
-  forMode(mode: SessionModeId): Tool[] {
-    return this.modeTools[mode]
+  forAgent(agent: AgentPresetId): Tool[] {
+    return this.agentTools[agent]
       .map((name) => this.toolsByName.get(name))
       .filter((tool): tool is Tool => tool !== undefined);
   }

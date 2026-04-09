@@ -8,7 +8,7 @@ Local guidance for `src/bootstrap`.
 
 - Assemble config, provider, and tool registry here.
 - Keep business logic out of bootstrap code.
-- Prefer changing registry assembly over adding mode-specific special cases elsewhere.
+- Prefer changing registry assembly over adding agent-specific special cases elsewhere.
 
 ## Read First
 

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SessionModeId, Tool } from '../core/types.js';
+import { AgentPresetId, Tool } from '../core/types.js';
 import { DocMeta, scan } from './frontmatter.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -49,20 +49,20 @@ function buildSummary(title: string, docs: DocMeta[]): string | null {
   return lines.length > 0 ? `## ${title}\n${lines.join('\n')}` : null;
 }
 
-function buildModeContract(mode: SessionModeId): string {
-  if (mode === 'ask') {
+function buildAgentContract(agent: AgentPresetId): string {
+  if (agent === 'ask') {
     return [
-      '## Operating Mode',
-      'You are in ask mode.',
+      '## Active Agent',
+      'You are running the ask agent preset.',
       '- Inspect the workspace before answering.',
       '- Use read and search tools to ground your answer.',
-      '- Do not claim to have changed files or run commands, because those tools are unavailable in this mode.',
+      '- Do not claim to have changed files or run commands, because those tools are unavailable in this preset.',
     ].join('\n');
   }
 
   return [
-    '## Operating Mode',
-    'You are in exec mode.',
+    '## Active Agent',
+    'You are running the exec agent preset.',
     '- Read first when the codebase is unclear.',
     '- Make concrete edits and run commands when the user asks for action.',
     '- Verify meaningful changes with the cheapest relevant command.',
@@ -73,7 +73,7 @@ function buildToolSummary(tools: Tool[]): string {
   return ['## Available Tools', ...tools.map((tool) => `- ${tool.name}: ${tool.description}`)].join('\n');
 }
 
-export function buildSystemPrompt(controlDir: string, mode: SessionModeId, tools: Tool[]): string {
+export function buildSystemPrompt(controlDir: string, agent: AgentPresetId, tools: Tool[]): string {
   const sections: string[] = [];
   sections.push(readOptional(join(controlDir, 'SOUL.md')) ?? 'You are a pragmatic coding agent.');
 
@@ -102,7 +102,7 @@ export function buildSystemPrompt(controlDir: string, mode: SessionModeId, tools
     sections.push(agents);
   }
 
-  sections.push(buildModeContract(mode));
+  sections.push(buildAgentContract(agent));
   sections.push(buildToolSummary(tools));
 
   return sections.join('\n\n');

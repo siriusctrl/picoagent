@@ -13,7 +13,7 @@ function createContext(root: string): ToolContext {
     cwd: root,
     roots: [root],
     controlRoot: root,
-    mode: 'exec',
+    agent: 'exec',
     signal: new AbortController().signal,
     environment: {
       readTextFile: async (_sessionId, filePath) => readFileSync(filePath, 'utf8'),

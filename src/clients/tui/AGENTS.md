@@ -2,11 +2,11 @@ Local guidance for `src/clients/tui`.
 
 ## Scope
 
-`src/clients/tui` is the local terminal debug client for the ACP agent.
+`src/clients/tui` is the local terminal debug client for the HTTP server.
 
 ## Rules
 
-- Keep the TUI thin; it should speak ACP and render terminal UX, not own model logic.
+- Keep the TUI thin; it should speak HTTP and render terminal UX, not own model logic.
 - Treat this directory as a replaceable client, not the product center of gravity.
 - Do not couple this directory to provider internals.
 - Preserve terminal-native behavior over browser-style patterns.

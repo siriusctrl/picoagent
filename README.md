@@ -1,37 +1,37 @@
 # picoagent
 
-Minimal coding agent built around ACP. The ACP stdio server is the product surface; the Ink TUI is a thin local debug client.
+Minimal coding agent with one core runtime and one async HTTP server.
 
 ## What This Is
 
-`picoagent` is a small TypeScript agent stack with one core loop and one ACP transport:
+`picoagent` is a small TypeScript agent stack with one core loop and one thin transport adapter:
 
-- ACP server over stdio
+- minimal HTTP server for local automation and scripting
 - one provider contract
 - one tool-calling loop
-- one global tool registry with mode-based tool subsets
+- one global tool registry with agent-based tool subsets
 - optional local Ink client for development smoke tests
 
 The project is intentionally narrow:
 
 - no multi-agent orchestration
-- no HTTP control plane
 - no UI-owned model logic
 - no requirement that Pico ship its own primary client
 
 ## Product Stance
 
-The durable asset in this repo is `core + ACP server`.
+The durable asset in this repo is `core + HTTP`.
 
 That means:
 
-- new behavior should land in `src/core` or `src/acp` first
-- the TUI exists to inspect and debug the server locally
-- terminal UX work should stay minimal unless it directly supports server verification
+- new behavior should land in `src/core` first
+- HTTP is the main product surface
+- the TUI exists as a thin local HTTP client
+- terminal UX work should stay minimal unless it directly supports runtime verification
 
-## Modes
+## Agents
 
-`picoagent` exposes two session modes:
+`picoagent` exposes two built-in agent presets:
 
 - `ask`
   - inspect files
@@ -43,19 +43,20 @@ That means:
   - write files
   - run commands
 
-Modes do not create separate runtimes. They only choose which tools the session equips.
+Agent presets do not create separate runtimes. They only choose which tools the run equips.
 
 ## Layout
 
 ```text
 src/
-  acp/        ACP stdio server, session lifecycle, transport adapter
   bootstrap/  runtime assembly for config, provider, and tool registry
   clients/    thin replaceable clients
-    tui/      local Ink debug client for the ACP server
+    cli/      minimum command-line client and local entrypoint
+    tui/      local Ink smoke-test client for the HTTP server
   core/       loop, provider contract, tool registry, shared types
   config/     config loading and provider env resolution
   fs/         deterministic filesystem traversal and search helpers
+  http/       minimal async HTTP adapter for runs, sessions, and events
   prompting/  prompt assembly and frontmatter-backed prompt scanning
   providers/  Anthropic, OpenAI-compatible, Gemini adapters
   tools/      list/read/search/write/run-command tools
@@ -101,7 +102,7 @@ Environment variables:
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 
-### Run The ACP Server
+### Run The HTTP Server
 
 Development:
 
@@ -116,9 +117,64 @@ npm run build
 npm run start
 ```
 
+Or explicitly:
+
+Development:
+
+```bash
+npm run dev:http
+```
+
+Built output:
+
+```bash
+npm run build
+npm run start:cli -- serve
+```
+
+Endpoints:
+
+- `GET /openapi.json`
+- `POST /runs`
+- `GET /runs/:id`
+- `GET /events/:runId`
+- `POST /sessions`
+- `GET /sessions/:id`
+- `POST /sessions/:id/agent`
+- `POST /sessions/:id/runs`
+
+HTTP is async-first:
+
+- `POST /runs` and `POST /sessions/:id/runs` start work and immediately return a `runId`
+- `GET /runs/:id` returns the current run snapshot
+- `GET /events/:runId` returns the run event log as JSON
+- set `Accept: text/event-stream` on `GET /events/:runId` to stream the same events over SSE
+
+Sessions are context containers. Each session has a default agent preset. Session runs inherit that preset unless the run request overrides it with its own `agent`.
+
+### Run The CLI
+
+Built output:
+
+```bash
+npm run build
+npm run start:cli -- help
+npm run start:cli -- serve
+npm run start:cli -- run "hello"
+```
+
+Development:
+
+```bash
+npm run dev:cli -- help
+npm run dev:cli -- serve
+npm run dev:cli -- run "hello"
+npm run dev:cli -- run --agent exec "inspect the repo and summarize it"
+```
+
 ### Run The Local TUI
 
-The TUI is a local development client, not the primary product surface.
+The TUI is a local smoke-test client for the HTTP server, not the primary product surface.
 
 With a real provider:
 

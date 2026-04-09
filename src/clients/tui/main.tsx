@@ -2,7 +2,7 @@ import React, { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { randomUUID } from 'node:crypto';
 import { Box, render, Text, useApp, useStdin, useWindowSize } from 'ink';
 import { TuiController, UiEvent } from './controller.js';
-import { SessionModeId } from '../../core/types.js';
+import { AgentPresetId } from '../../core/types.js';
 import { clampScrollOffset, getHistoryWindow, preserveScrollOffsetOnAppend } from './history.js';
 import { estimateEntryHeight } from './layout.js';
 import {
@@ -29,8 +29,8 @@ const LABEL_WIDTH = 8;
 const MIN_HISTORY_ROWS = 6;
 const SHOW_INPUT_DEBUG = process.env.PICO_TUI_DEBUG_INPUT === '1';
 
-function nextMode(mode: SessionModeId): SessionModeId {
-  return mode === 'ask' ? 'exec' : 'ask';
+function nextAgent(agent: AgentPresetId): AgentPresetId {
+  return agent === 'ask' ? 'exec' : 'ask';
 }
 
 function toolOutputText(rawOutput: unknown, fallback?: string): string | undefined {
@@ -132,12 +132,12 @@ function App() {
   const { exit } = useApp();
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   const windowSize = useWindowSize();
-  const [controller, setController] = useState<TuiController | null>(null);
+  const [controller, setController] = useState<InstanceType<typeof TuiController> | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [input, setInput] = useState({ value: '', cursor: 0 });
-  const [mode, setMode] = useState<SessionModeId>('ask');
+  const [agent, setAgent] = useState<AgentPresetId>('ask');
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState('Starting ACP session...');
+  const [status, setStatus] = useState('Starting HTTP session...');
   const [debugInput, setDebugInput] = useState<string>('');
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [promptHistoryIndex, setPromptHistoryIndex] = useState(-1);
@@ -157,8 +157,8 @@ function App() {
       case 'status':
         setStatus(event.text);
         return;
-      case 'mode':
-        setMode(event.mode);
+      case 'agent':
+        setAgent(event.agent);
         return;
       case 'assistant_delta':
         setEntries((current) => {
@@ -295,11 +295,11 @@ function App() {
     setInput(inputRef.current);
     busyRef.current = true;
     setBusy(true);
-    setStatus(`Running in ${mode} mode...`);
+    setStatus(`Running with ${agent} agent...`);
 
     try {
       await controller.sendPrompt(text);
-      setStatus(`Ready in ${mode} mode`);
+      setStatus(`Ready with ${agent} agent`);
     } catch (error: unknown) {
       handleEvent({
         type: 'error',
@@ -382,9 +382,9 @@ function App() {
       return;
     }
 
-    if (action.type === 'toggle_mode' && controller && !busyRef.current) {
-      const targetMode = nextMode(mode);
-      void controller.setMode(targetMode).catch((error: unknown) => {
+    if (action.type === 'toggle_agent' && controller && !busyRef.current) {
+      const targetAgent = nextAgent(agent);
+      void controller.setAgent(targetAgent).catch((error: unknown) => {
         handleEvent({
           type: 'error',
           text: error instanceof Error ? error.message : String(error),
@@ -480,14 +480,14 @@ function App() {
     <Box flexDirection="column" paddingX={1}>
       <Box justifyContent="space-between">
         <Text color="cyanBright">picoagent</Text>
-        <Text color={mode === 'ask' ? 'yellowBright' : 'greenBright'}>{mode}</Text>
+        <Text color={agent === 'ask' ? 'yellowBright' : 'greenBright'}>{agent}</Text>
       </Box>
       <Box justifyContent="space-between">
         <Text color="gray">{status}</Text>
         <Text color="gray">{scrollMeta}</Text>
       </Box>
       {SHOW_INPUT_DEBUG ? <Text color="magentaBright">input {debugInput || '(none)'}</Text> : null}
-      <Text color="gray">Enter send, wheel or PgUp/PgDn/Home/End scroll, Up/Down prompt history, Tab mode, Ctrl+C quit</Text>
+      <Text color="gray">Enter send, wheel or PgUp/PgDn/Home/End scroll, Up/Down prompt history, Tab agent, Ctrl+C quit</Text>
       <Box marginTop={1}>
         <Text color="gray">{divider}</Text>
       </Box>

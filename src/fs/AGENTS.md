@@ -7,7 +7,7 @@ Local guidance for `src/fs`.
 ## Rules
 
 - Preserve session-root safety and predictable traversal behavior.
-- Keep helpers deterministic and free of ACP or UI concerns.
+- Keep helpers deterministic and free of HTTP or UI concerns.
 - Prefer small filesystem primitives over broad catch-all utilities.
 
 ## Read First

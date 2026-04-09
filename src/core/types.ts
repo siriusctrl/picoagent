@@ -38,7 +38,7 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 
-export type SessionModeId = 'ask' | 'exec';
+export type AgentPresetId = 'ask' | 'exec';
 
 export type ToolKind = 'read' | 'edit' | 'search' | 'execute' | 'other';
 
@@ -71,7 +71,7 @@ export interface ToolContext {
   cwd: string;
   roots: string[];
   controlRoot: string;
-  mode: SessionModeId;
+  agent: AgentPresetId;
   signal: AbortSignal;
   environment: AgentEnvironment;
 }
