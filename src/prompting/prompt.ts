@@ -1,40 +1,13 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { AgentPresetId, Tool } from '../core/types.js';
-import { DocMeta, scan } from './frontmatter.js';
+import { DocMeta } from './frontmatter.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULTS_DIR = join(__dirname, '..', '..', 'defaults');
-
-function readOptional(filePath: string): string | null {
-  if (!existsSync(filePath)) {
-    return null;
-  }
-
-  return readFileSync(filePath, 'utf8').trim();
-}
-
-function readOptionalMany(filePaths: string[]): string[] {
-  return filePaths.map((filePath) => readOptional(filePath)).filter((value): value is string => value !== null);
-}
-
-function scanMerged(subdir: string, workspaceDir: string): DocMeta[] {
-  const merged = new Map<string, DocMeta>();
-
-  for (const root of [DEFAULTS_DIR, workspaceDir]) {
-    try {
-      for (const doc of scan(join(root, subdir))) {
-        const name = typeof doc.frontmatter.name === 'string' ? doc.frontmatter.name : doc.path;
-        merged.set(name, doc);
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  return [...merged.values()];
+export interface ControlPromptSurface {
+  soul: string | null;
+  user: string | null;
+  agents: string | null;
+  memories: string[];
+  skills: DocMeta[];
+  agentsDocs: DocMeta[];
 }
 
 function buildSummary(title: string, docs: DocMeta[]): string | null {
@@ -73,31 +46,26 @@ function buildToolSummary(tools: Tool[]): string {
   return ['## Available Tools', ...tools.map((tool) => `- ${tool.name}: ${tool.description}`)].join('\n');
 }
 
-export function buildSystemPrompt(controlDir: string, agent: AgentPresetId, tools: Tool[]): string {
+export function buildSystemPrompt(surface: ControlPromptSurface, agent: AgentPresetId, tools: Tool[]): string {
   const sections: string[] = [];
-  sections.push(readOptional(join(controlDir, 'SOUL.md')) ?? 'You are a pragmatic coding agent.');
+  sections.push(surface.soul ?? 'You are a pragmatic coding agent.');
 
-  for (const fileName of ['USER.md', 'AGENTS.md']) {
-    const content = readOptional(join(controlDir, fileName));
+  for (const content of [surface.user, surface.agents]) {
     if (content) {
       sections.push(content);
     }
   }
 
-  const memories = readOptionalMany([
-    join(homedir(), '.pico', 'memory', 'memory.md'),
-    join(controlDir, '.pico', 'memory', 'memory.md'),
-  ]);
-  if (memories.length > 0) {
-    sections.push(`## Core Memory\n${memories.join('\n\n')}`);
+  if (surface.memories.length > 0) {
+    sections.push(`## Core Memory\n${surface.memories.join('\n\n')}`);
   }
 
-  const skills = buildSummary('Available Skills', scanMerged('skills', controlDir));
+  const skills = buildSummary('Available Skills', surface.skills);
   if (skills) {
     sections.push(skills);
   }
 
-  const agents = buildSummary('Available Agents', scanMerged('agents', controlDir));
+  const agents = buildSummary('Available Agents', surface.agentsDocs);
   if (agents) {
     sections.push(agents);
   }

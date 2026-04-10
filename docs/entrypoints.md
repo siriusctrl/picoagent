@@ -6,7 +6,7 @@ In practice that means:
 
 - sessions stay the context boundary
 - runs stay the execution boundary
-- resources stay readable through explicit HTTP or tool surfaces
+- filesystem-backed views stay readable through explicit HTTP or tool surfaces
 - sessions expose event streams to clients and a read-only file-view to tools
 
 ## HTTP Server

@@ -1,4 +1,5 @@
-import type { RunCommandRequest, RunCommandResult, SearchMatch } from './environment.js';
+import type { ExecutionRequest, ExecutionResult } from './execution.js';
+import type { SearchMatch } from './filesystem.js';
 
 export type FileViewTarget = 'workspace' | 'session';
 
@@ -41,5 +42,5 @@ export interface FileViewAccess {
   ): Promise<SearchMatch[]>;
   read(target: FileViewTarget, path: string, options?: FileViewReadOptions): Promise<string>;
   patch(target: FileViewTarget, operations: FilePatchOperation[]): Promise<FilePatchChange[]>;
-  cmd(target: FileViewTarget, request: Omit<RunCommandRequest, 'sessionId'>): Promise<RunCommandResult>;
+  cmd(target: FileViewTarget, request: Omit<ExecutionRequest, 'runId'>): Promise<ExecutionResult>;
 }

@@ -29,9 +29,11 @@ Scope:
 - assemble the runtime context
 - define the global tool registry
 - build session control snapshots from workspace control files
+- run the runtime engine and runtime service
+- own runtime store interfaces and implementations
 
 Rules:
-- keep business logic out of runtime context assembly
+- keep business logic in the runtime engine or runtime service, not in HTTP
 - prefer changing registry assembly over adding agent-specific special cases elsewhere
 - keep session control snapshot behavior explicit and file-driven
 
@@ -40,6 +42,9 @@ Read first:
 - `docs/runtime-model.md`
 - `src/runtime/index.ts`
 - `src/runtime/control-snapshot.ts`
+- `src/runtime/engine.ts`
+- `src/runtime/service.ts`
+- `src/runtime/runtime-store.ts`
 
 ## `src/http`
 
@@ -50,7 +55,7 @@ Rules:
 - keep the endpoint surface narrow and explicit
 - keep the resource model explicit: sessions, runs, and events
 - prefer direct request handlers over framework-looking abstractions
-- reuse the same runtime context and loop semantics as other transports
+- reuse the runtime service instead of reimplementing orchestration in transport code
 - add deterministic tests for endpoint and event contract changes
 
 Read first:

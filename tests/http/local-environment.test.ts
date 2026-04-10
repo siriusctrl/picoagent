@@ -3,8 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { LocalEnvironment } from '../../src/http/local-environment.js';
-import { WorkspaceFileSystem } from '../../src/fs/workspace-fs.js';
+import { LocalWorkspaceFileSystem, WorkspaceFileSystem } from '../../src/fs/workspace-fs.js';
+import { LocalExecutionBackend } from '../../src/runtime/local-execution-backend.js';
 
 test('local environment delegates file reads and writes to the workspace filesystem', async () => {
   const calls: string[] = [];
@@ -16,6 +16,7 @@ test('local environment delegates file reads and writes to the workspace filesys
     async writeTextFile(filePath, content) {
       calls.push(`write:${filePath}:${content}`);
     },
+    async deleteTextFile() {},
     async listFiles() {
       return [];
     },
@@ -24,9 +25,9 @@ test('local environment delegates file reads and writes to the workspace filesys
     },
   };
 
-  const environment = new LocalEnvironment(fileSystem);
-  assert.equal(await environment.readTextFile('session-1', '/workspace/a.ts', { line: 2, limit: 3 }), 'hello');
-  await environment.writeTextFile('session-1', '/workspace/a.ts', 'updated');
+  const filesystem = new LocalWorkspaceFileSystem(fileSystem);
+  assert.equal(await filesystem.readTextFile('/workspace/a.ts', { line: 2, limit: 3 }), 'hello');
+  await filesystem.writeTextFile('/workspace/a.ts', 'updated');
 
   assert.deepEqual(calls, [
     'read:/workspace/a.ts:2:3',
@@ -41,14 +42,9 @@ test('local environment deletes files directly from the filesystem', async () =>
     const filePath = join(root, 'delete-me.txt');
     writeFileSync(filePath, 'bye', 'utf8');
 
-    const environment = new LocalEnvironment({
-      readTextFile: async () => '',
-      writeTextFile: async () => {},
-      listFiles: async () => [],
-      searchText: async () => [],
-    });
+    const filesystem = new LocalWorkspaceFileSystem();
 
-    await environment.deleteTextFile('session-1', filePath);
+    await filesystem.deleteTextFile(filePath);
 
     assert.throws(() => readFileSync(filePath, 'utf8'));
   } finally {
@@ -63,6 +59,7 @@ test('local environment delegates listing and text search to the workspace files
       return '';
     },
     async writeTextFile() {},
+    async deleteTextFile() {},
     async listFiles(root, limit, receivedSignal) {
       assert.equal(root, '/workspace');
       assert.equal(limit, 2);
@@ -78,10 +75,25 @@ test('local environment delegates listing and text search to the workspace files
     },
   };
 
-  const environment = new LocalEnvironment(fileSystem);
+  const filesystem = new LocalWorkspaceFileSystem(fileSystem);
 
-  assert.deepEqual(await environment.listFiles('/workspace', 2, signal), ['/workspace/a.ts', '/workspace/b.ts']);
-  assert.deepEqual(await environment.searchText('/workspace', 'needle', 1, signal), [
+  assert.deepEqual(await filesystem.listFiles('/workspace', 2, signal), ['/workspace/a.ts', '/workspace/b.ts']);
+  assert.deepEqual(await filesystem.searchText('/workspace', 'needle', 1, signal), [
     { path: '/workspace/a.ts', line: 4, text: 'needle' },
   ]);
+});
+
+test('local execution backend runs a command and returns terminal metadata', async () => {
+  const execution = new LocalExecutionBackend();
+  const result = await execution.run({
+    runId: 'test-run',
+    command: 'node',
+    args: ['-e', 'console.log("hello")'],
+    outputByteLimit: 64000,
+  });
+
+  assert.equal(result.terminalId.startsWith('test-run:'), true);
+  assert.match(result.output, /hello/);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.signal, null);
 });

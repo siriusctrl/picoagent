@@ -1,4 +1,4 @@
-import type { SearchMatch } from '../core/environment.js';
+import type { SearchMatch } from '../core/filesystem.js';
 
 export interface TextBlob {
   path: string;

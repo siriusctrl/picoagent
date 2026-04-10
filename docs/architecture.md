@@ -8,7 +8,8 @@ The architectural goal is to keep three concerns explicit and separate:
 
 - `session` manages context
 - `runtime` executes one run through the agent loop
-- `resource` provides external files and, when supported, command execution
+- `filesystem` provides external file access
+- `execution backend` provides command execution
 
 ## Current Scope
 
@@ -92,6 +93,7 @@ Responsibilities:
 
 - assemble the general tool registry
 - build session control snapshots from the bound workspace
+- run the runtime engine that assembles prompts, refreshes control state, wires tools, and executes agent loops
 
 ### Runtime state
 
@@ -102,6 +104,7 @@ Current shape:
 - a file-backed runtime store owns sessions, runs, subscriptions, and append-only run events
 - each session stores a cached control snapshot derived from its bound workspace
 - sessions may also store checkpoints that compact older conversation history into summaries
+- a runtime engine owns run orchestration over the store, filesystem boundary, and execution backend
 - HTTP reads snapshots and event streams from that store
 - clients observe projections, not handler-local state
 - tools can browse a read-only session file-view built from summaries, checkpoints, and past runs
@@ -113,8 +116,8 @@ The separation is in place, but it is not complete yet.
 
 Known missing pieces:
 
-- the workspace filesystem boundary only covers tool-facing file access; control snapshot reads still use the local filesystem directly
-- `cmd` is still tied to the local OS process boundary rather than a general resource-backed execution boundary
+- session history is still projected through a dedicated read-only file-view rather than mounted as a general namespace filesystem
+- `cmd` is still tied to the local OS process boundary rather than a general execution backend family
 - event streaming exists for runs, but not yet for whole-session history
 
 ### `src/config`
@@ -168,14 +171,14 @@ Responsibilities:
 
 ## Runtime Hands
 
-The agent "hands" are represented by the environment boundary passed into the runtime.
+The agent "hands" are represented by two explicit boundaries passed into the runtime path.
 
 Rules:
 
-- the harness should depend on the `AgentEnvironment` interface, not one concrete local implementation
-- file-backed behavior inside that environment should depend on the `WorkspaceFileSystem` boundary
-- local filesystem and command execution are only the default implementation
-- future remote sandboxes should be a replacement implementation, not a rewrite of the HTTP layer
+- the harness should depend on a filesystem boundary for file-backed behavior
+- the harness should depend on an execution backend for command execution
+- local filesystem and local process execution are only the default implementations
+- future remote sandboxes should replace those boundaries, not rewrite the HTTP layer
 
 ## Dependency Rules
 

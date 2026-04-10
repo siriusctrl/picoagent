@@ -1,7 +1,5 @@
 import { spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
-import { AgentEnvironment, RunCommandRequest, RunCommandResult, SearchMatch } from '../core/environment.js';
-import { ReadTextFileOptions, LocalWorkspaceFileSystem, WorkspaceFileSystem } from '../fs/workspace-fs.js';
+import type { ExecutionBackend, ExecutionRequest, ExecutionResult } from '../core/execution.js';
 
 function trimOutput(value: string, byteLimit: number): { output: string; truncated: boolean } {
   const encoded = Buffer.from(value, 'utf8');
@@ -15,35 +13,9 @@ function trimOutput(value: string, byteLimit: number): { output: string; truncat
   };
 }
 
-export class LocalEnvironment implements AgentEnvironment {
-  constructor(private readonly fileSystem: WorkspaceFileSystem = new LocalWorkspaceFileSystem()) {}
-
-  async readTextFile(
-    _sessionId: string,
-    filePath: string,
-    options?: ReadTextFileOptions,
-  ): Promise<string> {
-    return this.fileSystem.readTextFile(filePath, options);
-  }
-
-  async writeTextFile(_sessionId: string, filePath: string, content: string): Promise<void> {
-    await this.fileSystem.writeTextFile(filePath, content);
-  }
-
-  async deleteTextFile(_sessionId: string, filePath: string): Promise<void> {
-    await fs.rm(filePath, { force: true });
-  }
-
-  listFiles(root: string, limit: number, signal: AbortSignal): Promise<string[]> {
-    return this.fileSystem.listFiles(root, limit, signal);
-  }
-
-  searchText(root: string, query: string, limit: number, signal: AbortSignal): Promise<SearchMatch[]> {
-    return this.fileSystem.searchText(root, query, limit, signal);
-  }
-
-  async runCommand(request: RunCommandRequest): Promise<RunCommandResult> {
-    const terminalId = `${request.sessionId}:${Date.now().toString(36)}`;
+export class LocalExecutionBackend implements ExecutionBackend {
+  async run(request: ExecutionRequest): Promise<ExecutionResult> {
+    const terminalId = `${request.runId}:${Date.now().toString(36)}`;
     const child = spawn(request.command, request.args ?? [], {
       cwd: request.cwd,
       env: process.env,

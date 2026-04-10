@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { join } from "path";
-import { parseFrontmatter, scan, load } from "../../src/prompting/frontmatter.js";
+import { parseFrontmatter, scan, load, scanMarkdownDocuments } from "../../src/prompting/frontmatter.js";
 
 const fixturesDir = join(process.cwd(), "tests/fixtures");
 
@@ -47,6 +47,31 @@ Body`;
   });
 
   describe("scan", () => {
+    it("should scan markdown documents without filesystem access", () => {
+      const results = scanMarkdownDocuments([
+        {
+          path: "memory/doc.md",
+          content: `---
+name: doc
+category: test
+---
+Body`,
+        },
+        {
+          path: "memory/skip.md",
+          content: `---
+name: other
+category: misc
+---
+Body`,
+        },
+      ], { category: "test" });
+
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].path, "memory/doc.md");
+      assert.strictEqual(results[0].frontmatter.name, "doc");
+    });
+
     it("should find markdown files in directory", () => {
       const results = scan(fixturesDir);
       // We expect doc1.md, doc2.md, subdir/doc3.md

@@ -33,7 +33,7 @@ Principles for agents contributing to this repository.
 
 Use docs to understand constraints first. Use source directories only after you know which boundary matters.
 
-Keep this file coarse-grained. Do not try to mirror every subdirectory here. For source-area guidance, read `src/AGENTS.md` and `docs/source-map.md`.
+Keep this file coarse-grained. Do not try to mirror every subdirectory here. For source-area guidance, read `docs/source-map.md`.
 
 ### Read these docs first
 
@@ -79,7 +79,7 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
 - Keep provider SDK imports out of `src/core`.
 - Keep tools focused: one tool, one capability.
 - Update docs when architecture, runtime behavior, or entrypoints change.
-- Prefer keeping detailed source-area guidance in `src/AGENTS.md` and `docs/source-map.md`.
+- Prefer keeping detailed source-area guidance in `docs/source-map.md`, not local `AGENTS.md` files under `src/`.
 
 ## Verification Requirements
 

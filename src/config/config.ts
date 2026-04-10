@@ -173,13 +173,7 @@ function mergedFrontmatter(workspaceDir: string): Record<string, unknown> {
   };
 }
 
-/**
- * Load config by shallow-merging `$HOME/.pico/config.jsonc` with
- * `<workspace>/.pico/config.jsonc`. Workspace fields override user fields.
- * If neither file exists, use built-in defaults.
- */
-export function loadConfig(workspaceDir: string): PicoConfig {
-  const raw = mergedFrontmatter(workspaceDir);
+function resolveConfig(workspaceDir: string, raw: Record<string, unknown>): PicoConfig {
   const providerValue = typeof raw.provider === 'string' ? raw.provider : defaultConfig().provider;
 
   if (!['anthropic', 'openai', 'gemini', 'echo'].includes(providerValue)) {
@@ -199,6 +193,27 @@ export function loadConfig(workspaceDir: string): PicoConfig {
     contextWindow: typeof raw.contextWindow === 'number' ? raw.contextWindow : defaultConfig().contextWindow,
     baseURL: typeof raw.baseURL === 'string' ? raw.baseURL : undefined,
   };
+}
+
+export function loadConfigFromContents(
+  workspaceDir: string,
+  sources: { userConfig?: string | null; workspaceConfig?: string | null },
+): PicoConfig {
+  const raw = {
+    ...(sources.userConfig ? parseJsonc(sources.userConfig, userConfigPath()) : {}),
+    ...(sources.workspaceConfig ? parseJsonc(sources.workspaceConfig, workspaceConfigPath(workspaceDir)) : {}),
+  };
+
+  return resolveConfig(workspaceDir, raw);
+}
+
+/**
+ * Load config by shallow-merging `$HOME/.pico/config.jsonc` with
+ * `<workspace>/.pico/config.jsonc`. Workspace fields override user fields.
+ * If neither file exists, use built-in defaults.
+ */
+export function loadConfig(workspaceDir: string): PicoConfig {
+  return resolveConfig(workspaceDir, mergedFrontmatter(workspaceDir));
 }
 
 /**

@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "fs";
-import { join, extname } from "path";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { extname, join } from "node:path";
 
 export interface DocMeta {
   path: string;
@@ -8,6 +8,11 @@ export interface DocMeta {
 
 export interface DocFull extends DocMeta {
   body: string;
+}
+
+export interface MarkdownDocument {
+  path: string;
+  content: string;
 }
 
 /**
@@ -76,69 +81,88 @@ export function parseFrontmatter(content: string): { frontmatter: Record<string,
   return { frontmatter, body };
 }
 
+function matchesPattern(frontmatter: Record<string, unknown>, pattern: Record<string, string>): boolean {
+  for (const [key, pat] of Object.entries(pattern)) {
+    const val = frontmatter[key];
+    if (val === undefined) {
+      return false;
+    }
+
+    const valStr = String(val);
+    if (pat.includes('*')) {
+      const regex = new RegExp(`^${pat.replace(/\*/g, '.*')}$`);
+      if (!regex.test(valStr)) {
+        return false;
+      }
+      continue;
+    }
+
+    if (valStr !== pat) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+export function scanMarkdownDocuments(documents: MarkdownDocument[], pattern?: Record<string, string>): DocMeta[] {
+  const results: DocMeta[] = [];
+
+  for (const document of documents) {
+    try {
+      const { frontmatter } = parseFrontmatter(document.content);
+      if (!pattern || matchesPattern(frontmatter, pattern)) {
+        results.push({
+          path: document.path,
+          frontmatter,
+        });
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return results.sort((a, b) => a.path.localeCompare(b.path));
+}
+
 /**
  * Scan a directory for markdown files and return their frontmatter.
  * Optionally filter by a pattern matching frontmatter fields.
  */
 export function scan(dir: string, pattern?: Record<string, string>): DocMeta[] {
-  const results: DocMeta[] = [];
-
   try {
-    const files = readdirSync(dir);
+    const documents: MarkdownDocument[] = [];
 
-    for (const file of files) {
-      const fullPath = join(dir, file);
-      const stat = statSync(fullPath);
+    function visit(currentDir: string): void {
+      const files = readdirSync(currentDir);
 
-      if (stat.isDirectory()) {
-        results.push(...scan(fullPath, pattern));
-      } else if (stat.isFile() && extname(file) === ".md") {
-        try {
-          const content = readFileSync(fullPath, "utf-8");
-          const { frontmatter } = parseFrontmatter(content);
-          
-          // Apply filter if pattern is provided
-          let match = true;
-          if (pattern) {
-            for (const [key, pat] of Object.entries(pattern)) {
-              const val = frontmatter[key];
-              if (val === undefined) {
-                match = false;
-                break;
-              }
-              
-              const valStr = String(val);
-              // Simple wildcard matching
-              if (pat.includes("*")) {
-                const regex = new RegExp("^" + pat.replace(/\*/g, ".*") + "$");
-                if (!regex.test(valStr)) {
-                  match = false;
-                  break;
-                }
-              } else if (valStr !== pat) {
-                match = false;
-                break;
-              }
-            }
-          }
+      for (const file of files) {
+        const fullPath = join(currentDir, file);
+        const stat = statSync(fullPath);
 
-          if (match) {
-            results.push({
+        if (stat.isDirectory()) {
+          visit(fullPath);
+          continue;
+        }
+
+        if (stat.isFile() && extname(file) === ".md") {
+          try {
+            documents.push({
               path: fullPath,
-              frontmatter
+              content: readFileSync(fullPath, "utf-8"),
             });
+          } catch {
+            continue;
           }
-        } catch (e) {
-          // Ignore read errors
         }
       }
     }
-  } catch (e) {
-    // Ignore directory errors (e.g. not found)
-  }
 
-  // Sort by path for determinism
-  return results.sort((a, b) => a.path.localeCompare(b.path));
+    visit(dir);
+    return scanMarkdownDocuments(documents, pattern);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -151,5 +175,14 @@ export function load(filePath: string): DocFull {
     path: filePath,
     frontmatter,
     body
+  };
+}
+
+export function loadMarkdownDocument(document: MarkdownDocument): DocFull {
+  const { frontmatter, body } = parseFrontmatter(document.content);
+  return {
+    path: document.path,
+    frontmatter,
+    body,
   };
 }

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FileRuntimeStore, InMemoryRuntimeStore } from '../../src/http/runtime-store.js';
+import { FileRuntimeStore, InMemoryRuntimeStore } from '../../src/runtime/runtime-store.js';
 
 const controlConfig = {
   provider: 'echo' as const,

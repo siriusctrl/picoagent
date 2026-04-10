@@ -1,7 +1,7 @@
 import { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { SearchMatch } from '../core/environment.js';
+import type { SearchMatch } from '../core/filesystem.js';
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist']);
 

@@ -6,11 +6,12 @@ Simple, controllable agent harness with one HTTP API.
 
 `picoagent` is a small TypeScript codebase for building a controllable agent harness.
 
-The core design goal is to keep three concerns explicit and separate:
+The core design goal is to keep four concerns explicit and separate:
 
 - context management through sessions
-- execution through the agent runtime
-- file or command access through resources and tools
+- execution through the runtime engine
+- file access through filesystem-like boundaries and tools
+- command execution through an execution backend
 
 The current reference shape is:
 
@@ -30,15 +31,16 @@ The point is to keep the harness itself legible and fully controllable first.
 
 What is already present:
 
-- explicit session objects for context management
+- explicit session objects for persistent context management
 - one shared runtime loop model for runs
 - file-backed runtime state under `.pico/runtime/`
 - a model-facing session file-view for browsing compacted history without forcing it all into the live prompt
+- a runtime engine that owns prompt assembly, control refresh, tool wiring, and run orchestration
 
 What is still incomplete:
 
-- control snapshot reads still come from the local filesystem directly
-- `cmd` still assumes a local OS process boundary
+- session history is still exposed as a dedicated read-only projection rather than a general mounted filesystem namespace
+- `cmd` still uses the local process backend by default
 - event streaming exists per run, but not yet for the whole session
 
 ## Quick Start
@@ -112,8 +114,9 @@ The built-in `echo` provider streams back `received: <your prompt>` and does not
 The important split is:
 
 - `session` manages context
-- `runtime` executes runs
-- `resource` provides files and, when supported, command execution
+- `runtime` assembles prompts, decides when to compact, and executes runs
+- `filesystem` provides workspace and other file-backed inputs
+- `execution backend` runs commands and other executable work
 
 HTTP is the main surface that ties those pieces together without collapsing them into one module.
 For model-side history lookup, a session also exposes a read-only file-view built from summaries, checkpoints, and past runs.
@@ -133,7 +136,9 @@ Agent presets do not create separate runtimes. They only choose which tools a ru
 
 ### Workspace
 
-The current directory is the workspace. It contains both ordinary files and control files such as:
+The current directory is the workspace. It is the main writable filesystem the runtime and tools operate on.
+
+It contains both ordinary files and control files such as:
 
 - `.pico/config.jsonc`
 - `AGENTS.md`
@@ -145,16 +150,21 @@ The current directory is the workspace. It contains both ordinary files and cont
 
 ### Session
 
-A session is a persistent context container bound to one workspace root.
+A session is a persistent context container.
+
+In the current implementation, a session is created against one workspace root. That binding is an implementation choice for the local harness, not the main semantic point of the abstraction.
 
 Each session stores:
 
 - a default agent preset
 - conversation history
-- a cached control snapshot resolved from workspace control files
+- cached control state that was resolved from workspace and host control files for the latest run
 - optional checkpoints created by compaction
 
-Before a session run starts, the server checks whether the workspace changed. If it did, the session control snapshot is refreshed automatically.
+The session is not responsible for assembling the final prompt.
+Instead, the runtime reads session state, reloads control inputs when needed, and assembles the prompt for one run.
+
+Before a session run starts, the runtime checks whether the workspace changed. If it did, the cached control state is refreshed automatically.
 
 ### Session History
 
@@ -172,7 +182,8 @@ The model can browse session history through the session file-view with:
 - `grep`
 - `read`
 
-That file-view is read-only. Raw event logs and compaction stay on the session or HTTP side, not the model tool surface.
+That file-view is read-only. It is a projection of session state for model-side inspection, not a second writable workspace.
+Raw event logs and compaction stay on the session or HTTP side, not the model tool surface.
 For the executable workspace target, `grep` prefers `rg` when available and falls back to the built-in file-view search when it is not.
 
 ## HTTP API
@@ -290,7 +301,7 @@ npm run start:tui
 
 ```text
 src/
-  runtime/    runtime context assembly and session control snapshots
+  runtime/    runtime context assembly, control snapshots, and runtime engine orchestration
   core/       loop, provider contract, tool registry, shared types
   http/       async HTTP server for runs, sessions, and events
   tools/      LLM-facing glob, grep, read, patch, and cmd tools

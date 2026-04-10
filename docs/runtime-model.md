@@ -3,15 +3,17 @@
 The runtime model is built around a simple split:
 
 - `session` owns context
-- `resource` provides file-backed inputs and, when supported, command execution
+- `runtime` assembles prompts, decides when to compact, and executes runs
+- `filesystem` provides file-backed inputs
+- `execution backend` provides command execution
 - `run` is one execution through the runtime
 - a session may also project a read-only file-view so the model can inspect history without forcing everything into the live prompt
 
-## Resource
+## Filesystem
 
-The current concrete resource is the workspace rooted at the directory where you launch `picoagent`.
+The current concrete filesystem is the workspace rooted at the directory where you launch `picoagent`.
 
-It owns prompt framing and local configuration:
+It is the main writable file-backed surface for both prompt inputs and tool access:
 - `.pico/config.jsonc`
 - `AGENTS.md`
 - `SOUL.md`
@@ -22,31 +24,37 @@ It owns prompt framing and local configuration:
 - `.pico/runtime/`
 
 This workspace is the current source of intent and the current executable target for `cmd`.
+Host-level defaults such as `$HOME/.pico/*` and bundled defaults are also read during control loading, but they are not modeled as a separate mounted surface in the current runtime.
 
 ## Session
 
 Each conversation is one HTTP session.
 
 A session carries:
-- bound workspace root
+- bound workspace root in the current local implementation
 - optional additional roots
 - conversation history
 - default agent preset
-- cached control snapshot
+- cached control state from the latest successful load
 - optional active checkpoint plus recent tail messages
 
-The control snapshot is derived from workspace control files such as:
+The control state is derived from workspace and host control files such as:
 - `.pico/config.jsonc`
 - `AGENTS.md`
 - `SOUL.md`
 - `USER.md`
 - `.pico/memory/`
+- `$HOME/.pico/config.jsonc`
+- `$HOME/.pico/memory/`
 - `skills/`
 - `agents/`
 
 Each run records its own agent preset.
 Session runs inherit the session default unless the request overrides it.
-Before a session run starts, the runtime checks whether the bound workspace changed and refreshes the control snapshot automatically if needed.
+Before a session run starts, the runtime checks whether the bound workspace changed and refreshes the cached control state automatically if needed.
+
+The session is not responsible for prompt assembly.
+The runtime reads session state, decides whether compaction is needed, reloads control inputs when needed, and builds the final prompt for one run.
 
 There is no worker graph behind the session.
 There is one agent loop for the session.
@@ -58,7 +66,7 @@ The session is not owned by one request handler.
 Runtime state lives behind a store boundary and is projected back out as session and run snapshots.
 
 What is still missing:
-- control snapshots are still rebuilt from the local filesystem rather than a general resource contract
+- session history is still projected through a dedicated read-only file-view rather than a general mounted filesystem namespace
 
 ## Session History
 
@@ -75,6 +83,7 @@ For model-side inspection, the session exposes a read-only file-view:
 - `checkpoints/<id>.md`
 - `runs/<id>.md`
 
+This projection is for browsing context, not for representing the session itself as a writable filesystem.
 Raw event logs remain available to clients over HTTP session resources and run event endpoints.
 
 ## Agent Presets
@@ -137,15 +146,15 @@ They are the shared source for:
 Interactive clients should still primarily follow one run at a time.
 Session-wide event feeds can exist later without changing the underlying runtime model.
 
-## Environment Boundary
+## Runtime Boundaries
 
 For tool execution:
-- file reads and writes go through the environment and its workspace filesystem implementation
-- command execution goes through local command execution
+- file reads and writes go through the filesystem boundary
+- command execution goes through the execution backend
 - filesystem traversal and text search use local deterministic helpers
 
 Today this means:
-- tool-facing resources can be virtualized behind the workspace filesystem boundary
+- tool-facing files can be virtualized behind the workspace filesystem boundary
 - sessions can reuse the same file-view logic for read-only history inspection
-- session control snapshots are still built from the local workspace directly
+- control loading reads workspace files through the injected filesystem boundary and host defaults through the local host filesystem
 - `cmd` is still an OS process boundary rather than a virtual workspace command layer
