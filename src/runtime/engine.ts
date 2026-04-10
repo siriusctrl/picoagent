@@ -3,7 +3,7 @@ import { isAbsolute, relative } from 'node:path';
 import { buildSessionControlSnapshot, computeControlVersion, SessionControlSnapshot } from './control-snapshot.js';
 import type { ExecutionBackend } from '../core/execution.js';
 import type { MutableFilesystem, SearchMatch } from '../core/filesystem.js';
-import { FilePatchChange, FilePatchOperation, FileViewAccess, FileViewTarget } from '../core/file-view.js';
+import { FilePatchChange, FilePatchOperation, FileViewAccess, FileViewTarget, NamespaceLikePath } from '../core/file-view.js';
 import { runAgentLoop } from '../core/loop.js';
 import { AgentPresetId, AssistantMessage, Message } from '../core/types.js';
 import { filterGlob, grepTextBlobs, TextBlob } from '../fs/file-view.js';
@@ -111,6 +111,7 @@ export class RuntimeEngine {
       filesystem: options.filesystem,
       root: '.',
       writable: true,
+      executable: true,
     }]);
   }
 
@@ -224,7 +225,58 @@ export class RuntimeEngine {
     });
   }
 
-  private fileViewNamespace(sessionId?: string): Namespace {
+  private fileView(
+    runId: string,
+    cwd: string,
+    roots: string[],
+    signal: AbortSignal,
+    sessionId?: string,
+  ): FileViewAccess {
+    const read: FileViewAccess['read'] = (
+      targetOrPath: FileViewTarget | NamespaceLikePath,
+      pathOrOptions?: string | { line?: number; limit?: number },
+      options?: { line?: number; limit?: number },
+    ) => {
+      if (this.isNamespaceLikePath(targetOrPath)) {
+        if (typeof pathOrOptions === 'string') {
+          throw new RuntimeValidationError(`Namespace path read does not accept a file argument: ${targetOrPath}`);
+        }
+
+        return this.readFileView(targetOrPath, pathOrOptions, cwd, roots, sessionId, options);
+      }
+
+      if (typeof pathOrOptions === 'string') {
+        return this.readFileView(targetOrPath, pathOrOptions, cwd, roots, sessionId, options);
+      }
+
+      return this.readFileView(targetOrPath, undefined, cwd, roots, sessionId, pathOrOptions);
+    };
+
+    const patch: FileViewAccess['patch'] = (
+      targetOrPath: FileViewTarget | NamespaceLikePath | FilePatchOperation[] | undefined,
+      operations?: FilePatchOperation[],
+    ) => {
+      if (Array.isArray(targetOrPath)) {
+        return this.patchFileView(undefined, targetOrPath, cwd, roots, sessionId);
+      }
+
+      if (!operations) {
+        throw new RuntimeValidationError('patch requires operations');
+      }
+
+      return this.patchFileView(targetOrPath, operations, cwd, roots, sessionId);
+    };
+
+    return {
+      glob: async (target, pattern, limit) => this.globFileView(target, pattern, cwd, roots, signal, sessionId, limit),
+      grep: async (target, query, options) => this.grepFileView(target, query, runId, cwd, roots, signal, sessionId, options),
+      read,
+      patch,
+      cmd: async (target, request) => this.cmdFileView(target, request, runId, cwd, roots, sessionId),
+    };
+  }
+
+  private getActiveFileViewNamespace(sessionId?: string): Namespace {
     if (!sessionId) {
       return this.namespace;
     }
@@ -239,24 +291,99 @@ export class RuntimeEngine {
     ]);
   }
 
-  private fileView(
-    runId: string,
+  private resolveFileViewTarget(targetOrPath: FileViewTarget | NamespaceLikePath, sessionId?: string): { target: FileViewTarget; relativePath: string } {
+    if (this.isNamespaceLikePath(targetOrPath)) {
+      const trimmed = targetOrPath.replace(/^\/+|\/+$/g, '');
+      const slash = trimmed.indexOf('/');
+      const mountName = slash === -1 ? trimmed : trimmed.slice(0, slash);
+      if (mountName === 'session') {
+        this.requireSessionId(sessionId);
+      }
+
+      const namespace = this.getActiveFileViewNamespace(sessionId);
+      const parsed = namespace.resolveNamespacePath(targetOrPath);
+
+      if (parsed.mountName !== 'workspace' && parsed.mountName !== 'session') {
+        throw new RuntimeValidationError(`Unsupported file-view namespace: ${parsed.mountName}`);
+      }
+
+      if (parsed.mountName === 'session') {
+        this.requireSessionId(sessionId);
+      }
+
+      return {
+        target: parsed.mountName,
+        relativePath: parsed.relativePath,
+      };
+    }
+
+    if (targetOrPath === 'session') {
+      this.requireSessionId(sessionId);
+      return {
+        target: 'session',
+        relativePath: '.',
+      };
+    }
+
+    if (targetOrPath === 'workspace') {
+      return {
+        target: 'workspace',
+        relativePath: '.',
+      };
+    }
+
+    throw new RuntimeValidationError(`Unsupported file-view target: ${targetOrPath}`);
+  }
+
+  private isNamespaceLikePath(value: string): value is NamespaceLikePath {
+    return value.startsWith('/');
+  }
+
+  private resolveFilePath(
+    namespace: FileViewTarget,
+    pathValue: string,
     cwd: string,
     roots: string[],
-    signal: AbortSignal,
+  ): string {
+    if (namespace === 'workspace') {
+      return resolveSessionPath(pathValue, cwd, roots);
+    }
+
+    return pathValue;
+  }
+
+  private resolveNamespacePathFilter(
+    namespace: FileViewTarget,
+    pathValue: string | undefined,
     sessionId?: string,
-  ): FileViewAccess {
-    return {
-      glob: async (target, pattern, limit) => this.globFileView(target, pattern, cwd, roots, signal, sessionId, limit),
-      grep: async (target, query, options) => this.grepFileView(target, query, runId, cwd, roots, signal, sessionId, options),
-      read: async (target, path, options) => this.readFileView(target, path, cwd, roots, sessionId, options),
-      patch: async (target, operations) => this.patchFileView(target, operations, cwd, roots),
-      cmd: async (target, request) => this.cmdFileView(target, request, runId, cwd, roots),
-    };
+  ): string | undefined {
+    if (!pathValue) {
+      return undefined;
+    }
+
+    if (this.isNamespaceLikePath(pathValue)) {
+      const parsed = this.resolveFileViewTarget(pathValue, sessionId);
+      if (parsed.target !== namespace) {
+        throw new RuntimeValidationError(`Cross-namespace file path is not supported: ${pathValue}`);
+      }
+
+      return parsed.relativePath;
+    }
+
+    return pathValue;
+  }
+
+  private joinRelativePaths(...parts: string[]): string {
+    const normalized = parts
+      .filter((part) => part !== '.')
+      .map((part) => part.replace(/^\/+|\/+$/g, ''))
+      .filter((part) => part.length > 0);
+
+    return normalized.length === 0 ? '' : normalized.join('/');
   }
 
   private async globFileView(
-    target: FileViewTarget,
+    targetOrPath: FileViewTarget | NamespaceLikePath,
     pattern: string,
     cwd: string,
     roots: string[],
@@ -264,16 +391,19 @@ export class RuntimeEngine {
     sessionId?: string,
     limit = 200,
   ): Promise<string[]> {
-    if (target === 'session') {
-      const namespace = this.fileViewNamespace(this.requireSessionId(sessionId));
-      return filterGlob(await namespace.listFiles('session', '.', 5000, signal), pattern, limit);
+    const resolved = this.resolveFileViewTarget(targetOrPath, sessionId);
+    const namespacedPattern = this.joinRelativePaths(resolved.relativePath, pattern);
+
+    if (resolved.target === 'session') {
+      const namespace = this.getActiveFileViewNamespace(this.requireSessionId(sessionId));
+      return filterGlob(await namespace.listFiles('session', '.', 5000, signal), namespacedPattern, limit);
     }
 
-    return filterGlob(await this.listWorkspaceFileViewPaths(cwd, roots, signal), pattern, limit);
+    return filterGlob(await this.listWorkspaceFileViewPaths(cwd, roots, signal), namespacedPattern, limit);
   }
 
   private async grepFileView(
-    target: FileViewTarget,
+    targetOrPath: FileViewTarget | NamespaceLikePath,
     query: string,
     runId: string,
     cwd: string,
@@ -282,55 +412,125 @@ export class RuntimeEngine {
     sessionId?: string,
     options?: { path?: string; limit?: number; context?: number },
   ): Promise<SearchMatch[]> {
-    if (target === 'workspace') {
-      const ripgrepMatches = await this.tryGrepWorkspaceWithRipgrep(runId, cwd, roots, query, options);
+    const resolved = this.resolveFileViewTarget(targetOrPath, sessionId);
+    const pathFilter = this.joinRelativePaths(
+      resolved.relativePath === '.' ? '' : resolved.relativePath,
+      this.resolveNamespacePathFilter(resolved.target, options?.path, sessionId) ?? '',
+    );
+    const resolvedOptions = {
+      ...options,
+      path: pathFilter || undefined,
+    };
+
+    if (resolved.target === 'workspace') {
+      const ripgrepMatches = await this.tryGrepWorkspaceWithRipgrep(runId, cwd, roots, query, resolvedOptions);
       if (ripgrepMatches) {
         return ripgrepMatches;
       }
     }
 
-    const blobs = target === 'workspace'
-      ? await this.readWorkspaceFileViewBlobs(cwd, roots, signal, options?.path)
-      : await this.readSessionFileViewBlobs(this.requireSessionId(sessionId), signal, options?.path);
+    const blobs = resolved.target === 'workspace'
+      ? await this.readWorkspaceFileViewBlobs(cwd, roots, signal, resolvedOptions.path)
+      : await this.readSessionFileViewBlobs(this.requireSessionId(sessionId), signal, resolvedOptions.path);
 
-    return grepTextBlobs(blobs, query, options?.limit ?? 50, options?.context ?? 0);
+    return grepTextBlobs(blobs, query, resolvedOptions.limit ?? 50, resolvedOptions.context ?? 0);
   }
 
   private async readFileView(
-    target: FileViewTarget,
-    filePath: string,
+    targetOrPath: FileViewTarget | NamespaceLikePath,
+    filePathOrOptions: string | { line?: number; limit?: number } | undefined,
     cwd: string,
     roots: string[],
     sessionId?: string,
     options?: { line?: number; limit?: number },
   ): Promise<string> {
-    const namespace = this.fileViewNamespace(target === 'session' ? this.requireSessionId(sessionId) : undefined);
-    if (target === 'workspace') {
-      return namespace.readTextFile('workspace', resolveSessionPath(filePath, cwd, roots), options);
+    const resolved = this.resolveFileViewTarget(targetOrPath, sessionId);
+    const namespace = this.getActiveFileViewNamespace(
+      resolved.target === 'session' ? this.requireSessionId(sessionId) : undefined,
+    );
+    let rawPath = resolved.relativePath;
+    let readOptions = options;
+
+    if (this.isNamespaceLikePath(targetOrPath)) {
+      rawPath = resolved.relativePath;
+      if (typeof filePathOrOptions === 'object' && filePathOrOptions !== null) {
+        readOptions = filePathOrOptions;
+      }
+    } else if (typeof filePathOrOptions === 'string') {
+      rawPath = filePathOrOptions;
+    } else if (typeof filePathOrOptions === 'object' && filePathOrOptions !== null) {
+      readOptions = filePathOrOptions;
     }
 
-    return namespace.readTextFile('session', filePath, options);
+    const resolvedPath = resolved.target === 'workspace'
+      ? this.resolveFilePath('workspace', rawPath, cwd, roots)
+      : rawPath;
+
+    if (resolved.target === 'workspace') {
+      return namespace.readTextFile('workspace', resolvedPath, readOptions);
+    }
+
+    return namespace.readTextFile('session', resolvedPath, readOptions);
   }
 
   private async patchFileView(
-    target: FileViewTarget,
+    targetOrPath: FileViewTarget | NamespaceLikePath | undefined,
     operations: FilePatchOperation[],
     cwd: string,
     roots: string[],
+    sessionId?: string,
   ): Promise<FilePatchChange[]> {
-    if (target !== 'workspace') {
+    const namespace = this.getActiveFileViewNamespace(sessionId);
+    const baseTarget = targetOrPath
+      ? this.isNamespaceLikePath(targetOrPath)
+        ? this.resolveFileViewTarget(targetOrPath, sessionId).target
+        : targetOrPath
+      : 'workspace';
+
+    const parsedOperations = operations.map((operation) => {
+      const resolved = operation.path.startsWith('/')
+        ? this.resolveFileViewTarget(operation.path as NamespaceLikePath, sessionId)
+        : { target: baseTarget, relativePath: operation.path };
+
+      if (baseTarget && resolved.target !== baseTarget) {
+        throw new RuntimeValidationError('patch target must be consistent across operations');
+      }
+
+      return {
+        operation,
+        target: resolved.target,
+        relativePath: resolved.relativePath,
+      };
+    });
+
+    if (parsedOperations.length === 0) {
+      return [];
+    }
+
+    const target = parsedOperations[0].target;
+    if (parsedOperations.some((entry) => entry.target !== target)) {
+      throw new RuntimeValidationError('All patch operations must target the same namespace');
+    }
+
+    if (target === 'session') {
       throw new RuntimeValidationError('patch is only supported for the workspace target');
+    }
+
+    const targetMount = namespace.mount(target);
+
+    if (targetMount.writable === false) {
+      throw new RuntimeValidationError(`patch is not supported for namespace '${target}'`);
     }
 
     const state = new Map<string, { exists: boolean; content: string }>();
 
-    for (const operation of operations) {
-      const fullPath = resolveSessionPath(operation.path, cwd, roots);
+    for (const item of parsedOperations) {
+      const fullPath = this.resolveFilePath(target, item.relativePath, cwd, roots);
       if (!state.has(fullPath)) {
         try {
           state.set(fullPath, {
             exists: true,
-            content: await this.namespace.readTextFile('workspace', fullPath),
+            content: await namespace.readTextFile(target, fullPath),
           });
         } catch {
           state.set(fullPath, {
@@ -341,9 +541,10 @@ export class RuntimeEngine {
       }
 
       const current = state.get(fullPath)!;
+      const operation = item.operation;
       if (operation.type === 'create') {
         if (current.exists) {
-          throw new RuntimeValidationError(`File already exists: ${operation.path}`);
+          throw new RuntimeValidationError(`File already exists: ${item.relativePath}`);
         }
 
         state.set(fullPath, { exists: true, content: operation.content });
@@ -352,7 +553,7 @@ export class RuntimeEngine {
 
       if (operation.type === 'delete') {
         if (!current.exists) {
-          throw new RuntimeValidationError(`File not found: ${operation.path}`);
+          throw new RuntimeValidationError(`File not found: ${item.relativePath}`);
         }
 
         state.set(fullPath, { exists: false, content: current.content });
@@ -364,7 +565,7 @@ export class RuntimeEngine {
       }
 
       if (!current.content.includes(operation.oldText)) {
-        throw new RuntimeValidationError(`Text not found in ${operation.path}`);
+        throw new RuntimeValidationError(`Text not found in ${item.relativePath}`);
       }
 
       state.set(fullPath, {
@@ -376,8 +577,8 @@ export class RuntimeEngine {
     }
 
     const changes: FilePatchChange[] = [];
-    for (const operation of operations) {
-      const fullPath = resolveSessionPath(operation.path, cwd, roots);
+    for (const item of parsedOperations) {
+      const fullPath = this.resolveFilePath(target, item.relativePath, cwd, roots);
       const finalState = state.get(fullPath)!;
       if (changes.some((change) => change.path === fullPath)) {
         continue;
@@ -385,18 +586,18 @@ export class RuntimeEngine {
 
       let oldText = '';
       try {
-        oldText = await this.namespace.readTextFile('workspace', fullPath);
+        oldText = await namespace.readTextFile(target, fullPath);
       } catch {
         oldText = '';
       }
 
       if (!finalState.exists) {
-        await this.namespace.deleteTextFile('workspace', fullPath);
+        await namespace.deleteTextFile(target, fullPath);
         changes.push({ path: fullPath, action: 'delete', oldText, newText: '' });
         continue;
       }
 
-      await this.namespace.writeTextFile('workspace', fullPath, finalState.content);
+      await namespace.writeTextFile(target, fullPath, finalState.content);
       changes.push({
         path: fullPath,
         action: oldText === '' ? 'create' : 'update',
@@ -409,21 +610,42 @@ export class RuntimeEngine {
   }
 
   private cmdFileView(
-    target: FileViewTarget,
+    targetOrPath: FileViewTarget | NamespaceLikePath,
     request: { command: string; args?: string[]; cwd?: string; outputByteLimit?: number },
     runId: string,
     cwd: string,
     roots: string[],
+    sessionId?: string,
   ) {
-    if (target !== 'workspace') {
+    const resolved = this.resolveFileViewTarget(targetOrPath, sessionId);
+    if (resolved.target !== 'workspace') {
       throw new RuntimeValidationError('cmd is only supported for the workspace target');
     }
+
+    const namespace = this.getActiveFileViewNamespace();
+    const targetMount = namespace.mount('workspace');
+    if (targetMount.writable === false) {
+      throw new RuntimeValidationError('cmd is only supported for the workspace namespace');
+    }
+
+    if (targetMount.executable === false) {
+      throw new RuntimeValidationError('cmd is not enabled for this namespace');
+    }
+
+    const effectivePath = this.joinRelativePaths(
+      resolved.relativePath === '.' ? '' : resolved.relativePath,
+      this.resolveNamespacePathFilter('workspace', request.cwd, sessionId) ?? '',
+    );
+
+    const commandCwd = effectivePath
+      ? this.resolveFilePath('workspace', effectivePath, cwd, roots)
+      : cwd;
 
     return this.options.executionBackend.run({
       runId,
       command: request.command,
       args: request.args,
-      cwd: request.cwd ? resolveSessionPath(request.cwd, cwd, roots) : cwd,
+      cwd: commandCwd,
       outputByteLimit: request.outputByteLimit,
     });
   }
@@ -560,7 +782,7 @@ export class RuntimeEngine {
     signal: AbortSignal,
     pathFilter?: string,
   ): Promise<TextBlob[]> {
-    const namespace = this.fileViewNamespace(sessionId);
+    const namespace = this.getActiveFileViewNamespace(sessionId);
     const paths = await namespace.listFiles('session', '.', 5000, signal);
     const selected = pathFilter
       ? paths.filter((candidate) => candidate === pathFilter || candidate.startsWith(`${pathFilter}/`))

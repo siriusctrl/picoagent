@@ -6,6 +6,7 @@ export interface NamespaceMount {
   filesystem: Filesystem;
   root: string;
   writable?: boolean;
+  executable?: boolean;
 }
 
 function normalizeMountName(name: string): string {
@@ -20,6 +21,10 @@ function normalizeMountName(name: string): string {
 function normalizeVirtualPath(inputPath: string): string {
   const normalized = inputPath.replace(/\\/g, '/').replace(/^\/+/, '');
   return normalized || '.';
+}
+
+function normalizeNamespacePath(namespacePath: string): string {
+  return namespacePath.replace(/\\/g, '/');
 }
 
 function toMountedPath(root: string, relativePath: string): string {
@@ -49,6 +54,33 @@ export class Namespace {
         name: normalizeMountName(mount.name),
       });
     }
+  }
+
+  resolveNamespacePath(namespacePath: string): { mountName: string; mount: NamespaceMount; relativePath: string; mountedPath: string } {
+    const normalized = normalizeNamespacePath(namespacePath);
+    if (!normalized.startsWith('/')) {
+      throw new Error(`Namespace path must be absolute: ${namespacePath}`);
+    }
+
+    const trimmed = normalized.replace(/^\/+/, '');
+    const splitIndex = trimmed.indexOf('/');
+    const mountName = normalizeMountName(splitIndex === -1 ? trimmed : trimmed.slice(0, splitIndex));
+    const relativePath = splitIndex === -1 ? '.' : normalizeVirtualPath(trimmed.slice(splitIndex + 1));
+    const mountedPath = this.resolvePath(mountName, relativePath);
+
+    return {
+      mountName,
+      mount: this.mount(mountName),
+      relativePath,
+      mountedPath,
+    };
+  }
+
+  toNamespacePath(name: string, mountedPath: string): string {
+    const mount = this.mount(name);
+    const relativePath = fromMountedPath(mount.root, mountedPath);
+
+    return relativePath === '.' ? `/${mount.name}` : `/${mount.name}/${relativePath}`;
   }
 
   mount(name: string): NamespaceMount {

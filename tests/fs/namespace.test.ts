@@ -47,3 +47,47 @@ test('namespace preserves absolute paths for mounted filesystem access', async (
     'search:/tmp/project/src/a.ts:needle',
   ]);
 });
+
+test('namespace resolves absolute-like namespace paths', async () => {
+  const filesystem: MutableFilesystem = {
+    async readTextFile(filePath) {
+      return filePath;
+    },
+    async writeTextFile(filePath, content) {},
+    async deleteTextFile(filePath) {},
+    async listFiles(root, limit, signal) {
+      return [];
+    },
+    async searchText(root, query, signal, options) {
+      return [];
+    },
+  };
+
+  const namespace = new Namespace([{ name: 'workspace', filesystem, root: '.', writable: true }]);
+  const result = namespace.resolveNamespacePath('/workspace/src/main.ts');
+
+  assert.equal(result.mountName, 'workspace');
+  assert.equal(result.relativePath, 'src/main.ts');
+});
+
+test('namespace rejects unknown namespace path mount', async () => {
+  const filesystem = {
+    async readTextFile(filePath: string) {
+      return '';
+    },
+    async writeTextFile(filePath: string, content: string) {},
+    async deleteTextFile(filePath: string) {},
+    async listFiles(root: string, limit: number, signal: AbortSignal) {
+      return [];
+    },
+    async searchText(root: string, query: string, limit: number, signal: AbortSignal) {
+      return [];
+    },
+  };
+
+  const namespace = new Namespace([{ name: 'workspace', filesystem, root: '.' }]);
+
+  assert.throws(() => {
+    namespace.resolveNamespacePath('/ghost/path');
+  }, /Unknown namespace mount: ghost/);
+});
