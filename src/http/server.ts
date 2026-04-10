@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { isAbsolute, join, relative } from 'node:path';
+import { createAdaptorServer } from '@hono/node-server';
+import { $, OpenAPIHono } from '@hono/zod-openapi';
 import { buildSessionControlSnapshot, computeControlVersion, SessionControlSnapshot } from '../runtime/control-snapshot.js';
 import { createRuntimeContext } from '../runtime/index.js';
 import type { AgentEnvironment, SearchMatch } from '../core/environment.js';
@@ -11,7 +13,19 @@ import { filterGlob, grepTextBlobs, TextBlob } from '../fs/file-view.js';
 import { relativeToCwd, resolveSessionPath } from '../fs/filesystem.js';
 import { createProvider } from '../providers/index.js';
 import { LocalEnvironment } from './local-environment.js';
-import { buildOpenApiDocument } from './openapi.js';
+import {
+  buildOpenApiDocument,
+  compactSessionRoute,
+  createSessionRoute,
+  createSessionRunRoute,
+  createStandaloneRunRoute,
+  getRunEventsRoute,
+  getRunRoute,
+  getSessionRoute,
+  listSessionResourcesRoute,
+  readSessionResourceRoute,
+  setSessionAgentRoute,
+} from './openapi.js';
 import {
   EmittedRunEvent,
   FileRuntimeStore,
@@ -33,9 +47,24 @@ export interface HttpServerOptions {
   persistentRuntime?: boolean;
 }
 
-class NotFoundError extends Error {}
-class ConflictError extends Error {}
-class ValidationError extends Error {}
+export interface HttpAppOptions {
+  cwd?: string;
+  environment?: AgentEnvironment;
+  runtimeRoot?: string;
+  persistentRuntime?: boolean;
+}
+
+class NotFoundError extends Error {
+  readonly status = 404;
+}
+
+class ConflictError extends Error {
+  readonly status = 409;
+}
+
+class ValidationError extends Error {
+  readonly status = 400;
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -48,72 +77,46 @@ function assistantText(message: AssistantMessage): string {
     .join('');
 }
 
-async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-
-  if (chunks.length === 0) {
-    return {};
-  }
-
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  } catch (error: unknown) {
-    throw new ValidationError(
-      error instanceof Error ? `Invalid JSON body: ${error.message}` : 'Invalid JSON body',
-    );
-  }
+function projectSessionSummary(session: SessionRecord) {
+  return {
+    id: session.id,
+    agent: session.agent,
+    cwd: session.cwd,
+    controlVersion: session.controlVersion,
+    controlConfig: {
+      provider: session.controlConfig.provider,
+      model: session.controlConfig.model,
+      maxTokens: session.controlConfig.maxTokens,
+      contextWindow: session.controlConfig.contextWindow,
+      baseURL: session.controlConfig.baseURL,
+    },
+    checkpointCount: session.checkpoints.length,
+    createdAt: session.createdAt,
+  };
 }
 
-function sendJson(response: http.ServerResponse, status: number, payload: unknown): void {
-  response.statusCode = status;
-  response.setHeader('content-type', 'application/json; charset=utf-8');
-  response.end(JSON.stringify(payload));
-}
-
-function sendText(response: http.ServerResponse, status: number, contentType: string, payload: string): void {
-  response.statusCode = status;
-  response.setHeader('content-type', contentType);
-  response.end(payload);
-}
-
-function sendSse(response: http.ServerResponse, event: RunEvent): void {
-  response.write(`event: ${event.type}\n`);
-  response.write(`data: ${JSON.stringify(event)}\n\n`);
-}
-
-function wantsSse(request: http.IncomingMessage): boolean {
-  return request.headers.accept?.includes('text/event-stream') ?? false;
-}
-
-function parseAgent(value: unknown, fallback: AgentPresetId = 'ask'): AgentPresetId {
-  if (value === undefined) {
-    return fallback;
+function errorStatus(error: unknown): 400 | 404 | 409 | 500 {
+  if (error instanceof NotFoundError) {
+    return 404;
   }
 
-  if (value === 'ask' || value === 'exec') {
-    return value;
+  if (error instanceof ConflictError) {
+    return 409;
   }
 
-  throw new ValidationError(`Unsupported agent: ${String(value)}`);
-}
-
-function requireAgent(value: unknown): AgentPresetId {
-  if (value === undefined) {
-    throw new ValidationError('agent is required');
+  if (error instanceof ValidationError) {
+    return 400;
   }
 
-  return parseAgent(value);
-}
+  const status = typeof (error as { status?: unknown } | undefined)?.status === 'number'
+    ? (error as { status: number }).status
+    : undefined;
 
-function requirePrompt(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new ValidationError('prompt is required');
+  if (status === 400 || status === 404 || status === 409) {
+    return status;
   }
 
-  return value;
+  return 500;
 }
 
 class HttpRuntimeService {
@@ -862,9 +865,7 @@ function parseRipgrepJsonLines(
   return matches;
 }
 
-export async function startHttpServer(options: HttpServerOptions = {}): Promise<http.Server> {
-  const hostname = options.hostname ?? '127.0.0.1';
-  const port = options.port ?? 4096;
+export function createHttpApp(options: HttpAppOptions = {}) {
   const cwd = options.cwd ?? process.cwd();
   const service = new HttpRuntimeService(
     cwd,
@@ -873,190 +874,179 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
     options.persistentRuntime ?? true,
   );
 
-  const server = http.createServer(async (request, response) => {
-    try {
-      const url = new URL(request.url ?? '/', `http://${request.headers.host ?? `${hostname}:${port}`}`);
-      const { pathname } = url;
+  const app = new OpenAPIHono({
+    defaultHook: (result, c) => {
+      if (!result.success) {
+        return c.json({ error: result.error.issues[0]?.message ?? 'Invalid request' }, 400);
+      }
+    },
+  });
 
-      if (request.method === 'GET' && pathname === '/openapi.json') {
-        sendJson(response, 200, buildOpenApiDocument());
+  const streamRunEvents = (runId: string, request: Request): Response => {
+    service.getRunSnapshot(runId);
+
+    const encoder = new TextEncoder();
+    let unsubscribe = () => {};
+    let keepAlive: ReturnType<typeof setInterval> | undefined;
+    let closed = false;
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+
+    const sendFrame = (frame: string) => {
+      if (!streamController || closed) {
         return;
       }
 
-      if (request.method === 'POST' && pathname === '/runs') {
-        const body = (await readJsonBody(request)) as { prompt?: unknown; agent?: unknown };
-        const run = service.createStandaloneRun(requirePrompt(body.prompt), parseAgent(body.agent));
-        sendJson(response, 202, { runId: run.id, status: run.status });
+      streamController.enqueue(encoder.encode(frame));
+    };
+
+    const close = () => {
+      if (closed) {
         return;
       }
 
-      const runMatch = pathname.match(/^\/runs\/([^/]+)$/);
-      if (request.method === 'GET' && runMatch) {
-        sendJson(response, 200, service.getRunSnapshot(runMatch[1]));
-        return;
+      closed = true;
+      if (keepAlive) {
+        clearInterval(keepAlive);
       }
+      unsubscribe();
+      request.signal.removeEventListener('abort', close);
+      try {
+        streamController?.close();
+      } catch {
+        // Ignore close races after the client disconnects.
+      }
+    };
 
-      const eventsMatch = pathname.match(/^\/events\/([^/]+)$/);
-      if (request.method === 'GET' && eventsMatch) {
-        const runId = eventsMatch[1];
-        if (!wantsSse(request)) {
-          sendJson(response, 200, service.getRunEvents(runId));
-          return;
-        }
-
-        service.getRunSnapshot(runId);
-
-        let ended = false;
-        const endStream = () => {
-          if (ended) {
-            return;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+        unsubscribe = service.subscribeToRun(runId, (event) => {
+          sendFrame(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          if (event.type === 'done' || event.type === 'error') {
+            close();
           }
-
-          ended = true;
-          if (!response.writableEnded) {
-            response.end();
-          }
-        };
-
-        response.writeHead(200, {
-          'content-type': 'text/event-stream; charset=utf-8',
-          'cache-control': 'no-cache, no-transform',
-          connection: 'keep-alive',
         });
 
-        const keepAlive = setInterval(() => {
-          response.write(': keep-alive\n\n');
+        keepAlive = setInterval(() => {
+          sendFrame(': keep-alive\n\n');
         }, 15000);
 
-        let unsubscribe = () => {};
-        unsubscribe = service.subscribeToRun(runId, (event) => {
-          sendSse(response, event);
-          if (event.type === 'done' || event.type === 'error') {
-            clearInterval(keepAlive);
-            unsubscribe();
-            endStream();
-          }
-        });
+        request.signal.addEventListener('abort', close);
+      },
+      cancel() {
+        close();
+      },
+    });
 
-        request.on('close', () => {
-          clearInterval(keepAlive);
-          unsubscribe();
-          endStream();
-        });
-        return;
-      }
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+      },
+    });
+  };
 
-      if (request.method === 'POST' && pathname === '/sessions') {
-        const body = (await readJsonBody(request)) as { agent?: unknown };
-        const session = service.createSession(parseAgent(body.agent));
-        sendJson(response, 201, {
-          id: session.id,
-          agent: session.agent,
-          cwd: session.cwd,
-          controlVersion: session.controlVersion,
-          controlConfig: {
-            provider: session.controlConfig.provider,
-            model: session.controlConfig.model,
-            maxTokens: session.controlConfig.maxTokens,
-            contextWindow: session.controlConfig.contextWindow,
-            baseURL: session.controlConfig.baseURL,
-          },
-          checkpointCount: session.checkpoints.length,
-          createdAt: session.createdAt,
-        });
-        return;
-      }
-
-      const sessionMatch = pathname.match(/^\/sessions\/([^/]+)$/);
-      if (request.method === 'GET' && sessionMatch) {
-        sendJson(response, 200, service.getSessionSnapshot(sessionMatch[1]));
-        return;
-      }
-
-      const sessionRunMatch = pathname.match(/^\/sessions\/([^/]+)\/runs$/);
-      if (request.method === 'POST' && sessionRunMatch) {
-        const body = (await readJsonBody(request)) as { prompt?: unknown; agent?: unknown };
-        const run = service.createSessionRun(
-          sessionRunMatch[1],
-          requirePrompt(body.prompt),
-          body.agent === undefined ? undefined : parseAgent(body.agent),
-        );
-        sendJson(response, 202, { runId: run.id, status: run.status, sessionId: run.sessionId });
-        return;
-      }
-
-      const sessionResourcesMatch = pathname.match(/^\/sessions\/([^/]+)\/resources$/);
-      if (request.method === 'GET' && sessionResourcesMatch) {
-        const path = url.searchParams.get('path') ?? '.';
-        sendJson(response, 200, {
-          sessionId: sessionResourcesMatch[1],
-          path,
-          entries: service.listSessionResources(sessionResourcesMatch[1], path),
-        });
-        return;
-      }
-
-      const sessionResourceMatch = pathname.match(/^\/sessions\/([^/]+)\/resources\/(.+)$/);
-      if (request.method === 'GET' && sessionResourceMatch) {
-        const resourcePath = decodeURIComponent(sessionResourceMatch[2]);
-        sendText(
-          response,
-          200,
-          resourcePath.endsWith('.jsonl')
-            ? 'application/x-ndjson; charset=utf-8'
-            : 'text/plain; charset=utf-8',
-          service.readSessionResource(sessionResourceMatch[1], resourcePath),
-        );
-        return;
-      }
-
-      const sessionAgentMatch = pathname.match(/^\/sessions\/([^/]+)\/agent$/);
-      if (request.method === 'POST' && sessionAgentMatch) {
-        const body = (await readJsonBody(request)) as { agent?: unknown };
-        sendJson(response, 200, service.setSessionAgent(sessionAgentMatch[1], requireAgent(body.agent)));
-        return;
-      }
-
-      const sessionCompactMatch = pathname.match(/^\/sessions\/([^/]+)\/compact$/);
-      if (request.method === 'POST' && sessionCompactMatch) {
-        const body = (await readJsonBody(request)) as { keepLastMessages?: unknown };
-        const keepLastMessages =
-          body.keepLastMessages === undefined
-            ? undefined
-            : typeof body.keepLastMessages === 'number'
-              ? body.keepLastMessages
-              : Number.NaN;
-        sendJson(response, 200, service.compactSession(sessionCompactMatch[1], keepLastMessages));
-        return;
-      }
-
-      sendJson(response, 404, { error: 'not found' });
-    } catch (error: unknown) {
-      if (response.headersSent) {
-        if (!response.writableEnded) {
-          response.end();
-        }
-        return;
-      }
-
-      if (error instanceof NotFoundError) {
-        sendJson(response, 404, { error: error.message });
-        return;
-      }
-
-      if (error instanceof ConflictError) {
-        sendJson(response, 409, { error: error.message });
-        return;
-      }
-
-      if (error instanceof ValidationError) {
-        sendJson(response, 400, { error: error.message });
-        return;
-      }
-
-      sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
-    }
+  app.onError((error, c) => {
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, errorStatus(error));
   });
+
+  const appWithNotFound = $(app.notFound((c) => c.json({ error: 'not found' }, 404)));
+
+  const appWithSpec = $(appWithNotFound.get('/openapi', (c) => c.json(buildOpenApiDocument(appWithNotFound))));
+
+  const appWithStandaloneRun = appWithSpec.openapi(createStandaloneRunRoute, (c) => {
+    const body = c.req.valid('json');
+    const run = service.createStandaloneRun(body.prompt, body.agent ?? 'ask');
+    return c.json({ runId: run.id, status: run.status }, 202);
+  });
+
+  const appWithGetRun = appWithStandaloneRun.openapi(getRunRoute, (c) => {
+    const { runId } = c.req.valid('param');
+    return c.json(service.getRunSnapshot(runId), 200);
+  });
+
+  const appWithRunEvents = appWithGetRun.openapi(getRunEventsRoute, (c) => {
+    const { runId } = c.req.valid('param');
+    if (c.req.header('accept')?.includes('text/event-stream')) {
+      return streamRunEvents(runId, c.req.raw);
+    }
+
+    return c.json(service.getRunEvents(runId), 200);
+  });
+
+  const appWithCreateSession = appWithRunEvents.openapi(createSessionRoute, (c) => {
+    const body = c.req.valid('json');
+    const session = service.createSession(body.agent ?? 'ask');
+    return c.json(projectSessionSummary(session), 201);
+  });
+
+  const appWithGetSession = appWithCreateSession.openapi(getSessionRoute, (c) => {
+    const { sessionId } = c.req.valid('param');
+    return c.json(service.getSessionSnapshot(sessionId), 200);
+  });
+
+  const appWithCreateSessionRun = appWithGetSession.openapi(createSessionRunRoute, (c) => {
+    const { sessionId } = c.req.valid('param');
+    const body = c.req.valid('json');
+    const run = service.createSessionRun(sessionId, body.prompt, body.agent);
+    return c.json({ runId: run.id, status: run.status, sessionId: run.sessionId }, 202);
+  });
+
+  const appWithListResources = appWithCreateSessionRun.openapi(listSessionResourcesRoute, (c) => {
+    const { sessionId } = c.req.valid('param');
+    const query = c.req.valid('query');
+    const resourcePath = query.path ?? '.';
+    return c.json(
+      {
+        sessionId,
+        path: resourcePath,
+        entries: service.listSessionResources(sessionId, resourcePath),
+      },
+      200,
+    );
+  });
+
+  const appWithReadResource = appWithListResources.openapi(readSessionResourceRoute, (c) => {
+    const { sessionId, resourcePath } = c.req.valid('param');
+    return c.text(service.readSessionResource(sessionId, resourcePath), 200, {
+      'content-type': resourcePath.endsWith('.jsonl')
+        ? 'application/x-ndjson; charset=utf-8'
+        : 'text/plain; charset=utf-8',
+    });
+  });
+
+  const appWithSetAgent = appWithReadResource.openapi(setSessionAgentRoute, (c) => {
+    const { sessionId } = c.req.valid('param');
+    const body = c.req.valid('json');
+    return c.json(service.setSessionAgent(sessionId, body.agent), 200);
+  });
+
+  const finalApp = appWithSetAgent.openapi(compactSessionRoute, (c) => {
+    const { sessionId } = c.req.valid('param');
+    const body = c.req.valid('json');
+    return c.json(service.compactSession(sessionId, body.keepLastMessages), 200);
+  });
+
+  return {
+    app: finalApp,
+    service,
+  };
+}
+
+export type HttpAppType = ReturnType<typeof createHttpApp>['app'];
+
+export async function startHttpServer(options: HttpServerOptions = {}): Promise<http.Server> {
+  const hostname = options.hostname ?? '127.0.0.1';
+  const port = options.port ?? 4096;
+  const { app } = createHttpApp(options);
+
+  const server = createAdaptorServer({
+    fetch: app.fetch,
+    hostname,
+    port,
+  }) as unknown as http.Server;
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);

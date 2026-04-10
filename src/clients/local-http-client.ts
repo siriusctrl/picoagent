@@ -1,6 +1,7 @@
 import type http from 'node:http';
+import { hc } from 'hono/client';
 import { AgentPresetId } from '../core/types.js';
-import { startHttpServer } from '../http/server.js';
+import { startHttpServer, type HttpAppType } from '../http/server.js';
 
 export type ClientEvent =
   | { type: 'status'; text: string }
@@ -14,6 +15,25 @@ export interface LocalHttpClientOptions {
   cwd: string;
   onEvent: (event: ClientEvent) => void;
 }
+
+type LocalHttpClientApi = ReturnType<typeof hc<HttpAppType>>;
+type MinimalTypedClientResponse<T> = {
+  ok: boolean;
+  status: number;
+  json: () => Promise<T>;
+};
+
+type SessionClientRoutes = {
+  runs: {
+    $post: (args: {
+      param: { sessionId: string };
+      json: { prompt: string; agent?: AgentPresetId };
+    }) => Promise<MinimalTypedClientResponse<{ runId: string; status: string; sessionId?: string }>>;
+  };
+  agent: {
+    $post: (args: { param: { sessionId: string }; json: { agent: AgentPresetId } }) => Promise<MinimalTypedClientResponse<unknown>>;
+  };
+};
 
 type RunEvent = {
   type: string;
@@ -63,6 +83,7 @@ export class LocalHttpClient {
   private readonly onEvent: (event: ClientEvent) => void;
   private server?: http.Server;
   private serverUrl?: string;
+  private api?: LocalHttpClientApi;
   private sessionId?: string;
   private agent: AgentPresetId = 'ask';
 
@@ -78,11 +99,14 @@ export class LocalHttpClient {
       port: 0,
     });
     this.serverUrl = getServerUrl(this.server);
+    this.api = hc<HttpAppType>(this.serverUrl);
 
-    const response = await fetch(`${this.serverUrl}/sessions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ agent: this.agent }),
+    if (!this.api) {
+      throw new Error('HTTP api client is not initialized');
+    }
+
+    const response = await this.api.sessions.$post({
+      json: { agent: this.agent },
     });
     if (!response.ok) {
       throw new Error(`Failed to create session: ${response.status}`);
@@ -100,10 +124,14 @@ export class LocalHttpClient {
       throw new Error('HTTP session is not ready');
     }
 
-    const createResponse = await fetch(`${this.serverUrl}/sessions/${this.sessionId}/runs`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: text }),
+    if (!this.api) {
+      throw new Error('HTTP api client is not initialized');
+    }
+
+    const sessionRoutes = this.api.sessions as unknown as Record<string, SessionClientRoutes>;
+    const createResponse = await sessionRoutes[':sessionId'].runs.$post({
+      param: { sessionId: this.sessionId },
+      json: { prompt: text },
     });
     if (!createResponse.ok) {
       throw new Error(`Failed to create run: ${createResponse.status}`);
@@ -187,10 +215,14 @@ export class LocalHttpClient {
       return;
     }
 
-    const response = await fetch(`${this.serverUrl}/sessions/${this.sessionId}/agent`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ agent }),
+    if (!this.api) {
+      throw new Error('HTTP api client is not initialized');
+    }
+
+    const sessionRoutes = this.api.sessions as unknown as Record<string, SessionClientRoutes>;
+    const response = await sessionRoutes[':sessionId'].agent.$post({
+      param: { sessionId: this.sessionId },
+      json: { agent },
     });
     if (!response.ok) {
       throw new Error(`Failed to set agent: ${response.status}`);
@@ -210,6 +242,7 @@ export class LocalHttpClient {
     this.server = undefined;
     this.serverUrl = undefined;
     this.sessionId = undefined;
+    this.api = undefined;
     await new Promise<void>((resolve, reject) => {
       server.close((error) => {
         if (error) {

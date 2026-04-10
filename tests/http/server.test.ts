@@ -4,10 +4,17 @@ import type http from 'node:http';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { startHttpServer } from '../../src/http/server.js';
+import {
+  createHttpApp,
+  startHttpServer,
+  type HttpAppType,
+} from '../../src/http/server.js';
 
 type RunEvent = { type: string; [key: string]: unknown };
 type RunStatus = 'running' | 'completed' | 'failed';
+type HttpClient = {
+  request(path: string, init?: RequestInit): Promise<Response>;
+};
 
 const servers = new Set<http.Server>();
 const runtimeRoots = new Set<string>();
@@ -50,7 +57,7 @@ async function stopServer(server: http.Server): Promise<void> {
 async function startServer(
   cwd = process.cwd(),
   runtimeRoot = mkdtempSync(join(tmpdir(), 'picoagent-http-runtime-')),
-): Promise<{ baseUrl: string; server: http.Server; runtimeRoot: string }> {
+): Promise<{ baseUrl: string; client: HttpClient; server: http.Server; runtimeRoot: string }> {
   runtimeRoots.add(runtimeRoot);
   const server = await startHttpServer({
     cwd,
@@ -67,7 +74,30 @@ async function startServer(
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
+    client: {
+      request: (path, init) => fetch(`${`http://127.0.0.1:${address.port}`}${path}`, init),
+    },
     server,
+    runtimeRoot,
+  };
+}
+
+async function startApp(
+  cwd = process.cwd(),
+  runtimeRoot = mkdtempSync(join(tmpdir(), 'picoagent-http-runtime-')),
+): Promise<{ client: HttpClient; runtimeRoot: string }> {
+  runtimeRoots.add(runtimeRoot);
+  const { app }: { app: HttpAppType } = await createHttpApp({
+    cwd,
+    runtimeRoot,
+  });
+
+  return {
+    client: {
+      request: async (path, init) => {
+        return app.request(new URL(path, 'http://127.0.0.1'), init) as Promise<Response>;
+      },
+    },
     runtimeRoot,
   };
 }
@@ -129,7 +159,7 @@ async function readEvents(response: Response, until: (events: RunEvent[]) => boo
   return events;
 }
 
-async function waitForRun(baseUrl: string, runId: string): Promise<{
+async function waitForRun(client: HttpClient, runId: string): Promise<{
   id: string;
   sessionId?: string;
   agent: string;
@@ -139,7 +169,7 @@ async function waitForRun(baseUrl: string, runId: string): Promise<{
   error?: string;
 }> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const response = await fetch(`${baseUrl}/runs/${runId}`);
+    const response = await client.request(`/runs/${runId}`);
     assert.equal(response.status, 200);
     const payload = (await response.json()) as {
       id: string;
@@ -162,9 +192,9 @@ async function waitForRun(baseUrl: string, runId: string): Promise<{
 }
 
 test('POST /runs creates an async run and GET /runs/:id returns the final snapshot', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startApp();
 
-  const createResponse = await fetch(`${baseUrl}/runs`, {
+  const createResponse = await client.request('/runs', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'hello' }),
@@ -175,7 +205,7 @@ test('POST /runs creates an async run and GET /runs/:id returns the final snapsh
   assert.match(created.runId, /^[0-9a-f-]{36}$/);
   assert.equal(created.status, 'running');
 
-  const run = await waitForRun(baseUrl, created.runId);
+  const run = await waitForRun(client, created.runId);
   assert.equal(run.id, created.runId);
   assert.equal(run.status, 'completed');
   assert.equal(run.agent, 'ask');
@@ -184,18 +214,18 @@ test('POST /runs creates an async run and GET /runs/:id returns the final snapsh
 });
 
 test('GET /events/:runId returns the full event log as JSON', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startApp();
 
-  const createResponse = await fetch(`${baseUrl}/runs`, {
+  const createResponse = await client.request('/runs', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'hello json events' }),
   });
   const created = (await createResponse.json()) as { runId: string };
 
-  await waitForRun(baseUrl, created.runId);
+  await waitForRun(client, created.runId);
 
-  const response = await fetch(`${baseUrl}/events/${created.runId}`);
+  const response = await client.request(`/events/${created.runId}`);
   assert.equal(response.status, 200);
 
   const payload = (await response.json()) as {
@@ -218,16 +248,16 @@ test('GET /events/:runId returns the full event log as JSON', async () => {
 });
 
 test('GET /events/:runId streams the same run events over SSE', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startServer();
 
-  const createResponse = await fetch(`${baseUrl}/runs`, {
+  const createResponse = await client.request('/runs', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'hello stream events' }),
   });
   const created = (await createResponse.json()) as { runId: string };
 
-  const response = await fetch(`${baseUrl}/events/${created.runId}`, {
+  const response = await client.request(`/events/${created.runId}`, {
     headers: { accept: 'text/event-stream' },
   });
   assert.equal(response.status, 200);
@@ -242,9 +272,9 @@ test('GET /events/:runId streams the same run events over SSE', async () => {
 });
 
 test('GET /events/:runId returns 404 for unknown SSE runs without killing the server', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startServer();
 
-  const response = await fetch(`${baseUrl}/events/missing-run-id`, {
+  const response = await client.request('/events/missing-run-id', {
     headers: { accept: 'text/event-stream' },
   });
   assert.equal(response.status, 404);
@@ -252,14 +282,14 @@ test('GET /events/:runId returns 404 for unknown SSE runs without killing the se
   const payload = (await response.json()) as { error: string };
   assert.match(payload.error, /Run missing-run-id not found/);
 
-  const healthCheck = await fetch(`${baseUrl}/openapi.json`);
+  const healthCheck = await client.request('/openapi');
   assert.equal(healthCheck.status, 200);
 });
 
 test('sessions keep ordered run history and expose the related run ids', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startApp();
 
-  const createSessionResponse = await fetch(`${baseUrl}/sessions`, {
+  const createSessionResponse = await client.request('/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ agent: 'ask' }),
@@ -275,7 +305,7 @@ test('sessions keep ordered run history and expose the related run ids', async (
   assert.equal(session.agent, 'ask');
   assert.equal(session.controlConfig.provider, 'echo');
 
-  const firstRunResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+  const firstRunResponse = await client.request(`/sessions/${session.id}/runs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'first turn' }),
@@ -284,9 +314,9 @@ test('sessions keep ordered run history and expose the related run ids', async (
   const firstRun = (await firstRunResponse.json()) as { runId: string; sessionId: string };
   assert.equal(firstRun.sessionId, session.id);
 
-  await waitForRun(baseUrl, firstRun.runId);
+  await waitForRun(client, firstRun.runId);
 
-  const secondRunResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+  const secondRunResponse = await client.request(`/sessions/${session.id}/runs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'second turn' }),
@@ -294,9 +324,9 @@ test('sessions keep ordered run history and expose the related run ids', async (
   assert.equal(secondRunResponse.status, 202);
   const secondRun = (await secondRunResponse.json()) as { runId: string; sessionId: string };
 
-  await waitForRun(baseUrl, secondRun.runId);
+  await waitForRun(client, secondRun.runId);
 
-  const sessionResponse = await fetch(`${baseUrl}/sessions/${session.id}`);
+  const sessionResponse = await client.request(`/sessions/${session.id}`);
   assert.equal(sessionResponse.status, 200);
 
   const snapshot = (await sessionResponse.json()) as {
@@ -322,16 +352,16 @@ test('sessions keep ordered run history and expose the related run ids', async (
 });
 
 test('sessions keep a default agent and allow it to be updated over HTTP', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startApp();
 
-  const createSessionResponse = await fetch(`${baseUrl}/sessions`, {
+  const createSessionResponse = await client.request('/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ agent: 'ask' }),
   });
   const session = (await createSessionResponse.json()) as { id: string };
 
-  const agentResponse = await fetch(`${baseUrl}/sessions/${session.id}/agent`, {
+  const agentResponse = await client.request(`/sessions/${session.id}/agent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ agent: 'exec' }),
@@ -342,27 +372,27 @@ test('sessions keep a default agent and allow it to be updated over HTTP', async
   assert.equal(updated.id, session.id);
   assert.equal(updated.agent, 'exec');
 
-  const runResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+  const runResponse = await client.request(`/sessions/${session.id}/runs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'uses default agent' }),
   });
   const run = (await runResponse.json()) as { runId: string };
-  const snapshot = await waitForRun(baseUrl, run.runId);
+  const snapshot = await waitForRun(client, run.runId);
   assert.equal(snapshot.agent, 'exec');
 });
 
 test('POST /sessions/:id/agent rejects missing agent values', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startApp();
 
-  const createSessionResponse = await fetch(`${baseUrl}/sessions`, {
+  const createSessionResponse = await client.request('/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ agent: 'exec' }),
   });
   const session = (await createSessionResponse.json()) as { id: string };
 
-  const agentResponse = await fetch(`${baseUrl}/sessions/${session.id}/agent`, {
+  const agentResponse = await client.request(`/sessions/${session.id}/agent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({}),
@@ -372,22 +402,22 @@ test('POST /sessions/:id/agent rejects missing agent values', async () => {
   const errorPayload = (await agentResponse.json()) as { error: string };
   assert.equal(errorPayload.error, 'agent is required');
 
-  const sessionResponse = await fetch(`${baseUrl}/sessions/${session.id}`);
+  const sessionResponse = await client.request(`/sessions/${session.id}`);
   const snapshot = (await sessionResponse.json()) as { agent: string };
   assert.equal(snapshot.agent, 'exec');
 });
 
 test('session runs inherit the session default agent unless the request overrides it', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startApp();
 
-  const createSessionResponse = await fetch(`${baseUrl}/sessions`, {
+  const createSessionResponse = await client.request('/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ agent: 'ask' }),
   });
   const session = (await createSessionResponse.json()) as { id: string };
 
-  const runResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+  const runResponse = await client.request(`/sessions/${session.id}/runs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'override just this run', agent: 'exec' }),
@@ -395,18 +425,18 @@ test('session runs inherit the session default agent unless the request override
   assert.equal(runResponse.status, 202);
 
   const run = (await runResponse.json()) as { runId: string };
-  const snapshot = await waitForRun(baseUrl, run.runId);
+  const snapshot = await waitForRun(client, run.runId);
   assert.equal(snapshot.agent, 'exec');
 
-  const sessionResponse = await fetch(`${baseUrl}/sessions/${session.id}`);
+  const sessionResponse = await client.request(`/sessions/${session.id}`);
   const updatedSession = (await sessionResponse.json()) as { agent: string };
   assert.equal(updatedSession.agent, 'ask');
 });
 
-test('GET /openapi.json documents the async run and event endpoints', async () => {
-  const { baseUrl } = await startServer();
+test('GET /openapi documents the async run and event endpoints', async () => {
+  const { client } = await startApp();
 
-  const response = await fetch(`${baseUrl}/openapi.json`);
+  const response = await client.request('/openapi');
   assert.equal(response.status, 200);
 
   const document = (await response.json()) as {
@@ -423,9 +453,9 @@ test('GET /openapi.json documents the async run and event endpoints', async () =
 });
 
 test('POST endpoints return 400 for malformed JSON bodies', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startApp();
 
-  const response = await fetch(`${baseUrl}/runs`, {
+  const response = await client.request('/runs', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: '{"prompt":',
@@ -433,7 +463,7 @@ test('POST endpoints return 400 for malformed JSON bodies', async () => {
   assert.equal(response.status, 400);
 
   const payload = (await response.json()) as { error: string };
-  assert.match(payload.error, /^Invalid JSON body:/);
+  assert.equal(payload.error, 'Malformed JSON in request body');
 });
 
 test('session runs automatically refresh control inputs when the workspace changes', async () => {
@@ -443,9 +473,9 @@ test('session runs automatically refresh control inputs when the workspace chang
     mkdirSync(join(root, '.pico'), { recursive: true });
     writeFileSync(join(root, '.pico', 'config.jsonc'), '{ "provider": "echo", "model": "echo" }\n', 'utf8');
 
-    const { baseUrl } = await startServer(root);
+    const { client } = await startApp(root);
 
-    const createSessionResponse = await fetch(`${baseUrl}/sessions`, {
+    const createSessionResponse = await client.request('/sessions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agent: 'ask' }),
@@ -461,7 +491,7 @@ test('session runs automatically refresh control inputs when the workspace chang
 
     writeFileSync(join(root, '.pico', 'config.jsonc'), '{ "provider": "wat", "model": "echo" }\n', 'utf8');
 
-    const runResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+    const runResponse = await client.request(`/sessions/${session.id}/runs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: 'should fail after refresh' }),
@@ -471,7 +501,7 @@ test('session runs automatically refresh control inputs when the workspace chang
     const errorPayload = (await runResponse.json()) as { error: string };
     assert.match(errorPayload.error, /invalid provider "wat"/);
 
-    const sessionResponse = await fetch(`${baseUrl}/sessions/${session.id}`);
+    const sessionResponse = await client.request(`/sessions/${session.id}`);
     assert.equal(sessionResponse.status, 200);
     const snapshot = (await sessionResponse.json()) as {
       controlVersion: string;
@@ -485,9 +515,9 @@ test('session runs automatically refresh control inputs when the workspace chang
 });
 
 test('sessions compact into checkpoints and expose the compacted snapshot over HTTP', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startApp();
 
-  const createSessionResponse = await fetch(`${baseUrl}/sessions`, {
+  const createSessionResponse = await client.request('/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ agent: 'ask' }),
@@ -496,25 +526,25 @@ test('sessions compact into checkpoints and expose the compacted snapshot over H
 
   const session = (await createSessionResponse.json()) as { id: string };
 
-  const firstRunResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+  const firstRunResponse = await client.request(`/sessions/${session.id}/runs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'first turn to compact' }),
   });
   assert.equal(firstRunResponse.status, 202);
   const firstRun = (await firstRunResponse.json()) as { runId: string };
-  await waitForRun(baseUrl, firstRun.runId);
+  await waitForRun(client, firstRun.runId);
 
-  const secondRunResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+  const secondRunResponse = await client.request(`/sessions/${session.id}/runs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'second turn to keep' }),
   });
   assert.equal(secondRunResponse.status, 202);
   const secondRun = (await secondRunResponse.json()) as { runId: string };
-  await waitForRun(baseUrl, secondRun.runId);
+  await waitForRun(client, secondRun.runId);
 
-  const compactResponse = await fetch(`${baseUrl}/sessions/${session.id}/compact`, {
+  const compactResponse = await client.request(`/sessions/${session.id}/compact`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ keepLastMessages: 2 }),
@@ -532,7 +562,7 @@ test('sessions compact into checkpoints and expose the compacted snapshot over H
   assert.equal(compacted.checkpoint.keptMessages, 2);
   assert.match(compacted.checkpoint.summary, /first turn to compact/);
 
-  const sessionResponse = await fetch(`${baseUrl}/sessions/${session.id}`);
+  const sessionResponse = await client.request(`/sessions/${session.id}`);
   assert.equal(sessionResponse.status, 200);
   const snapshot = (await sessionResponse.json()) as {
     activeCheckpointId?: string;
@@ -543,45 +573,45 @@ test('sessions compact into checkpoints and expose the compacted snapshot over H
 });
 
 test('session history resources are available over HTTP', async () => {
-  const { baseUrl } = await startServer();
+  const { client } = await startApp();
 
-  const createSessionResponse = await fetch(`${baseUrl}/sessions`, {
+  const createSessionResponse = await client.request('/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ agent: 'exec' }),
   });
   const session = (await createSessionResponse.json()) as { id: string };
 
-  const runResponse = await fetch(`${baseUrl}/sessions/${session.id}/runs`, {
+  const runResponse = await client.request(`/sessions/${session.id}/runs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'resource test prompt' }),
   });
   const run = (await runResponse.json()) as { runId: string };
-  await waitForRun(baseUrl, run.runId);
+  await waitForRun(client, run.runId);
 
-  await fetch(`${baseUrl}/sessions/${session.id}/compact`, {
+  await client.request(`/sessions/${session.id}/compact`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ keepLastMessages: 1 }),
   });
 
-  const listResponse = await fetch(`${baseUrl}/sessions/${session.id}/resources`);
+  const listResponse = await client.request(`/sessions/${session.id}/resources`);
   assert.equal(listResponse.status, 200);
   const listing = (await listResponse.json()) as { entries: string[] };
   assert.deepEqual(listing.entries, ['summary.md', 'checkpoints/', 'runs/', 'events/']);
 
-  const runsListResponse = await fetch(`${baseUrl}/sessions/${session.id}/resources?path=runs`);
+  const runsListResponse = await client.request(`/sessions/${session.id}/resources?path=runs`);
   assert.equal(runsListResponse.status, 200);
   const runsListing = (await runsListResponse.json()) as { entries: string[] };
   assert.deepEqual(runsListing.entries, [`${run.runId}.md`]);
 
-  const summaryResponse = await fetch(`${baseUrl}/sessions/${session.id}/resources/summary.md`);
+  const summaryResponse = await client.request(`/sessions/${session.id}/resources/summary.md`);
   assert.equal(summaryResponse.status, 200);
   assert.match(summaryResponse.headers.get('content-type') ?? '', /^text\/plain\b/);
   assert.match(await summaryResponse.text(), /# Checkpoint/);
 
-  const eventsResponse = await fetch(`${baseUrl}/sessions/${session.id}/resources/events/${run.runId}.jsonl`);
+  const eventsResponse = await client.request(`/sessions/${session.id}/resources/events/${run.runId}.jsonl`);
   assert.equal(eventsResponse.status, 200);
   assert.match(eventsResponse.headers.get('content-type') ?? '', /^application\/x-ndjson\b/);
   assert.match(await eventsResponse.text(), /"type":"run_started"/);
@@ -594,23 +624,24 @@ test('sessions and runs survive a server restart through the file runtime store'
 
   try {
     const first = await startServer(root, runtimeRoot);
+    const { client: firstClient } = first;
 
-    const createSessionResponse = await fetch(`${first.baseUrl}/sessions`, {
+    const createSessionResponse = await firstClient.request('/sessions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agent: 'ask' }),
     });
     const session = (await createSessionResponse.json()) as { id: string };
 
-    const runResponse = await fetch(`${first.baseUrl}/sessions/${session.id}/runs`, {
+    const runResponse = await firstClient.request(`/sessions/${session.id}/runs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: 'persist across restart' }),
     });
     const run = (await runResponse.json()) as { runId: string };
-    await waitForRun(first.baseUrl, run.runId);
+    await waitForRun(firstClient, run.runId);
 
-    const compactResponse = await fetch(`${first.baseUrl}/sessions/${session.id}/compact`, {
+    const compactResponse = await firstClient.request(`/sessions/${session.id}/compact`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ keepLastMessages: 1 }),
@@ -620,20 +651,21 @@ test('sessions and runs survive a server restart through the file runtime store'
     await stopServer(first.server);
 
     const second = await startServer(root, runtimeRoot);
+    const { client: secondClient } = second;
 
-    const sessionResponse = await fetch(`${second.baseUrl}/sessions/${session.id}`);
+    const sessionResponse = await secondClient.request(`/sessions/${session.id}`);
     assert.equal(sessionResponse.status, 200);
     const snapshot = (await sessionResponse.json()) as { checkpointCount: number; runs: Array<{ id: string }> };
     assert.equal(snapshot.checkpointCount, 1);
     assert.deepEqual(snapshot.runs.map((item) => item.id), [run.runId]);
 
-    const runSnapshotResponse = await fetch(`${second.baseUrl}/runs/${run.runId}`);
+    const runSnapshotResponse = await secondClient.request(`/runs/${run.runId}`);
     assert.equal(runSnapshotResponse.status, 200);
     const runSnapshot = (await runSnapshotResponse.json()) as { status: RunStatus; output: string };
     assert.equal(runSnapshot.status, 'completed');
     assert.equal(runSnapshot.output, 'received: persist across restart');
 
-    const eventsResponse = await fetch(`${second.baseUrl}/sessions/${session.id}/resources/events/${run.runId}.jsonl`);
+    const eventsResponse = await secondClient.request(`/sessions/${session.id}/resources/events/${run.runId}.jsonl`);
     assert.equal(eventsResponse.status, 200);
     assert.match(await eventsResponse.text(), /"type":"done"/);
   } finally {

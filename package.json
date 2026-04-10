@@ -14,13 +14,16 @@
     "dev:cli": "npx tsx src/clients/cli/main.ts",
     "dev:tui": "npx tsx src/clients/tui/main.tsx",
     "dev:http": "npx tsx src/clients/cli/main.ts serve",
-    "test": "node --import tsx --test \"tests/**/*.test.ts\"",
+    "test": "node --import tsx --test --test-concurrency=8 --test-force-exit \"tests/**/*.test.ts\"",
     "typecheck": "npx tsc -p tsconfig.check.json"
   },
   "dependencies": {
+    "@hono/node-server": "^1.19.4",
+    "@hono/zod-openapi": "^1.1.5",
     "@anthropic-ai/sdk": "^0.74.0",
     "@google/genai": "^1.40.0",
     "@types/react": "^19.2.14",
+    "hono": "^4.10.4",
     "ink": "^7.0.0",
     "openai": "^6.19.0",
     "react": "^19.2.4",

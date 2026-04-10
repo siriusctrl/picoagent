@@ -16,7 +16,7 @@ The current reference shape is:
 
 - one core agent loop
 - one global tool registry
-- one async HTTP runtime surface
+- one async Hono-backed HTTP runtime surface
 - thin local clients for debugging
 
 The current implementation stays intentionally small:
@@ -186,7 +186,7 @@ The server is async-first:
 
 Current endpoints:
 
-- `GET /openapi.json`
+- `GET /openapi`
 - `POST /runs`
 - `GET /runs/:id`
 - `GET /events/:runId`
@@ -237,8 +237,10 @@ curl http://127.0.0.1:4096/sessions/<session_id>/resources/summary.md
 OpenAPI is available at:
 
 ```text
-GET /openapi.json
+GET /openapi
 ```
+
+The OpenAPI document is generated from the HTTP route schemas rather than maintained as a separate hand-written spec.
 
 ## Local Clients
 

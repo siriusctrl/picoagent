@@ -46,10 +46,12 @@ The minimal local HTTP adapter.
 
 Responsibilities:
 
+- expose the Hono-based transport layer and generated OpenAPI surface
 - expose async run and session resources
 - expose run events as JSON or SSE
 - project snapshots from the runtime store
 - reuse the same runtime context path and agent loop as other transports
+- expose a reusable in-process app surface for tests and thin local clients
 
 Rules:
 

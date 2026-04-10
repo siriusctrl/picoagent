@@ -15,14 +15,16 @@ Primary entry file: `src/http/server.ts`
 
 Behavior:
 
-- serves a minimal local HTTP API
+- serves a minimal local Hono HTTP API
+- exposes a reusable `createHttpApp()` for in-process clients and tests
 - reuses the shared runtime context assembly and core loop
 - exposes async-first run, session, and event resources
 - keeps streaming and non-streaming reads behind the same `/events/:runId` endpoint
+- generates `/openapi` from the route schemas
 
 Current endpoints:
 
-- `GET /openapi.json`
+- `GET /openapi`
 - `POST /runs`
 - `GET /runs/:id`
 - `GET /events/:runId`
@@ -90,5 +92,5 @@ All entrypoints rely on the same runtime context path:
 The boundary is:
 
 - runtime context assembly defines the agent shape
-- HTTP defines protocol details
+- HTTP defines protocol details and the reusable Hono app surface
 - clients stay replaceable
