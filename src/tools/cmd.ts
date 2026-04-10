@@ -1,36 +1,8 @@
 import { z } from 'zod';
+import type { NamespaceLikePath } from '../core/file-view.js';
 import { Tool } from '../core/types.js';
-
-type FileViewTarget = 'workspace' | 'session';
-
-function parseNamespacePath(inputPath: string): { target: FileViewTarget; path: string } {
-  if (!inputPath.startsWith('/')) {
-    throw new Error(`Expected a namespace path, for example '/workspace'.`);
-  }
-
-  const [, namespace, ...parts] = inputPath.split('/');
-  if (!namespace) {
-    throw new Error(`Expected a namespace path, for example '/workspace'.`);
-  }
-
-  const normalized = namespace.split('@').at(-1);
-  if (normalized !== 'workspace' && normalized !== 'session') {
-    throw new Error(`Unsupported namespace '${namespace}'.`);
-  }
-
-  return {
-    target: normalized,
-    path: parts.length ? parts.join('/') : '.',
-  };
-}
-
-function namespacePath(target: FileViewTarget, relativePath: string): string {
-  if (relativePath === '.') {
-    return `/${target}`;
-  }
-
-  return `/${target}/${relativePath}`;
-}
+import { resolveSessionPath } from '../fs/filesystem.js';
+import { parseNamespacePath } from './namespace-path.js';
 
 const CmdParams = z.object({
   command: z.string().min(1).describe('Shell command to run with bash -lc.'),
@@ -46,25 +18,23 @@ export const cmdTool: Tool<typeof CmdParams> = {
   kind: 'execute',
   parameters: CmdParams,
   title: (args) => `Cmd ${args.command}`,
-  locations: (args) => {
+  locations: (args, context) => {
     if (!args.cwd) {
       return [];
     }
 
     const parsed = parseNamespacePath(args.cwd);
-    return [{ path: namespacePath(parsed.target, parsed.path) }];
-  },
-  async execute(args, context) {
-    const cwd = args.cwd ? parseNamespacePath(args.cwd) : null;
-
-    if (cwd && cwd.target !== 'workspace') {
-      throw new Error('cmd is only supported in the workspace namespace.');
+    if (parsed.namespace !== 'workspace') {
+      return [];
     }
 
-    const result = await context.fileView.cmd('workspace', {
+    return [{ path: resolveSessionPath(parsed.relativePath, context.cwd, context.roots) }];
+  },
+  async execute(args, context) {
+    const result = await context.fileView.cmd({
       command: 'bash',
       args: ['-lc', args.command],
-      cwd: cwd?.path,
+      cwd: (args.cwd ?? '/workspace') as NamespaceLikePath,
       outputByteLimit: 32000,
     });
 

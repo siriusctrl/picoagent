@@ -1,41 +1,8 @@
 import { z } from 'zod';
 import { FilePatchChange, FilePatchOperation } from '../core/file-view.js';
 import { Tool } from '../core/types.js';
-
-type FileViewTarget = 'workspace' | 'session';
-
-function parseNamespacePath(inputPath: string): { target: FileViewTarget; path: string } {
-  if (!inputPath.startsWith('/')) {
-    throw new Error(`Expected a namespace path, for example '/workspace/src/app.ts'.`);
-  }
-
-  const [, namespace, ...parts] = inputPath.split('/');
-  if (!namespace) {
-    throw new Error(`Expected a namespace path, for example '/workspace/src/app.ts'.`);
-  }
-
-  const normalized = namespace.split('@').at(-1);
-  if (normalized !== 'workspace' && normalized !== 'session') {
-    throw new Error(`Unsupported namespace '${namespace}'.`);
-  }
-
-  return {
-    target: normalized,
-    path: parts.length ? parts.join('/') : '.',
-  };
-}
-
-function namespacePath(target: FileViewTarget, relativePath: string): string {
-  if (relativePath.startsWith('/')) {
-    return relativePath;
-  }
-
-  if (relativePath === '.') {
-    return `/${target}`;
-  }
-
-  return `/${target}/${relativePath}`;
-}
+import { resolveSessionPath } from '../fs/filesystem.js';
+import { parseNamespacePath } from './namespace-path.js';
 
 const PatchOperationSchema = z.discriminatedUnion('type', [
   z.object({
@@ -82,39 +49,25 @@ export const patchTool: Tool<typeof PatchParams> = {
   kind: 'edit',
   parameters: PatchParams,
   title: () => 'Patch',
-  locations: (args) => {
-    const first = parseNamespacePath(args.operations[0].path);
-    return args.operations.map((operation) => {
+  locations: (args, context) => {
+    return args.operations.flatMap((operation) => {
       const parsed = parseNamespacePath(operation.path);
-      if (parsed.target !== first.target) {
-        throw new Error('All patch operations must target the same namespace.');
+      if (parsed.namespace !== 'workspace') {
+        return [];
       }
 
-      return { path: namespacePath(parsed.target, parsed.path) };
+      return [{ path: resolveSessionPath(parsed.relativePath, context.cwd, context.roots) }];
     });
   },
   async execute(args, context) {
-    const first = parseNamespacePath(args.operations[0].path);
-    const operations = args.operations.map((operation) => {
-      const parsed = parseNamespacePath(operation.path);
-      if (parsed.target !== first.target) {
-        throw new Error('All patch operations must target the same namespace.');
-      }
-
-      return {
-        ...operation,
-        path: parsed.path,
-      };
-    });
-
-    const changes = await context.fileView.patch(first.target, operations as FilePatchOperation[]);
+    const changes = await context.fileView.patch(args.operations as FilePatchOperation[]);
 
     return {
       content:
         changes.length === 1
-          ? `${describeAction(changes[0].action)} ${namespacePath(first.target, changes[0].path)}`
+          ? `${describeAction(changes[0].action)} ${changes[0].path}`
           : changes
-              .map((change) => `${change.action} ${namespacePath(first.target, change.path)}`)
+              .map((change) => `${change.action} ${change.path}`)
               .join('\n'),
       display: changes.map((change) => ({
         type: 'diff' as const,
@@ -125,7 +78,14 @@ export const patchTool: Tool<typeof PatchParams> = {
       rawOutput: {
         count: changes.length,
       },
-      locations: changes.map((change) => ({ path: namespacePath(first.target, change.path) })),
+      locations: changes.flatMap((change) => {
+        const parsed = parseNamespacePath(change.path);
+        if (parsed.namespace !== 'workspace') {
+          return [];
+        }
+
+        return [{ path: resolveSessionPath(parsed.relativePath, context.cwd, context.roots) }];
+      }),
     };
   },
 };

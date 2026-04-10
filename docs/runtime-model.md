@@ -85,6 +85,7 @@ For model-side inspection, the session exposes a read-only file-view:
 
 This projection is for browsing context, not for representing the session itself as a writable filesystem.
 Raw event logs remain available to clients over HTTP session resources and run event endpoints.
+The tool surface addresses these mounted views through namespace paths such as `/workspace/...` and `/session/...`.
 
 ## Agent Presets
 

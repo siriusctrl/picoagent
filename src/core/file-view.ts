@@ -1,8 +1,6 @@
 import type { ExecutionRequest, ExecutionResult } from './execution.js';
 import type { SearchMatch } from './filesystem.js';
 
-export type FileViewTarget = 'workspace' | 'session';
-
 export type NamespaceLikePath = `/${string}`;
 
 export interface FileViewReadOptions {
@@ -36,14 +34,9 @@ export interface FilePatchChange {
 }
 
 export interface FileViewAccess {
-  glob(path: NamespaceLikePath, pattern: string, limit?: number): Promise<string[]>;
-  glob(target: FileViewTarget, pattern: string, limit?: number): Promise<string[]>;
-  grep(path: NamespaceLikePath, query: string, options?: { path?: string; limit?: number; context?: number }): Promise<SearchMatch[]>;
-  grep(target: FileViewTarget, query: string, options?: { path?: string; limit?: number; context?: number }): Promise<SearchMatch[]>;
+  glob(pattern: NamespaceLikePath, limit?: number): Promise<string[]>;
+  grep(query: string, options?: { path?: NamespaceLikePath; limit?: number; context?: number }): Promise<SearchMatch[]>;
   read(path: NamespaceLikePath, options?: FileViewReadOptions): Promise<string>;
-  read(target: FileViewTarget, path: string, options?: FileViewReadOptions): Promise<string>;
   patch(operations: FilePatchOperation[]): Promise<FilePatchChange[]>;
-  patch(target: FileViewTarget, operations: FilePatchOperation[]): Promise<FilePatchChange[]>;
-  cmd(path: NamespaceLikePath, request: Omit<ExecutionRequest, 'runId'>): Promise<ExecutionResult>;
-  cmd(target: FileViewTarget, request: Omit<ExecutionRequest, 'runId'>): Promise<ExecutionResult>;
+  cmd(request: Omit<ExecutionRequest, 'runId'> & { cwd?: NamespaceLikePath }): Promise<ExecutionResult>;
 }

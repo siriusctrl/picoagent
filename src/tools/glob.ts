@@ -1,40 +1,6 @@
 import { z } from 'zod';
+import type { NamespaceLikePath } from '../core/file-view.js';
 import { Tool } from '../core/types.js';
-
-type FileViewTarget = 'workspace' | 'session';
-
-function parseNamespacePath(pattern: string): { target: FileViewTarget; pattern: string } {
-  if (!pattern.startsWith('/')) {
-    throw new Error(`Expected a namespace-rooted pattern, for example '/workspace/**/*.ts'.`);
-  }
-
-  const [, namespace, ...parts] = pattern.split('/');
-  if (!namespace) {
-    throw new Error(`Expected a namespace-rooted pattern, for example '/workspace/**/*.ts'.`);
-  }
-
-  const normalized = namespace.split('@').at(-1);
-  if (normalized !== 'workspace' && normalized !== 'session') {
-    throw new Error(`Unsupported namespace '${namespace}'.`);
-  }
-
-  return {
-    target: normalized,
-    pattern: parts.length ? parts.join('/') : '.',
-  };
-}
-
-function namespacePath(target: FileViewTarget, relativePath: string): string {
-  if (relativePath === '.') {
-    return `/${target}`;
-  }
-
-  if (relativePath.startsWith('/')) {
-    return relativePath;
-  }
-
-  return `/${target}/${relativePath}`;
-}
 
 const GlobParams = z.object({
   pattern: z
@@ -51,10 +17,7 @@ export const globTool: Tool<typeof GlobParams> = {
   parameters: GlobParams,
   title: (args) => `Glob ${args.pattern}`,
   async execute(args, context) {
-    const parsed = parseNamespacePath(args.pattern);
-    const paths = await context.fileView.glob(parsed.target, parsed.pattern, args.limit ?? 200);
-
-    const namespacedPaths = paths.map((path) => namespacePath(parsed.target, path));
+    const namespacedPaths = await context.fileView.glob(args.pattern as NamespaceLikePath, args.limit ?? 200);
 
     return {
       content: namespacedPaths.length > 0 ? namespacedPaths.join('\n') : 'No matches found.',

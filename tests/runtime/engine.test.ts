@@ -227,6 +227,6 @@ test('fileView requires session id for session namespace', async () => {
     async () => {
       await methods.read('/session/summary.md');
     },
-    /session target requires a persistent session/,
+    /session namespace requires a persistent session/,
   );
 });

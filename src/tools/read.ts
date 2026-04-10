@@ -1,41 +1,8 @@
 import { z } from 'zod';
+import type { NamespaceLikePath } from '../core/file-view.js';
 import { Tool } from '../core/types.js';
-import { formatLineNumberedText } from '../fs/filesystem.js';
-
-type FileViewTarget = 'workspace' | 'session';
-
-function parseNamespacePath(inputPath: string): { target: FileViewTarget; path: string } {
-  if (!inputPath.startsWith('/')) {
-    throw new Error(`Expected a namespace path, for example '/workspace/src/app.ts'.`);
-  }
-
-  const [, namespace, ...parts] = inputPath.split('/');
-  if (!namespace) {
-    throw new Error(`Expected a namespace path, for example '/workspace/src/app.ts'.`);
-  }
-
-  const normalized = namespace.split('@').at(-1);
-  if (normalized !== 'workspace' && normalized !== 'session') {
-    throw new Error(`Unsupported namespace '${namespace}'.`);
-  }
-
-  return {
-    target: normalized,
-    path: parts.length ? parts.join('/') : '.',
-  };
-}
-
-function namespacePath(target: FileViewTarget, relativePath: string): string {
-  if (relativePath === '.') {
-    return `/${target}`;
-  }
-
-  if (relativePath.startsWith('/')) {
-    return relativePath;
-  }
-
-  return `/${target}/${relativePath}`;
-}
+import { formatLineNumberedText, resolveSessionPath } from '../fs/filesystem.js';
+import { parseNamespacePath } from './namespace-path.js';
 
 const ReadParams = z.object({
   path: z
@@ -52,13 +19,16 @@ export const readTool: Tool<typeof ReadParams> = {
   kind: 'read',
   parameters: ReadParams,
   title: (args) => `Read ${args.path}`,
-  locations: (args) => {
+  locations: (args, context) => {
     const parsed = parseNamespacePath(args.path);
-    return [{ path: namespacePath(parsed.target, parsed.path), line: args.line }];
+    if (parsed.namespace !== 'workspace') {
+      return [];
+    }
+
+    return [{ path: resolveSessionPath(parsed.relativePath, context.cwd, context.roots), line: args.line }];
   },
   async execute(args, context) {
-    const parsed = parseNamespacePath(args.path);
-    const content = await context.fileView.read(parsed.target, parsed.path, {
+    const content = await context.fileView.read(args.path as NamespaceLikePath, {
       line: args.line,
       limit: args.limit,
     });
@@ -67,7 +37,7 @@ export const readTool: Tool<typeof ReadParams> = {
       content: formatLineNumberedText(content, args.line ?? 1),
       display: [{ type: 'text', text: content }],
       rawOutput: {
-        path: namespacePath(parsed.target, parsed.path),
+        path: args.path,
       },
     };
   },

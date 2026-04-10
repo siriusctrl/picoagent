@@ -1,41 +1,8 @@
 import { z } from 'zod';
+import type { NamespaceLikePath } from '../core/file-view.js';
 import { Tool } from '../core/types.js';
-
-type FileViewTarget = 'workspace' | 'session';
-
-function parseNamespacePath(value: string): { target: FileViewTarget; path?: string } {
-  if (!value.startsWith('/')) {
-    throw new Error(`Expected a namespace path, for example '/workspace/src'.`);
-  }
-
-  const [, namespace, ...parts] = value.split('/');
-  if (!namespace) {
-    throw new Error(`Expected a namespace path, for example '/workspace/src'.`);
-  }
-
-  const normalized = namespace.split('@').at(-1);
-  if (normalized !== 'workspace' && normalized !== 'session') {
-    throw new Error(`Unsupported namespace '${namespace}'.`);
-  }
-
-  const suffix = parts.join('/');
-  return {
-    target: normalized,
-    path: suffix ? suffix : undefined,
-  };
-}
-
-function namespacePath(target: FileViewTarget, relativePath: string): string {
-  if (relativePath.startsWith('/')) {
-    return relativePath;
-  }
-
-  if (relativePath === '.') {
-    return `/${target}`;
-  }
-
-  return `/${target}/${relativePath}`;
-}
+import { resolveSessionPath } from '../fs/filesystem.js';
+import { parseNamespacePath } from './namespace-path.js';
 
 const GrepParams = z.object({
   query: z.string().min(1).describe('Case-insensitive literal text to search for.'),
@@ -54,23 +21,19 @@ export const grepTool: Tool<typeof GrepParams> = {
   parameters: GrepParams,
   title: (args) => `Grep ${args.query}`,
   async execute(args, context) {
-    const parsedPath = args.path ? parseNamespacePath(args.path) : undefined;
-    const matches = await context.fileView.grep(parsedPath?.target ?? 'workspace', args.query, {
-      path: parsedPath?.path,
+    const matches = await context.fileView.grep(args.query, {
+      path: (args.path ?? '/workspace') as NamespaceLikePath,
       context: args.context,
       limit: args.limit ?? 50,
     });
-
-    const renderPath = (path: string) =>
-      namespacePath(parsedPath?.target ?? 'workspace', path);
 
     return {
       content:
         matches.length > 0
           ? matches.map((match) =>
               match.kind === 'context'
-                ? `${renderPath(match.path)}-${match.line}- ${match.text}`
-                : `${renderPath(match.path)}:${match.line}: ${match.text}`)
+                ? `${match.path}-${match.line}- ${match.text}`
+                : `${match.path}:${match.line}: ${match.text}`)
             .join('\n')
           : 'No matches found.',
       rawOutput: {
@@ -79,10 +42,19 @@ export const grepTool: Tool<typeof GrepParams> = {
         count: matches.length,
       },
       locations:
-        matches.filter((match) => match.kind !== 'context').map((match) => ({
-          path: renderPath(match.path),
-          line: match.line,
-        })),
+        matches
+          .filter((match) => match.kind !== 'context')
+          .flatMap((match) => {
+            const parsed = parseNamespacePath(match.path);
+            if (parsed.namespace !== 'workspace') {
+              return [];
+            }
+
+            return [{
+              path: resolveSessionPath(parsed.relativePath, context.cwd, context.roots),
+              line: match.line,
+            }];
+          }),
     };
   },
 };

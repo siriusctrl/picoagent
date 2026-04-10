@@ -16,16 +16,16 @@ const context: ToolContext = {
   agent: 'exec',
   signal: new AbortController().signal,
   fileView: {
-    glob: async (target, pattern) =>
-      target === 'session' ? ['summary.md', 'runs/run-1.md'] : ['src/http/server.ts', pattern],
-    grep: async (target, query) => [
+    glob: async (pattern) =>
+      pattern.startsWith('/session') ? ['/session/summary.md', '/session/runs/run-1.md'] : ['/workspace/src/http/server.ts'],
+    grep: async (query) => [
       {
-        path: target === 'session' ? 'runs/run-1.md' : '/workspace/src/http/server.ts',
+        path: '/workspace/src/http/server.ts',
         line: 12,
         text: `${query} here`,
       },
     ],
-    read: async (target, path) => `${target}:${path}`,
+    read: async (path) => path,
     patch: async () => [
       {
         path: '/workspace/src/http/server.ts',
@@ -39,7 +39,7 @@ const context: ToolContext = {
         newText: 'created',
       },
     ],
-    cmd: async (_target, request) => ({
+    cmd: async (request) => ({
       terminalId: 'term-1',
       output: [request.command, ...(request.args ?? [])].join(' '),
       truncated: false,
@@ -83,7 +83,7 @@ test('grep renders surrounding context lines distinctly', async () => {
 
 test('read reads one target-relative path', async () => {
   const result = await readTool.execute({ path: '/session/summary.md' }, context);
-  assert.match(result.content, /session:summary.md/);
+  assert.match(result.content, /\/session\/summary.md/);
 });
 
 test('patch applies multi-file changes through the file-view', async () => {
