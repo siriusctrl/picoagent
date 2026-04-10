@@ -41,6 +41,82 @@ function serverBaseUrl(server: http.Server): string {
   return `http://127.0.0.1:${address.port}`;
 }
 
+test('session server returns 400 for malformed JSON on optional-body routes', async () => {
+  const sessionRoot = mkdtempSync(join(tmpdir(), 'picoagent-session-server-'));
+  runtimeRoots.add(sessionRoot);
+
+  const sessionServer = await startSessionServer({
+    cwd: process.cwd(),
+    hostname: '127.0.0.1',
+    port: 0,
+    runtimeRoot: sessionRoot,
+  });
+  servers.add(sessionServer);
+  const baseUrl = serverBaseUrl(sessionServer);
+
+  const createResponse = await fetch(`${baseUrl}/sessions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{"agent":',
+  });
+  assert.equal(createResponse.status, 400);
+  assert.deepEqual(await createResponse.json(), { error: 'Malformed JSON in request body' });
+
+  const validCreateResponse = await fetch(`${baseUrl}/sessions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ agent: 'ask' }),
+  });
+  assert.equal(validCreateResponse.status, 201);
+  const session = (await validCreateResponse.json()) as { id: string };
+
+  const compactResponse = await fetch(`${baseUrl}/sessions/${session.id}/compact`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{"keepLastMessages":',
+  });
+  assert.equal(compactResponse.status, 400);
+  assert.deepEqual(await compactResponse.json(), { error: 'Malformed JSON in request body' });
+});
+
+test('session server returns 400 for malformed JSON on required-body routes', async () => {
+  const sessionRoot = mkdtempSync(join(tmpdir(), 'picoagent-session-server-'));
+  runtimeRoots.add(sessionRoot);
+
+  const sessionServer = await startSessionServer({
+    cwd: process.cwd(),
+    hostname: '127.0.0.1',
+    port: 0,
+    runtimeRoot: sessionRoot,
+  });
+  servers.add(sessionServer);
+  const baseUrl = serverBaseUrl(sessionServer);
+
+  const createResponse = await fetch(`${baseUrl}/sessions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ agent: 'ask' }),
+  });
+  assert.equal(createResponse.status, 201);
+  const session = (await createResponse.json()) as { id: string };
+
+  const setAgentResponse = await fetch(`${baseUrl}/sessions/${session.id}/agent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{"agent":',
+  });
+  assert.equal(setAgentResponse.status, 400);
+  assert.deepEqual(await setAgentResponse.json(), { error: 'Malformed JSON in request body' });
+
+  const storeResponse = await fetch(`${baseUrl}/_store/sessions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{"id":',
+  });
+  assert.equal(storeResponse.status, 400);
+  assert.deepEqual(await storeResponse.json(), { error: 'Malformed JSON in request body' });
+});
+
 async function waitForRun(baseUrl: string, runId: string): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const response = await fetch(`${baseUrl}/runs/${runId}`);

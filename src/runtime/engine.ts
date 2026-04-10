@@ -204,6 +204,7 @@ export class RuntimeEngine {
 
   private async executeRun(run: RunRecord, control: SessionControlSnapshot, session?: SessionRecord): Promise<void> {
     const controller = new AbortController();
+    let sessionFinalized = false;
     const startedAt = nowIso();
     this.options.runStore.updateRun(run.id, { startedAt });
     if (run.sessionId) {
@@ -286,6 +287,12 @@ export class RuntimeEngine {
         },
       );
 
+      if (session) {
+        await this.options.sessionStore.finishSessionRun(session.id, run.id, conversation);
+        await this.options.sessionStore.clearSessionActiveRun(session.id, run.id);
+        sessionFinalized = true;
+      }
+
       this.options.runStore.updateRun(run.id, {
         output: assistantText(finalMessage),
         status: 'completed',
@@ -304,12 +311,14 @@ export class RuntimeEngine {
         sessionId: run.sessionId,
         output: assistantText(finalMessage),
       });
-
-      if (session) {
-        await this.options.sessionStore.finishSessionRun(session.id, run.id, conversation);
-      }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
+
+      if (session && !sessionFinalized) {
+        await this.options.sessionStore.clearSessionActiveRun(session.id, run.id);
+        sessionFinalized = true;
+      }
+
       this.options.runStore.updateRun(run.id, {
         status: 'failed',
         error: message,
@@ -329,7 +338,7 @@ export class RuntimeEngine {
         message,
       });
     } finally {
-      if (session) {
+      if (session && !sessionFinalized) {
         await this.options.sessionStore.clearSessionActiveRun(session.id, run.id);
       }
     }

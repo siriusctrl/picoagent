@@ -17,6 +17,23 @@ export interface SessionServerOptions extends SessionServiceOptions {
   port?: number;
 }
 
+async function parseJsonRequest(request: Request, optional = false): Promise<unknown> {
+  const body = await request.text();
+  if (body.trim() === '') {
+    if (optional) {
+      return {};
+    }
+
+    throw new SessionValidationError('Request body is required');
+  }
+
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    throw new SessionValidationError('Malformed JSON in request body');
+  }
+}
+
 function errorStatus(error: unknown): 400 | 404 | 409 | 500 {
   if (
     error instanceof SessionNotFoundError
@@ -50,7 +67,7 @@ export function createSessionApp(options: SessionServerOptions = {}) {
   });
 
   app.post('/sessions', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { agent?: unknown };
+    const body = (await parseJsonRequest(c.req.raw, true)) as { agent?: unknown };
     const session = await service.createSession(parseAgent(body.agent) ?? 'ask');
     return c.json(projectSessionSummary(session), 201);
   });
@@ -81,7 +98,7 @@ export function createSessionApp(options: SessionServerOptions = {}) {
   });
 
   app.post('/sessions/:sessionId/agent', async (c) => {
-    const body = (await c.req.json()) as { agent?: unknown };
+    const body = (await parseJsonRequest(c.req.raw)) as { agent?: unknown };
     const agent = parseAgent(body.agent);
     if (!agent) {
       throw new SessionValidationError('agent is required');
@@ -90,7 +107,7 @@ export function createSessionApp(options: SessionServerOptions = {}) {
   });
 
   app.post('/sessions/:sessionId/compact', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { keepLastMessages?: unknown };
+    const body = (await parseJsonRequest(c.req.raw, true)) as { keepLastMessages?: unknown };
     const keepLastMessages = body.keepLastMessages === undefined ? undefined : Number(body.keepLastMessages);
     return c.json(await service.compactSession(c.req.param('sessionId'), keepLastMessages), 200);
   });
@@ -100,44 +117,54 @@ export function createSessionApp(options: SessionServerOptions = {}) {
   });
 
   app.post('/_store/sessions', async (c) => {
-    const record = (await c.req.json()) as SessionRecord;
+    const record = (await parseJsonRequest(c.req.raw)) as SessionRecord;
     return c.json(await service.createSessionRecord(record), 201);
   });
 
   app.post('/_store/runs', async (c) => {
-    await service.createRunRecord((await c.req.json()) as RunRecord);
+    await service.createRunRecord((await parseJsonRequest(c.req.raw)) as RunRecord);
     return c.json({ ok: true }, 201);
   });
 
   app.post('/_store/runs/:runId', async (c) => {
-    await service.updateRunRecord(c.req.param('runId'), await c.req.json());
+    await service.updateRunRecord(
+      c.req.param('runId'),
+      (await parseJsonRequest(c.req.raw)) as Partial<Omit<RunRecord, 'id' | 'events'>>,
+    );
     return c.json({ ok: true }, 200);
   });
 
   app.post('/_store/runs/:runId/events', async (c) => {
-    await service.appendRunEvent(c.req.param('runId'), await c.req.json());
+    await service.appendRunEvent(
+      c.req.param('runId'),
+      await parseJsonRequest(c.req.raw) as Parameters<SessionService['appendRunEvent']>[1],
+    );
     return c.json({ ok: true }, 201);
   });
 
   app.post('/_store/sessions/:sessionId/control', async (c) => {
-    await service.refreshSessionControl(c.req.param('sessionId'), await c.req.json());
+    await service.refreshSessionControl(c.req.param('sessionId'), await parseJsonRequest(c.req.raw) as {
+      controlVersion: SessionRecord['controlVersion'];
+      controlConfig: SessionRecord['controlConfig'];
+      systemPrompts: SessionRecord['systemPrompts'];
+    });
     return c.json({ ok: true }, 200);
   });
 
   app.post('/_store/sessions/:sessionId/attach-run', async (c) => {
-    const body = (await c.req.json()) as { runId: string };
+    const body = (await parseJsonRequest(c.req.raw)) as { runId: string };
     await service.attachRunToSession(c.req.param('sessionId'), body.runId);
     return c.json({ ok: true }, 200);
   });
 
   app.post('/_store/sessions/:sessionId/finish-run', async (c) => {
-    const body = (await c.req.json()) as { runId: string; messages: SessionRecord['messages'] };
+    const body = (await parseJsonRequest(c.req.raw)) as { runId: string; messages: SessionRecord['messages'] };
     await service.finishSessionRun(c.req.param('sessionId'), body.runId, body.messages);
     return c.json({ ok: true }, 200);
   });
 
   app.post('/_store/sessions/:sessionId/clear-active-run', async (c) => {
-    const body = (await c.req.json()) as { runId: string };
+    const body = (await parseJsonRequest(c.req.raw)) as { runId: string };
     await service.clearSessionActiveRun(c.req.param('sessionId'), body.runId);
     return c.json({ ok: true }, 200);
   });

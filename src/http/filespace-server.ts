@@ -22,6 +22,10 @@ export interface FilespaceServerOptions {
   writable?: boolean;
 }
 
+export class FilespaceValidationError extends Error {
+  readonly status = 400;
+}
+
 const readRequestSchema = z.object({
   path: z.string().min(1),
   options: z
@@ -55,10 +59,35 @@ const deleteRequestSchema = z.object({
 function parseBody<T>(value: unknown, schema: z.ZodSchema<T>): T {
   const result = schema.safeParse(value);
   if (!result.success) {
-    throw new Error(result.error.issues[0]?.message ?? 'Invalid request body');
+    throw new FilespaceValidationError(result.error.issues[0]?.message ?? 'Invalid request body');
   }
 
   return result.data;
+}
+
+async function parseJsonRequest(request: Request): Promise<unknown> {
+  const body = await request.text();
+  if (body.trim() === '') {
+    throw new FilespaceValidationError('Request body is required');
+  }
+
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    throw new FilespaceValidationError('Malformed JSON in request body');
+  }
+}
+
+function errorStatus(error: unknown): 400 | 500 {
+  const status = typeof (error as { status?: unknown } | undefined)?.status === 'number'
+    ? (error as { status: number }).status
+    : undefined;
+
+  if (status === 400) {
+    return 400;
+  }
+
+  return 500;
 }
 
 function toRootedFilesystem(options: FilespaceServerOptions): MutableFilesystem {
@@ -79,25 +108,25 @@ export function createFilespaceApp(options: FilespaceServerOptions) {
   const app = new Hono();
 
   app.onError((error, c) => {
-    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, errorStatus(error));
   });
 
   app.get('/info', (c) => c.json(info, 200));
 
   app.post('/read', async (c) => {
-    const body = parseBody(await c.req.json(), readRequestSchema);
+    const body = parseBody(await parseJsonRequest(c.req.raw), readRequestSchema);
     const content = await rootedFilesystem.readTextFile(body.path, body.options);
     return c.json({ content }, 200);
   });
 
   app.post('/list', async (c) => {
-    const body = parseBody(await c.req.json(), listRequestSchema);
+    const body = parseBody(await parseJsonRequest(c.req.raw), listRequestSchema);
     const paths = await rootedFilesystem.listFiles(body.root, body.limit, new AbortController().signal);
     return c.json({ paths }, 200);
   });
 
   app.post('/search', async (c) => {
-    const body = parseBody(await c.req.json(), searchRequestSchema);
+    const body = parseBody(await parseJsonRequest(c.req.raw), searchRequestSchema);
     const matches = await rootedFilesystem.searchText(body.root, body.query, body.limit, new AbortController().signal);
     return c.json({ matches }, 200);
   });
@@ -107,7 +136,7 @@ export function createFilespaceApp(options: FilespaceServerOptions) {
       return c.json({ error: 'filespace is read-only' }, 405);
     }
 
-    const body = parseBody(await c.req.json(), writeRequestSchema);
+    const body = parseBody(await parseJsonRequest(c.req.raw), writeRequestSchema);
     await rootedFilesystem.writeTextFile(body.path, body.content);
     return c.json({ ok: true }, 200);
   });
@@ -117,7 +146,7 @@ export function createFilespaceApp(options: FilespaceServerOptions) {
       return c.json({ error: 'filespace is read-only' }, 405);
     }
 
-    const body = parseBody(await c.req.json(), deleteRequestSchema);
+    const body = parseBody(await parseJsonRequest(c.req.raw), deleteRequestSchema);
     await rootedFilesystem.deleteTextFile(body.path);
     return c.json({ ok: true }, 200);
   });

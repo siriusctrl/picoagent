@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, test } from 'node:test';
+import type { MutableFilesystem } from '../../src/core/filesystem.js';
 import { HttpFilesystem } from '../../src/fs/http-filesystem.js';
 import { startFilespaceServer } from '../../src/http/filespace-server.js';
 
@@ -77,4 +78,61 @@ test('filespace server exposes rooted filesystem operations over HTTP', async ()
   await assert.rejects(async () => {
     await filesystem.readTextFile('created.txt');
   }, /ENOENT|no such file/i);
+});
+
+test('filespace server returns 400 for malformed JSON request bodies', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'picoagent-filespace-'));
+  roots.add(root);
+
+  const server = await startFilespaceServer({
+    name: 'build',
+    root,
+    hostname: '127.0.0.1',
+    port: 0,
+  });
+  servers.add(server);
+
+  const response = await fetch(`${serverBaseUrl(server)}/read`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{"path":',
+  });
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'Malformed JSON in request body' });
+});
+
+test('filespace server returns 500 for backend filesystem failures', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'picoagent-filespace-'));
+  roots.add(root);
+
+  const failingFilesystem: MutableFilesystem = {
+    async readTextFile() {
+      throw new Error('backend exploded');
+    },
+    async writeTextFile() {},
+    async deleteTextFile() {},
+    async listFiles() {
+      return [];
+    },
+    async searchText() {
+      return [];
+    },
+  };
+
+  const server = await startFilespaceServer({
+    name: 'build',
+    root,
+    hostname: '127.0.0.1',
+    port: 0,
+    filesystem: failingFilesystem,
+  });
+  servers.add(server);
+
+  const response = await fetch(`${serverBaseUrl(server)}/read`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: 'notes.txt' }),
+  });
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: 'backend exploded' });
 });

@@ -1,6 +1,10 @@
 import path from 'node:path';
 import type { MutableFilesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.js';
 
+export class RootedFilesystemValidationError extends Error {
+  readonly status = 400;
+}
+
 function isWithinRoot(targetPath: string, root: string): boolean {
   const relative = path.relative(root, targetPath);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -19,7 +23,7 @@ export class RootedFilesystem implements MutableFilesystem {
   private resolveRelativePath(inputPath: string): string {
     const resolved = path.resolve(this.root, inputPath);
     if (!isWithinRoot(resolved, this.root)) {
-      throw new Error(`Path is outside the rooted filesystem: ${inputPath}`);
+      throw new RootedFilesystemValidationError(`Path is outside the rooted filesystem: ${inputPath}`);
     }
 
     return resolved;
