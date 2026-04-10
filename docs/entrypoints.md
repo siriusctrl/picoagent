@@ -2,6 +2,8 @@
 
 The entrypoints exist to expose the harness boundaries, not to redefine them.
 
+For durable design decisions behind those boundaries, read `docs/design-choices.md`.
+
 In practice that means:
 
 - sessions stay the context boundary

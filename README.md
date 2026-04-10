@@ -13,6 +13,8 @@ The core design goal is to keep four concerns explicit and separate:
 - file access through filesystem-like boundaries and tools
 - command execution through an execution backend
 
+For durable architecture choices and intentionally rejected alternatives, read `docs/design-choices.md`.
+
 The current reference shape is:
 
 - one core agent loop

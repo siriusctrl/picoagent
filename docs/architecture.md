@@ -1,5 +1,11 @@
 # Architecture
 
+Read with:
+
+- `README.md`
+- `docs/design-choices.md`
+- `docs/golden-principles.md`
+
 ## Goal
 
 `picoagent` is meant to be a simple, controllable agent harness.

@@ -9,6 +9,8 @@ The runtime model is built around a simple split:
 - `run` is one execution through the runtime
 - a session may also project a read-only file-view so the model can inspect history without forcing everything into the live prompt
 
+Use `docs/design-choices.md` as the single source of truth for why these boundaries exist and which alternatives were intentionally rejected.
+
 ## Filesystem
 
 The current concrete filesystem is the workspace rooted at the directory where you launch `picoagent`.

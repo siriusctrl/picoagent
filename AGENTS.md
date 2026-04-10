@@ -39,6 +39,7 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
 
 - `README.md`
 - `docs/architecture.md`
+- `docs/design-choices.md`
 - `docs/golden-principles.md`
 
 ### Read these docs when the task matches
@@ -49,6 +50,7 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
   - Read `docs/entrypoints.md`
 - Architecture or boundary changes:
   - Read `docs/architecture.md`
+  - Read `docs/design-choices.md`
 
 ## Top-level Source Map
 
@@ -79,6 +81,7 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
 - Keep provider SDK imports out of `src/core`.
 - Keep tools focused: one tool, one capability.
 - Update docs when architecture, runtime behavior, or entrypoints change.
+- When a design discussion converges on a durable choice, record it promptly in `docs/design-choices.md`.
 - Prefer keeping detailed source-area guidance in `docs/source-map.md`, not local `AGENTS.md` files under `src/`.
 
 ## Verification Requirements
