@@ -1,14 +1,13 @@
-import { randomUUID } from 'node:crypto';
-import { buildSessionControlSnapshot, computeControlVersion, SessionControlSnapshot } from './control-snapshot.js';
-import type { ExecutionBackend } from '../core/execution.js';
-import type { MutableFilesystem } from '../core/filesystem.js';
-import { FileViewAccess } from '../core/file-view.js';
-import { runAgentLoop } from '../core/loop.js';
-import { AgentPresetId, AssistantMessage, Message } from '../core/types.js';
-import { Namespace, type NamespaceMount } from '../fs/namespace.js';
-import { createProvider } from '../providers/index.js';
-import { createRuntimeFileViewAccess } from './file-view-access.js';
-import { RuntimeContext } from './index.js';
+import { buildSessionControlSnapshot, computeControlVersion, SessionControlSnapshot } from './control-snapshot.ts';
+import type { ExecutionBackend } from '../core/execution.ts';
+import type { MutableFilesystem } from '../core/filesystem.ts';
+import { FileViewAccess } from '../core/file-view.ts';
+import { runAgentLoop } from '../core/loop.ts';
+import { AgentPresetId, AssistantMessage, Message } from '../core/types.ts';
+import { Namespace, type NamespaceMount } from '../fs/namespace.ts';
+import { createProvider } from '../providers/index.ts';
+import { createRuntimeFileViewAccess } from './file-view-access.ts';
+import { RuntimeContext } from './index.ts';
 import type {
   EmittedRunEvent,
   RunRecord,
@@ -16,7 +15,7 @@ import type {
   RunSnapshot,
   SessionRecord,
   SessionStore,
-} from './store.js';
+} from './store.ts';
 
 export class RuntimeConflictError extends Error {
   readonly status = 409;
@@ -66,7 +65,7 @@ export class RuntimeEngine {
   async createSession(agent: AgentPresetId = 'ask'): Promise<SessionRecord> {
     const control = await this.buildControlSnapshot(this.options.cwd);
     const session: SessionRecord = {
-      id: randomUUID(),
+      id: crypto.randomUUID(),
       cwd: this.options.cwd,
       roots: [this.options.cwd],
       agent,
@@ -119,8 +118,8 @@ export class RuntimeEngine {
   }
 
   private async createRun(prompt: string, agent: AgentPresetId, sessionId?: string): Promise<RunRecord> {
-    const run = this.options.runStore.createRun({
-      id: randomUUID(),
+    const run = await this.options.runStore.createRun({
+      id: crypto.randomUUID(),
       sessionId,
       agent,
       prompt,
@@ -176,7 +175,7 @@ export class RuntimeEngine {
       ...event,
       timestamp: nowIso(),
     };
-    this.options.runStore.appendRunEvent(runId, pendingEvent);
+    await this.options.runStore.appendRunEvent(runId, pendingEvent);
     if (event.sessionId) {
       await this.options.sessionStore.appendRunEvent(runId, pendingEvent);
     }
@@ -206,7 +205,7 @@ export class RuntimeEngine {
     const controller = new AbortController();
     let sessionFinalized = false;
     const startedAt = nowIso();
-    this.options.runStore.updateRun(run.id, { startedAt });
+    await this.options.runStore.updateRun(run.id, { startedAt });
     if (run.sessionId) {
       await this.options.sessionStore.updateRun(run.id, { startedAt });
     }
@@ -249,7 +248,7 @@ export class RuntimeEngine {
               return;
             }
 
-            this.options.runStore.updateRun(run.id, { output: latestRun.output + text });
+            await this.options.runStore.updateRun(run.id, { output: latestRun.output + text });
             if (run.sessionId) {
               await this.options.sessionStore.updateRun(run.id, { output: latestRun.output + text });
             }
@@ -293,7 +292,7 @@ export class RuntimeEngine {
         sessionFinalized = true;
       }
 
-      this.options.runStore.updateRun(run.id, {
+      await this.options.runStore.updateRun(run.id, {
         output: assistantText(finalMessage),
         status: 'completed',
         finishedAt: nowIso(),
@@ -319,7 +318,7 @@ export class RuntimeEngine {
         sessionFinalized = true;
       }
 
-      this.options.runStore.updateRun(run.id, {
+      await this.options.runStore.updateRun(run.id, {
         status: 'failed',
         error: message,
         finishedAt: nowIso(),

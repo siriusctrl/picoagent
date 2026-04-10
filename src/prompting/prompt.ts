@@ -1,5 +1,5 @@
-import { AgentPresetId, Tool } from '../core/types.js';
-import { DocMeta } from './frontmatter.js';
+import { AgentPresetId, Tool } from '../core/types.ts';
+import { DocMeta } from './frontmatter.ts';
 
 export interface ControlPromptSurface {
   soul: string | null;

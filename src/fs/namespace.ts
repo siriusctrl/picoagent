@@ -1,5 +1,5 @@
-import path from 'node:path';
-import type { Filesystem, MutableFilesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.js';
+import type { Filesystem, MutableFilesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.ts';
+import { isAbsolutePath, joinPath, relativePath } from './path.ts';
 
 export interface NamespaceMount {
   name: string;
@@ -32,7 +32,7 @@ function toMountedPath(root: string, relativePath: string): string {
     return relativePath === '.' ? '.' : relativePath;
   }
 
-  return relativePath === '.' ? root : path.join(root, relativePath);
+  return relativePath === '.' ? root : joinPath(root, relativePath);
 }
 
 function fromMountedPath(root: string, mountedPath: string): string {
@@ -40,7 +40,7 @@ function fromMountedPath(root: string, mountedPath: string): string {
     return mountedPath.replace(/\\/g, '/');
   }
 
-  const relative = path.relative(root, mountedPath);
+  const relative = relativePath(root, mountedPath);
   return relative === '' ? '.' : relative.replace(/\\/g, '/');
 }
 
@@ -111,7 +111,7 @@ export class Namespace {
   }
 
   resolvePath(name: string, relativePath: string): string {
-    if (path.isAbsolute(relativePath)) {
+    if (isAbsolutePath(relativePath)) {
       return relativePath;
     }
 

@@ -1,11 +1,10 @@
-import http from 'node:http';
-import path from 'node:path';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { MutableFilesystem } from '../core/filesystem.js';
-import { RootedFilesystem } from '../fs/rooted-fs.js';
-import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.js';
-import { startNodeFetchServer } from './node-server.js';
+import type { MutableFilesystem } from '../core/filesystem.ts';
+import { resolvePath } from '../fs/path.ts';
+import { RootedFilesystem } from '../fs/rooted-fs.ts';
+import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.ts';
+import { type LocalServerHandle, startBunFetchServer } from './bun-server.ts';
 
 export interface FilespaceInfo {
   name: string;
@@ -92,13 +91,13 @@ function errorStatus(error: unknown): 400 | 500 {
 
 function toRootedFilesystem(options: FilespaceServerOptions): MutableFilesystem {
   const delegate = options.filesystem ?? new LocalWorkspaceFileSystem();
-  return new RootedFilesystem(delegate, path.resolve(options.root));
+  return new RootedFilesystem(delegate, resolvePath(options.root));
 }
 
 export function createFilespaceApp(options: FilespaceServerOptions) {
   const writable = options.writable ?? true;
   const rootedFilesystem = toRootedFilesystem(options);
-  const root = path.resolve(options.root);
+  const root = resolvePath(options.root);
   const info: FilespaceInfo = {
     name: options.name,
     writable,
@@ -157,9 +156,9 @@ export function createFilespaceApp(options: FilespaceServerOptions) {
   };
 }
 
-export async function startFilespaceServer(options: FilespaceServerOptions): Promise<http.Server> {
+export async function startFilespaceServer(options: FilespaceServerOptions): Promise<LocalServerHandle> {
   const hostname = options.hostname ?? '127.0.0.1';
   const port = options.port ?? 4096;
   const { app } = createFilespaceApp(options);
-  return startNodeFetchServer(app.fetch, hostname, port);
+  return startBunFetchServer(app.fetch, hostname, port);
 }

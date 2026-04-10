@@ -1,5 +1,5 @@
-import { Provider, StreamEvent } from '../../src/core/provider.js';
-import { Message, AssistantMessage, ToolDefinition } from '../../src/core/types.js';
+import { Provider, StreamEvent } from '../../src/core/provider.ts';
+import { Message, AssistantMessage, ToolDefinition } from '../../src/core/types.ts';
 
 export class MockProvider implements Provider {
     model = 'mock-model';

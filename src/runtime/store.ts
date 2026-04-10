@@ -1,5 +1,5 @@
-import { PicoConfig } from '../config/config.js';
-import { AgentPresetId, Message } from '../core/types.js';
+import { PicoConfig } from '../config/config.ts';
+import { AgentPresetId, Message } from '../core/types.ts';
 
 export type RunStatus = 'running' | 'completed' | 'failed';
 
@@ -148,10 +148,10 @@ export interface SessionCompactResult {
 }
 
 export interface RunStore {
-  createRun(record: RunRecord): RunRecord;
+  createRun(record: RunRecord): Promise<RunRecord>;
   getRun(id: string): RunRecord | undefined;
-  updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): RunRecord | undefined;
-  appendRunEvent(runId: string, event: PendingRunEvent): RunEvent | undefined;
+  updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): Promise<RunRecord | undefined>;
+  appendRunEvent(runId: string, event: PendingRunEvent): Promise<RunEvent | undefined>;
   getRunEvents(runId: string): { runId: string; status: RunStatus; events: RunEvent[] } | undefined;
   subscribeToRun(runId: string, listener: RunListener): (() => void) | undefined;
   getRunSnapshot(runId: string): RunSnapshot | undefined;
@@ -182,9 +182,9 @@ export interface SessionStore {
 }
 
 export interface RuntimeStore {
-  createSession(record: SessionRecord): SessionRecord;
+  createSession(record: SessionRecord): Promise<SessionRecord>;
   getSession(id: string): SessionRecord | undefined;
-  setSessionAgent(sessionId: string, agent: AgentPresetId): void;
+  setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void>;
   refreshSessionControl(
     sessionId: string,
     control: {
@@ -192,21 +192,21 @@ export interface RuntimeStore {
       controlConfig: PicoConfig;
       systemPrompts: Record<AgentPresetId, string>;
     },
-  ): void;
-  attachRunToSession(sessionId: string, runId: string): void;
-  finishSessionRun(sessionId: string, runId: string, messages: Message[]): void;
-  clearSessionActiveRun(sessionId: string, runId: string): void;
-  createRun(record: RunRecord): RunRecord;
+  ): Promise<void>;
+  attachRunToSession(sessionId: string, runId: string): Promise<void>;
+  finishSessionRun(sessionId: string, runId: string, messages: Message[]): Promise<void>;
+  clearSessionActiveRun(sessionId: string, runId: string): Promise<void>;
+  createRun(record: RunRecord): Promise<RunRecord>;
   getRun(id: string): RunRecord | undefined;
-  updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): RunRecord | undefined;
-  appendRunEvent(runId: string, event: PendingRunEvent): RunEvent | undefined;
+  updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): Promise<RunRecord | undefined>;
+  appendRunEvent(runId: string, event: PendingRunEvent): Promise<RunEvent | undefined>;
   getRunEvents(runId: string): { runId: string; status: RunStatus; events: RunEvent[] } | undefined;
   subscribeToRun(runId: string, listener: RunListener): (() => void) | undefined;
   getRunSnapshot(runId: string): RunSnapshot | undefined;
   getSessionSnapshot(sessionId: string): SessionSnapshot | undefined;
   listSessionResources(sessionId: string, resourcePath?: string): string[] | undefined;
   readSessionResource(sessionId: string, resourcePath: string): string | undefined;
-  compactSession(sessionId: string, keepLastMessages?: number): SessionCompactResult | undefined;
+  compactSession(sessionId: string, keepLastMessages?: number): Promise<SessionCompactResult | undefined>;
 }
 
 export type RunListener = (event: RunEvent) => void;

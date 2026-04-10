@@ -1,11 +1,9 @@
-import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, test } from 'node:test';
-import type { Filesystem, ReadTextFileOptions, SearchMatch } from '../../src/core/filesystem.js';
-import { createRuntimeContext } from '../../src/runtime/index.js';
-import { buildSessionControlSnapshot } from '../../src/runtime/control-snapshot.js';
+import { afterEach, expect, test } from 'bun:test';
+import type { Filesystem, ReadTextFileOptions, SearchMatch } from '../../src/core/filesystem.ts';
+import { joinPath } from '../../src/fs/path.ts';
+import { createRuntimeContext } from '../../src/runtime/index.ts';
+import { buildSessionControlSnapshot } from '../../src/runtime/control-snapshot.ts';
+import { ensureDir, makeTempDir, removeDir, writeTextFile } from '../helpers/fs.ts';
 
 class WorkspaceOnlyFilesystem implements Filesystem {
   constructor(private readonly files = new Map<string, string>()) {}
@@ -47,16 +45,16 @@ class WorkspaceOnlyFilesystem implements Filesystem {
 
 const tempDirs = new Set<string>();
 
-afterEach(() => {
+afterEach(async () => {
   for (const dir of tempDirs) {
-    rmSync(dir, { recursive: true, force: true });
+    await removeDir(dir);
   }
   tempDirs.clear();
 });
 
 test('control snapshots keep host defaults and user memory when a workspace filesystem is injected', async () => {
-  const workspaceRoot = mkdtempSync(join(tmpdir(), 'picoagent-control-workspace-'));
-  const homeRoot = mkdtempSync(join(tmpdir(), 'picoagent-control-home-'));
+  const workspaceRoot = await makeTempDir('picoagent-control-workspace-');
+  const homeRoot = await makeTempDir('picoagent-control-home-');
   tempDirs.add(workspaceRoot);
   tempDirs.add(homeRoot);
 
@@ -64,12 +62,12 @@ test('control snapshots keep host defaults and user memory when a workspace file
   process.env.HOME = homeRoot;
 
   try {
-    mkdirSync(join(homeRoot, '.pico', 'memory'), { recursive: true });
-    writeFileSync(join(homeRoot, '.pico', 'memory', 'memory.md'), 'Remember host preferences.', 'utf8');
-    writeFileSync(join(homeRoot, '.pico', 'config.jsonc'), '{ "provider": "echo", "model": "host-echo" }\n', 'utf8');
+    await ensureDir(joinPath(homeRoot, '.pico', 'memory'));
+    await writeTextFile(joinPath(homeRoot, '.pico', 'memory', 'memory.md'), 'Remember host preferences.');
+    await writeTextFile(joinPath(homeRoot, '.pico', 'config.jsonc'), '{ "provider": "echo", "model": "host-echo" }\n');
 
     const filesystem = new WorkspaceOnlyFilesystem(new Map([
-      [join(workspaceRoot, 'AGENTS.md'), 'Workspace agent instructions.'],
+      [joinPath(workspaceRoot, 'AGENTS.md'), 'Workspace agent instructions.'],
     ]));
 
     const snapshot = await buildSessionControlSnapshot(
@@ -78,10 +76,10 @@ test('control snapshots keep host defaults and user memory when a workspace file
       filesystem,
     );
 
-    assert.equal(snapshot.config.model, 'host-echo');
-    assert.match(snapshot.systemPrompts.ask, /Remember host preferences\./);
-    assert.match(snapshot.systemPrompts.ask, /reviewer: Code review/);
-    assert.match(snapshot.systemPrompts.ask, /Workspace agent instructions\./);
+    expect(snapshot.config.model).toBe('host-echo');
+    expect(snapshot.systemPrompts.ask).toMatch(/Remember host preferences\./);
+    expect(snapshot.systemPrompts.ask).toMatch(/reviewer: Code review/);
+    expect(snapshot.systemPrompts.ask).toMatch(/Workspace agent instructions\./);
   } finally {
     process.env.HOME = originalHome;
   }

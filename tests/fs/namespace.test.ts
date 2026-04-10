@@ -1,7 +1,6 @@
-import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { Namespace } from '../../src/fs/namespace.js';
-import type { MutableFilesystem } from '../../src/core/filesystem.js';
+import { expect, test } from 'bun:test';
+import { Namespace } from '../../src/fs/namespace.ts';
+import type { MutableFilesystem } from '../../src/core/filesystem.ts';
 
 test('namespace preserves absolute paths for mounted filesystem access', async () => {
   const calls: string[] = [];
@@ -29,17 +28,17 @@ test('namespace preserves absolute paths for mounted filesystem access', async (
   const namespace = new Namespace([{ name: 'workspace', filesystem, root: '.', writable: true }]);
   const absolutePath = '/tmp/project/src/a.ts';
 
-  assert.equal(await namespace.readTextFile('workspace', absolutePath), 'ok');
+  expect(await namespace.readTextFile('workspace', absolutePath)).toBe('ok');
   await namespace.writeTextFile('workspace', absolutePath, 'updated');
   await namespace.deleteTextFile('workspace', absolutePath);
-  assert.deepEqual(await namespace.listFiles('workspace', absolutePath, 10, new AbortController().signal), [
+  expect(await namespace.listFiles('workspace', absolutePath, 10, new AbortController().signal)).toEqual([
     '/tmp/project/src/a.ts/a.ts',
   ]);
-  assert.deepEqual(await namespace.searchText('workspace', absolutePath, 'needle', 10, new AbortController().signal), [
+  expect(await namespace.searchText('workspace', absolutePath, 'needle', 10, new AbortController().signal)).toEqual([
     { path: '/tmp/project/src/a.ts/a.ts', line: 1, text: 'needle' },
   ]);
 
-  assert.deepEqual(calls, [
+  expect(calls).toEqual([
     'read:/tmp/project/src/a.ts',
     'write:/tmp/project/src/a.ts:updated',
     'delete:/tmp/project/src/a.ts',
@@ -66,8 +65,8 @@ test('namespace resolves absolute-like namespace paths', async () => {
   const namespace = new Namespace([{ name: 'workspace', filesystem, root: '.', writable: true }]);
   const result = namespace.resolveNamespacePath('/workspace/src/main.ts');
 
-  assert.equal(result.mountName, 'workspace');
-  assert.equal(result.relativePath, 'src/main.ts');
+  expect(result.mountName).toBe('workspace');
+  expect(result.relativePath).toBe('src/main.ts');
 });
 
 test('namespace rejects unknown namespace path mount', async () => {
@@ -87,7 +86,7 @@ test('namespace rejects unknown namespace path mount', async () => {
 
   const namespace = new Namespace([{ name: 'workspace', filesystem, root: '.' }]);
 
-  assert.throws(() => {
+  expect(() => {
     namespace.resolveNamespacePath('/ghost/path');
-  }, /Unknown namespace mount: ghost/);
+  }).toThrow(/Unknown namespace mount: ghost/);
 });

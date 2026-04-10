@@ -1,13 +1,12 @@
-import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import path from 'node:path';
-import { createRuntimeContext } from '../../src/runtime/index.js';
-import { RuntimeConflictError, RuntimeEngine } from '../../src/runtime/engine.js';
-import { InMemoryRuntimeStore } from '../../src/runtime/runtime-store.js';
-import { StoreBackedSessionStore } from '../../src/runtime/store-backed-session-store.js';
-import { LocalWorkspaceFileSystem } from '../../src/fs/workspace-fs.js';
-import type { MutableFilesystem } from '../../src/core/filesystem.js';
-import type { FileViewAccess } from '../../src/core/file-view.js';
+import { expect, test } from 'bun:test';
+import { joinPath } from '../../src/fs/path.ts';
+import { createRuntimeContext } from '../../src/runtime/index.ts';
+import { RuntimeConflictError, RuntimeEngine } from '../../src/runtime/engine.ts';
+import { InMemoryRuntimeStore } from '../../src/runtime/runtime-store.ts';
+import { StoreBackedSessionStore } from '../../src/runtime/store-backed-session-store.ts';
+import { LocalWorkspaceFileSystem } from '../../src/fs/workspace-fs.ts';
+import type { MutableFilesystem } from '../../src/core/filesystem.ts';
+import type { FileViewAccess } from '../../src/core/file-view.ts';
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -63,19 +62,19 @@ test('runtime engine rejects a second concurrent session run after control refre
   );
   const rejected = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
 
-  assert.equal(fulfilled.length, 1);
-  assert.equal(rejected.length, 1);
-  assert.ok(rejected[0].reason instanceof RuntimeConflictError);
+  expect(fulfilled).toHaveLength(1);
+  expect(rejected).toHaveLength(1);
+  expect(rejected[0].reason).toBeInstanceOf(RuntimeConflictError);
 
   const storedSession = store.getSession(session.id);
-  assert.equal(storedSession?.activeRunId, fulfilled[0].value.id);
-  assert.deepEqual(storedSession?.runIds, [fulfilled[0].value.id]);
+  expect(storedSession?.activeRunId).toBe(fulfilled[0].value.id);
+  expect(storedSession?.runIds).toEqual([fulfilled[0].value.id]);
 });
 
 test('fileView supports namespace paths for workspace read', async () => {
   const basePath = '/tmp/picoagent-workspace';
   const readCalls: string[] = [];
-  const workspaceFile = path.join(basePath, 'workspace-file.txt');
+  const workspaceFile = joinPath(basePath, 'workspace-file.txt');
   const filesystem: MutableFilesystem = {
     async readTextFile(filePath) {
       readCalls.push(filePath);
@@ -124,8 +123,8 @@ test('fileView supports namespace paths for workspace read', async () => {
   const methods = runtime.fileView('run-1', basePath, [basePath], new AbortController().signal);
   const content = await methods.read('/workspace/workspace-file.txt');
 
-  assert.equal(content, 'workspace-data');
-  assert.deepEqual(readCalls, [workspaceFile]);
+  expect(content).toBe('workspace-data');
+  expect(readCalls).toEqual([workspaceFile]);
 });
 
 test('fileView supports session namespace read', async () => {
@@ -181,7 +180,7 @@ test('fileView supports session namespace read', async () => {
   );
 
   const content = await methods.read('/session/summary.md');
-  assert.ok(content.includes('No session checkpoint yet.'));
+  expect(content).toContain('No session checkpoint yet.');
 });
 
 test('fileView requires session id for session namespace', async () => {
@@ -228,12 +227,7 @@ test('fileView requires session id for session namespace', async () => {
   };
   const methods = runtime.fileView('run-3', process.cwd(), [process.cwd()], new AbortController().signal);
 
-  await assert.rejects(
-    async () => {
-      await methods.read('/session/summary.md');
-    },
-    /session namespace requires a persistent session/,
-  );
+  await expect(methods.read('/session/summary.md')).rejects.toThrow(/session namespace requires a persistent session/);
 });
 
 test('fileView preserves extra namespace mounts when a session namespace is active', async () => {
@@ -317,5 +311,5 @@ test('fileView preserves extra namespace mounts when a session namespace is acti
     session.id,
   );
 
-  assert.equal(await methods.read('/remote@build/docs/readme.md'), 'remote mount data');
+  expect(await methods.read('/remote@build/docs/readme.md')).toBe('remote mount data');
 });

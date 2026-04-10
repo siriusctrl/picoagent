@@ -1,32 +1,30 @@
-import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { afterEach, test } from 'node:test';
-import { RootedFilesystem } from '../../src/fs/rooted-fs.js';
-import { LocalWorkspaceFileSystem } from '../../src/fs/workspace-fs.js';
+import { afterEach, expect, test } from 'bun:test';
+import { joinPath } from '../../src/fs/path.ts';
+import { RootedFilesystem } from '../../src/fs/rooted-fs.ts';
+import { LocalWorkspaceFileSystem } from '../../src/fs/workspace-fs.ts';
+import { ensureDir, makeTempDir, removeDir, writeTextFile } from '../helpers/fs.ts';
 
 const roots = new Set<string>();
 
-afterEach(() => {
+afterEach(async () => {
   for (const root of roots) {
-    rmSync(root, { recursive: true, force: true });
+    await removeDir(root);
   }
   roots.clear();
 });
 
 test('rooted filesystem keeps reads, lists, and searches relative to its root', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'picoagent-rooted-fs-'));
+  const root = await makeTempDir('picoagent-rooted-fs-');
   roots.add(root);
-  mkdirSync(join(root, 'nested'), { recursive: true });
-  writeFileSync(join(root, 'nested', 'file.txt'), 'needle here\nand here', 'utf8');
+  await ensureDir(joinPath(root, 'nested'));
+  await writeTextFile(joinPath(root, 'nested', 'file.txt'), 'needle here\nand here');
 
   const filesystem = new RootedFilesystem(new LocalWorkspaceFileSystem(), root);
   const signal = new AbortController().signal;
 
-  assert.equal(await filesystem.readTextFile('nested/file.txt'), 'needle here\nand here');
-  assert.deepEqual(await filesystem.listFiles('.', 20, signal), ['nested/file.txt']);
-  assert.deepEqual(await filesystem.searchText('.', 'needle', 20, signal), [
+  expect(await filesystem.readTextFile('nested/file.txt')).toBe('needle here\nand here');
+  expect(await filesystem.listFiles('.', 20, signal)).toEqual(['nested/file.txt']);
+  expect(await filesystem.searchText('.', 'needle', 20, signal)).toEqual([
     {
       path: 'nested/file.txt',
       line: 1,
@@ -36,12 +34,10 @@ test('rooted filesystem keeps reads, lists, and searches relative to its root', 
 });
 
 test('rooted filesystem rejects paths outside the configured root', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'picoagent-rooted-fs-'));
+  const root = await makeTempDir('picoagent-rooted-fs-');
   roots.add(root);
 
   const filesystem = new RootedFilesystem(new LocalWorkspaceFileSystem(), root);
 
-  await assert.rejects(async () => {
-    await filesystem.readTextFile('../outside.txt');
-  }, /outside the rooted filesystem/);
+  await expect(filesystem.readTextFile('../outside.txt')).rejects.toThrow(/outside the rooted filesystem/);
 });

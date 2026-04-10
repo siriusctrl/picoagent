@@ -1,17 +1,13 @@
-import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
-import { dirname, extname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { loadConfigFromContents, PicoConfig, userConfigPath } from '../config/config.js';
-import type { Filesystem } from '../core/filesystem.js';
-import { ToolRegistry } from '../core/tool-registry.js';
-import { AgentPresetId } from '../core/types.js';
-import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.js';
-import { DocMeta, scanMarkdownDocuments } from '../prompting/frontmatter.js';
-import { buildSystemPrompt, ControlPromptSurface } from '../prompting/prompt.js';
+import { loadConfigFromContents, PicoConfig, userConfigPath, userHomeDir } from '../config/config.ts';
+import type { Filesystem } from '../core/filesystem.ts';
+import { ToolRegistry } from '../core/tool-registry.ts';
+import { AgentPresetId } from '../core/types.ts';
+import { extnamePath, joinPath, relativePath } from '../fs/path.ts';
+import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.ts';
+import { DocMeta, scanMarkdownDocuments } from '../prompting/frontmatter.ts';
+import { buildSystemPrompt, ControlPromptSurface } from '../prompting/prompt.ts';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULTS_DIR = join(__dirname, '..', '..', 'defaults');
+const DEFAULTS_DIR = joinPath(import.meta.dir, '..', '..', 'defaults');
 const NEVER_ABORTED = new AbortController().signal;
 const HOST_FILESYSTEM = new LocalWorkspaceFileSystem();
 
@@ -70,7 +66,7 @@ async function loadControlTree(
   const loaded = await Promise.all(filePaths.map(async (filePath) => {
     try {
       return {
-        key: `${keyPrefix}/${normalizePath(relative(root, filePath))}`,
+        key: `${keyPrefix}/${normalizePath(relativePath(root, filePath))}`,
         path: filePath,
         content: await filesystem.readTextFile(filePath),
       } satisfies LoadedControlFile;
@@ -86,7 +82,7 @@ async function loadControlTree(
 
 async function scanMarkdownTree(filesystem: Filesystem, root: string): Promise<DocMeta[]> {
   const filePaths = (await listExistingFiles(filesystem, root))
-    .filter((filePath) => extname(filePath) === '.md')
+    .filter((filePath) => extnamePath(filePath) === '.md')
     .sort((left, right) => left.localeCompare(right));
 
   const documents = await Promise.all(filePaths.map(async (filePath) => {
@@ -111,12 +107,12 @@ async function scanMergedDocuments(
 ): Promise<DocMeta[]> {
   const merged = new Map<string, DocMeta>();
 
-  for (const doc of await scanMarkdownTree(hostFilesystem, join(DEFAULTS_DIR, subdir))) {
+  for (const doc of await scanMarkdownTree(hostFilesystem, joinPath(DEFAULTS_DIR, subdir))) {
     const name = typeof doc.frontmatter.name === 'string' ? doc.frontmatter.name : doc.path;
     merged.set(name, doc);
   }
 
-  for (const doc of await scanMarkdownTree(workspaceFilesystem, join(workspaceRoot, subdir))) {
+  for (const doc of await scanMarkdownTree(workspaceFilesystem, joinPath(workspaceRoot, subdir))) {
     const name = typeof doc.frontmatter.name === 'string' ? doc.frontmatter.name : doc.path;
     merged.set(name, doc);
   }
@@ -130,11 +126,11 @@ async function buildControlPromptSurface(
   hostFilesystem: Filesystem = HOST_FILESYSTEM,
 ): Promise<ControlPromptSurface> {
   const [soul, user, agents, userMemory, workspaceMemory, skills, agentsDocs] = await Promise.all([
-    readOptional(workspaceFilesystem, join(workspaceRoot, 'SOUL.md')),
-    readOptional(workspaceFilesystem, join(workspaceRoot, 'USER.md')),
-    readOptional(workspaceFilesystem, join(workspaceRoot, 'AGENTS.md')),
-    readOptional(hostFilesystem, join(homedir(), '.pico', 'memory', 'memory.md')),
-    readOptional(workspaceFilesystem, join(workspaceRoot, '.pico', 'memory', 'memory.md')),
+    readOptional(workspaceFilesystem, joinPath(workspaceRoot, 'SOUL.md')),
+    readOptional(workspaceFilesystem, joinPath(workspaceRoot, 'USER.md')),
+    readOptional(workspaceFilesystem, joinPath(workspaceRoot, 'AGENTS.md')),
+    readOptional(hostFilesystem, joinPath(userHomeDir(), '.pico', 'memory', 'memory.md')),
+    readOptional(workspaceFilesystem, joinPath(workspaceRoot, '.pico', 'memory', 'memory.md')),
     scanMergedDocuments(workspaceFilesystem, 'skills', workspaceRoot, hostFilesystem),
     scanMergedDocuments(workspaceFilesystem, 'agents', workspaceRoot, hostFilesystem),
   ]);
@@ -155,20 +151,20 @@ async function loadControlFiles(
   hostFilesystem: Filesystem = HOST_FILESYSTEM,
 ): Promise<LoadedControlFile[]> {
   const files = await Promise.all([
-    loadControlFile(workspaceFilesystem, 'workspace/SOUL.md', join(workspaceRoot, 'SOUL.md')),
-    loadControlFile(workspaceFilesystem, 'workspace/USER.md', join(workspaceRoot, 'USER.md')),
-    loadControlFile(workspaceFilesystem, 'workspace/AGENTS.md', join(workspaceRoot, 'AGENTS.md')),
-    loadControlFile(workspaceFilesystem, 'workspace/.pico/config.jsonc', join(workspaceRoot, '.pico', 'config.jsonc')),
-    loadControlFile(workspaceFilesystem, 'workspace/.pico/memory/memory.md', join(workspaceRoot, '.pico', 'memory', 'memory.md')),
+    loadControlFile(workspaceFilesystem, 'workspace/SOUL.md', joinPath(workspaceRoot, 'SOUL.md')),
+    loadControlFile(workspaceFilesystem, 'workspace/USER.md', joinPath(workspaceRoot, 'USER.md')),
+    loadControlFile(workspaceFilesystem, 'workspace/AGENTS.md', joinPath(workspaceRoot, 'AGENTS.md')),
+    loadControlFile(workspaceFilesystem, 'workspace/.pico/config.jsonc', joinPath(workspaceRoot, '.pico', 'config.jsonc')),
+    loadControlFile(workspaceFilesystem, 'workspace/.pico/memory/memory.md', joinPath(workspaceRoot, '.pico', 'memory', 'memory.md')),
     loadControlFile(hostFilesystem, 'user/.pico/config.jsonc', userConfigPath()),
-    loadControlFile(hostFilesystem, 'user/.pico/memory/memory.md', join(homedir(), '.pico', 'memory', 'memory.md')),
+    loadControlFile(hostFilesystem, 'user/.pico/memory/memory.md', joinPath(userHomeDir(), '.pico', 'memory', 'memory.md')),
   ]);
 
   const trees = await Promise.all([
-    loadControlTree(hostFilesystem, 'defaults/skills', join(DEFAULTS_DIR, 'skills')),
-    loadControlTree(hostFilesystem, 'defaults/agents', join(DEFAULTS_DIR, 'agents')),
-    loadControlTree(workspaceFilesystem, 'workspace/skills', join(workspaceRoot, 'skills')),
-    loadControlTree(workspaceFilesystem, 'workspace/agents', join(workspaceRoot, 'agents')),
+    loadControlTree(hostFilesystem, 'defaults/skills', joinPath(DEFAULTS_DIR, 'skills')),
+    loadControlTree(hostFilesystem, 'defaults/agents', joinPath(DEFAULTS_DIR, 'agents')),
+    loadControlTree(workspaceFilesystem, 'workspace/skills', joinPath(workspaceRoot, 'skills')),
+    loadControlTree(workspaceFilesystem, 'workspace/agents', joinPath(workspaceRoot, 'agents')),
   ]);
 
   return [...files.filter((file): file is LoadedControlFile => file !== null), ...trees.flat()]
@@ -179,7 +175,7 @@ export async function computeControlVersion(
   workspaceRoot: string,
   filesystem: Filesystem = new LocalWorkspaceFileSystem(),
 ): Promise<string> {
-  const hash = createHash('sha256');
+  const hash = new Bun.CryptoHasher('sha256');
 
   for (const file of await loadControlFiles(workspaceRoot, filesystem, HOST_FILESYSTEM)) {
     hash.update(file.key);
@@ -201,7 +197,7 @@ export async function buildSessionControlSnapshot(
     controlVersion ?? computeControlVersion(workspaceRoot, filesystem),
     buildControlPromptSurface(workspaceRoot, filesystem, HOST_FILESYSTEM),
     readOptional(HOST_FILESYSTEM, userConfigPath()),
-    readOptional(filesystem, join(workspaceRoot, '.pico', 'config.jsonc')),
+    readOptional(filesystem, joinPath(workspaceRoot, '.pico', 'config.jsonc')),
   ]);
 
   return {

@@ -1,4 +1,4 @@
-import type { AgentPresetId, Message } from '../core/types.js';
+import type { AgentPresetId, Message } from '../core/types.ts';
 import type {
   PendingRunEvent,
   RunRecord,
@@ -6,7 +6,7 @@ import type {
   SessionRecord,
   SessionSnapshot,
   SessionStore,
-} from './store.js';
+} from './store.ts';
 
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {

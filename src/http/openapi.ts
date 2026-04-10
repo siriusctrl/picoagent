@@ -1,4 +1,4 @@
-export { buildOpenApiDocument } from './openapi-document.js';
+export { buildOpenApiDocument } from './openapi-document.ts';
 export {
   compactSessionRoute,
   createSessionRoute,
@@ -10,4 +10,4 @@ export {
   listSessionResourcesRoute,
   readSessionResourceRoute,
   setSessionAgentRoute,
-} from './openapi-routes.js';
+} from './openapi-routes.ts';

@@ -1,20 +1,19 @@
-import { test } from 'node:test';
-import assert from 'node:assert';
-import { truncateOutput } from '../../src/core/loop.js';
+import { test, expect } from 'bun:test';
+import { truncateOutput } from '../../src/core/loop.ts';
 
 test('truncateOutput keeps short content unchanged', () => {
   const content = 'hello world';
-  assert.strictEqual(truncateOutput(content), content);
+  expect(truncateOutput(content)).toBe(content);
 });
 
 test('truncateOutput truncates content > 32K', () => {
   const content = 'a'.repeat(33000);
   const result = truncateOutput(content);
-  
+
   const expectedHead = 'a'.repeat(24000);
   const expectedTail = 'a'.repeat(6000);
-  
-  assert.ok(result.startsWith(expectedHead));
-  assert.ok(result.endsWith(expectedTail));
-  assert.ok(result.includes('... [3000 chars truncated] ...'));
+
+  expect(result.slice(0, expectedHead.length)).toBe(expectedHead);
+  expect(result.slice(-expectedTail.length)).toBe(expectedTail);
+  expect(result).toContain('... [3000 chars truncated] ...');
 });

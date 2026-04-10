@@ -89,7 +89,7 @@ Rules:
 - keep the CLI thin and explicit
 - reuse the HTTP surface instead of inventing a second runtime path
 - prefer a small command surface over feature-heavy shell UX
-- if CLI behavior changes, verify with `npm run dev:cli -- help` and `serve`
+- if CLI behavior changes, verify with `bun run dev:cli -- help` and `serve`
 
 Read first:
 - `docs/entrypoints.md`
@@ -105,7 +105,7 @@ Rules:
 - keep the TUI thin; it should speak HTTP and render terminal UX
 - do not move model logic here
 - preserve terminal-native behavior over browser-style patterns
-- if TUI behavior changes, verify with `npm run dev:tui`
+- if TUI behavior changes, verify with `bun run dev:tui`
 
 Read first:
 - `docs/entrypoints.md`
@@ -131,6 +131,7 @@ Read first:
 Scope:
 - deterministic filesystem helpers
 - workspace filesystem boundary
+- shared path normalization helpers used by runtime-facing filesystem code
 
 Rules:
 - preserve session-root safety and predictable traversal behavior
@@ -138,6 +139,7 @@ Rules:
 
 Read first:
 - `docs/architecture.md`
+- `src/fs/path.ts`
 - `src/fs/filesystem.ts`
 - `src/fs/workspace-fs.ts`
 

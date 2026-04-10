@@ -87,10 +87,10 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
 ## Verification Requirements
 
 - Minimum bar for meaningful changes:
-  - `npm run build`
-  - `npm test`
-  - `npm run typecheck`
-- If you change TUI behavior, manually run `npm run dev:tui`.
+  - `bun run build`
+  - `bun run test`
+  - `bun run typecheck`
+- If you change TUI behavior, manually run `bun run dev:tui`.
 
 ## Collaboration Preferences
 

@@ -1,10 +1,17 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, expect } from 'bun:test';
 import { z } from 'zod';
-import { runAgentLoop } from '../../src/core/loop.js';
-import { Provider, StreamEvent } from '../../src/core/provider.js';
-import { AssistantMessage, Message, Tool, ToolContext, ToolDefinition } from '../../src/core/types.js';
-import { resolveSessionPath } from '../../src/fs/filesystem.js';
+import { runAgentLoop } from '../../src/core/loop.ts';
+import { Provider, StreamEvent } from '../../src/core/provider.ts';
+import { AssistantMessage, Message, Tool, ToolContext, ToolDefinition } from '../../src/core/types.ts';
+import { resolveSessionPath } from '../../src/fs/filesystem.ts';
+
+function requireValue<T>(value: T | undefined, message: string): T {
+  if (value === undefined) {
+    throw new Error(message);
+  }
+
+  return value;
+}
 
 const mockTool: Tool<any> = {
   name: 'mock',
@@ -74,7 +81,7 @@ test('agent loop returns the first text response when no tool call is present', 
   ]);
 
   const result = await runAgentLoop([], [mockTool], provider, mockContext);
-  assert.deepEqual(result, { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] });
+  expect(result).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'Hello' }] });
 });
 
 test('agent loop executes the requested tool and feeds the result back into the conversation', async () => {
@@ -84,11 +91,13 @@ test('agent loop executes the requested tool and feeds the result back into the 
   ]);
 
   const result = await runAgentLoop([], [mockTool], provider, mockContext);
-  const toolResult = provider.messages.find((message) => message.role === 'toolResult');
+  const toolResult = requireValue(
+    provider.messages.find((message) => message.role === 'toolResult'),
+    'expected a tool result message',
+  );
 
-  assert.ok(toolResult);
-  assert.equal(toolResult.content, 'Executed: test');
-  assert.equal(result.content[0]?.type, 'text');
+  expect(toolResult.content).toBe('Executed: test');
+  expect(result.content[0]?.type).toBe('text');
 });
 
 test('agent loop rejects invalid tool arguments with a tool result error', async () => {
@@ -98,11 +107,13 @@ test('agent loop rejects invalid tool arguments with a tool result error', async
   ]);
 
   await runAgentLoop([], [mockTool], provider, mockContext);
-  const toolResult = provider.messages.find((message) => message.role === 'toolResult');
+  const toolResult = requireValue(
+    provider.messages.find((message) => message.role === 'toolResult'),
+    'expected a tool result message',
+  );
 
-  assert.ok(toolResult);
-  assert.equal(toolResult.isError, true);
-  assert.match(toolResult.content, /Invalid arguments/);
+  expect(toolResult.isError).toBeTruthy();
+  expect(toolResult.content).toContain('Invalid arguments');
 });
 
 test('agent loop does not resolve tool locations before validating arguments', async () => {
@@ -120,9 +131,11 @@ test('agent loop does not resolve tool locations before validating arguments', a
   ]);
 
   await runAgentLoop([], [guardedTool], provider, mockContext);
-  const toolResult = provider.messages.find((message) => message.role === 'toolResult');
+  const toolResult = requireValue(
+    provider.messages.find((message) => message.role === 'toolResult'),
+    'expected a tool result message',
+  );
 
-  assert.ok(toolResult);
-  assert.equal(toolResult.isError, true);
-  assert.match(toolResult.content, /Invalid arguments/);
+  expect(toolResult.isError).toBeTruthy();
+  expect(toolResult.content).toContain('Invalid arguments');
 });

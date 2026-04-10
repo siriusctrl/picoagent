@@ -1,16 +1,15 @@
-import http from 'node:http';
 import { Hono } from 'hono';
-import { AgentPresetId } from '../core/types.js';
+import { AgentPresetId } from '../core/types.ts';
 import {
   SessionConflictError,
   SessionNotFoundError,
   SessionService,
   SessionValidationError,
   type SessionServiceOptions,
-} from '../runtime/session-service.js';
-import type { RunRecord, SessionRecord } from '../runtime/store.js';
-import { startNodeFetchServer } from './node-server.js';
-import { projectSessionSummary } from './session-summary.js';
+} from '../runtime/session-service.ts';
+import type { RunRecord, SessionRecord } from '../runtime/store.ts';
+import { type LocalServerHandle, startBunFetchServer } from './bun-server.ts';
+import { projectSessionSummary } from './session-summary.ts';
 
 export interface SessionServerOptions extends SessionServiceOptions {
   hostname?: string;
@@ -58,8 +57,8 @@ function parseAgent(value: unknown): AgentPresetId | undefined {
   throw new SessionValidationError(`Unsupported agent: ${String(value)}`);
 }
 
-export function createSessionApp(options: SessionServerOptions = {}) {
-  const service = new SessionService(options);
+export async function createSessionApp(options: SessionServerOptions = {}) {
+  const service = await SessionService.create(options);
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -172,9 +171,9 @@ export function createSessionApp(options: SessionServerOptions = {}) {
   return { app, service };
 }
 
-export async function startSessionServer(options: SessionServerOptions = {}): Promise<http.Server> {
+export async function startSessionServer(options: SessionServerOptions = {}): Promise<LocalServerHandle> {
   const hostname = options.hostname ?? '127.0.0.1';
   const port = options.port ?? 4097;
-  const { app } = createSessionApp(options);
-  return startNodeFetchServer(app.fetch, hostname, port);
+  const { app } = await createSessionApp(options);
+  return startBunFetchServer(app.fetch, hostname, port);
 }

@@ -10,7 +10,7 @@ Read with:
 
 `picoagent` is meant to be a simple, controllable agent harness.
 
-The architectural goal is to keep three concerns explicit and separate:
+The architectural goal is to keep four concerns explicit and separate:
 
 - `session` manages context
 - `runtime` executes one run through the agent loop
@@ -20,6 +20,7 @@ The architectural goal is to keep three concerns explicit and separate:
 ## Current Scope
 
 The repository is intentionally a single TypeScript package with one core runtime, one thin HTTP transport adapter, and thin local clients.
+The default local host stack is Bun-native, but that host choice stays behind the runtime boundaries rather than redefining the domain model.
 
 That is the intended shape at this scale:
 
@@ -183,7 +184,7 @@ Rules:
 
 - the harness should depend on a filesystem boundary for file-backed behavior
 - the harness should depend on an execution backend for command execution
-- local filesystem and local process execution are only the default implementations
+- local filesystem and local process execution are only the default implementations, and those defaults currently use Bun-native primitives
 - future remote sandboxes should replace those boundaries, not rewrite the HTTP layer
 
 ## Dependency Rules

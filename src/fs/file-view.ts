@@ -1,8 +1,16 @@
-import type { SearchMatch } from '../core/filesystem.js';
+import type { SearchMatch } from '../core/filesystem.ts';
 
 export interface TextBlob {
   path: string;
   content: string;
+}
+
+interface BunGlobMatcher {
+  match(path: string): boolean;
+}
+
+interface BunGlobConstructor {
+  new (pattern: string): BunGlobMatcher;
 }
 
 function normalizePath(value: string): string {
@@ -13,7 +21,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
 }
 
-export function globToRegExp(pattern: string): RegExp {
+function globToRegExp(pattern: string): RegExp {
   const normalized = normalizePath(pattern);
   let source = '^';
 
@@ -51,11 +59,24 @@ export function globToRegExp(pattern: string): RegExp {
   return new RegExp(source);
 }
 
+function bunGlobConstructor(): BunGlobConstructor | undefined {
+  const bunGlobal = globalThis as typeof globalThis & {
+    Bun?: { Glob?: BunGlobConstructor };
+  };
+
+  return bunGlobal.Bun?.Glob;
+}
+
 export function filterGlob(paths: string[], pattern: string, limit = paths.length): string[] {
-  const regex = globToRegExp(pattern);
+  const normalizedPattern = normalizePath(pattern);
+  const BunGlob = bunGlobConstructor();
+  const matcher = BunGlob
+    ? new BunGlob(normalizedPattern)
+    : globToRegExp(normalizedPattern);
+
   return paths
     .map((value) => normalizePath(value))
-    .filter((value) => regex.test(value))
+    .filter((value) => matcher instanceof RegExp ? matcher.test(value) : matcher.match(value))
     .sort((left, right) => left.localeCompare(right))
     .slice(0, limit);
 }

@@ -1,4 +1,4 @@
-import type { AgentPresetId, Message } from '../core/types.js';
+import type { AgentPresetId, Message } from '../core/types.ts';
 import type {
   PendingRunEvent,
   RunRecord,
@@ -7,7 +7,7 @@ import type {
   SessionRecord,
   SessionSnapshot,
   SessionStore,
-} from './store.js';
+} from './store.ts';
 
 export class StoreBackedSessionStore implements SessionStore {
   constructor(private readonly store: RuntimeStore) {}
@@ -21,19 +21,19 @@ export class StoreBackedSessionStore implements SessionStore {
   }
 
   async createRun(record: RunRecord): Promise<void> {
-    this.store.createRun(record);
+    await this.store.createRun(record);
   }
 
   async updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): Promise<void> {
-    this.store.updateRun(runId, patch);
+    await this.store.updateRun(runId, patch);
   }
 
   async appendRunEvent(runId: string, event: PendingRunEvent): Promise<void> {
-    this.store.appendRunEvent(runId, event);
+    await this.store.appendRunEvent(runId, event);
   }
 
   async setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void> {
-    this.store.setSessionAgent(sessionId, agent);
+    await this.store.setSessionAgent(sessionId, agent);
   }
 
   async refreshSessionControl(
@@ -44,19 +44,19 @@ export class StoreBackedSessionStore implements SessionStore {
       systemPrompts: SessionRecord['systemPrompts'];
     },
   ): Promise<void> {
-    this.store.refreshSessionControl(sessionId, control);
+    await this.store.refreshSessionControl(sessionId, control);
   }
 
   async attachRunToSession(sessionId: string, runId: string): Promise<void> {
-    this.store.attachRunToSession(sessionId, runId);
+    await this.store.attachRunToSession(sessionId, runId);
   }
 
   async finishSessionRun(sessionId: string, runId: string, messages: Message[]): Promise<void> {
-    this.store.finishSessionRun(sessionId, runId, messages);
+    await this.store.finishSessionRun(sessionId, runId, messages);
   }
 
   async clearSessionActiveRun(sessionId: string, runId: string): Promise<void> {
-    this.store.clearSessionActiveRun(sessionId, runId);
+    await this.store.clearSessionActiveRun(sessionId, runId);
   }
 
   async getSessionSnapshot(sessionId: string): Promise<SessionSnapshot | undefined> {

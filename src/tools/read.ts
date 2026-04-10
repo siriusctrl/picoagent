@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import type { NamespaceLikePath } from '../core/file-view.js';
-import { Tool } from '../core/types.js';
-import { formatLineNumberedText, resolveSessionPath } from '../fs/filesystem.js';
-import { parseNamespacePath } from './namespace-path.js';
+import type { NamespaceLikePath } from '../core/file-view.ts';
+import { Tool } from '../core/types.ts';
+import { formatLineNumberedText, resolveSessionPath } from '../fs/filesystem.ts';
+import { parseNamespacePath } from './namespace-path.ts';
 
 const ReadParams = z.object({
   path: z

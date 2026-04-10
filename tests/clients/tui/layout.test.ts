@@ -1,20 +1,17 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { countWrappedLines, estimateEntryHeight } from '../../../src/clients/tui/layout.js';
+import { test, expect } from 'bun:test';
+import { countWrappedLines, estimateEntryHeight } from '../../../src/clients/tui/layout.ts';
 
 test('countWrappedLines accounts for wrapping and blank content', () => {
-  assert.equal(countWrappedLines('', 10), 1);
-  assert.equal(countWrappedLines('abcd', 2), 2);
-  assert.equal(countWrappedLines('a\nbcdef', 3), 3);
+  expect(countWrappedLines('', 10)).toBe(1);
+  expect(countWrappedLines('abcd', 2)).toBe(2);
+  expect(countWrappedLines('a\nbcdef', 3)).toBe(3);
 });
 
 test('estimateEntryHeight does not add a phantom output row for pending tool calls', () => {
-  assert.equal(
+  expect(
     estimateEntryHeight({ type: 'tool', title: 'read', status: 'pending' }, 40),
-    2,
-  );
-  assert.equal(
+  ).toBe(2);
+  expect(
     estimateEntryHeight({ type: 'tool', title: 'read', status: 'done', output: 'ok' }, 40),
-    3,
-  );
+  ).toBe(3);
 });

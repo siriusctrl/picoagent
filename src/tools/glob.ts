@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import type { NamespaceLikePath } from '../core/file-view.js';
-import { Tool } from '../core/types.js';
+import type { NamespaceLikePath } from '../core/file-view.ts';
+import { Tool } from '../core/types.ts';
 
 const GlobParams = z.object({
   pattern: z

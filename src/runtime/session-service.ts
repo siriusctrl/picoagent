@@ -1,13 +1,12 @@
-import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import type { MutableFilesystem } from '../core/filesystem.js';
-import type { AgentPresetId } from '../core/types.js';
-import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.js';
-import { buildSessionControlSnapshot } from './control-snapshot.js';
-import { createRuntimeContext } from './index.js';
-import { FileRuntimeStore, InMemoryRuntimeStore } from './runtime-store.js';
-import { StoreBackedSessionStore } from './store-backed-session-store.js';
-import type { PendingRunEvent, RunRecord, RuntimeStore, SessionRecord, SessionSnapshot } from './store.js';
+import type { MutableFilesystem } from '../core/filesystem.ts';
+import type { AgentPresetId } from '../core/types.ts';
+import { joinPath } from '../fs/path.ts';
+import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.ts';
+import { buildSessionControlSnapshot } from './control-snapshot.ts';
+import { createRuntimeContext } from './index.ts';
+import { FileRuntimeStore, InMemoryRuntimeStore } from './runtime-store.ts';
+import { StoreBackedSessionStore } from './store-backed-session-store.ts';
+import type { PendingRunEvent, RunRecord, RuntimeStore, SessionRecord, SessionSnapshot } from './store.ts';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -39,16 +38,23 @@ export class SessionService {
   private readonly filesystem: MutableFilesystem;
   private readonly runtimeContext: ReturnType<typeof createRuntimeContext>;
 
-  constructor(options: SessionServiceOptions = {}) {
+  private constructor(options: SessionServiceOptions, store: RuntimeStore) {
     this.cwd = options.cwd ?? process.cwd();
     this.filesystem = options.filesystem ?? new LocalWorkspaceFileSystem();
-    const runtimeRoot = options.runtimeRoot ?? join(this.cwd, '.pico', 'runtime');
-    const persistentRuntime = options.persistentRuntime ?? true;
     this.runtimeContext = createRuntimeContext(this.cwd);
-    this.store = persistentRuntime
-      ? new FileRuntimeStore(runtimeRoot)
-      : new InMemoryRuntimeStore();
+    this.store = store;
     this.sessionStore = new StoreBackedSessionStore(this.store);
+  }
+
+  static async create(options: SessionServiceOptions = {}): Promise<SessionService> {
+    const cwd = options.cwd ?? process.cwd();
+    const runtimeRoot = options.runtimeRoot ?? joinPath(cwd, '.pico', 'runtime');
+    const persistentRuntime = options.persistentRuntime ?? true;
+    const store = persistentRuntime
+      ? await FileRuntimeStore.create(runtimeRoot)
+      : new InMemoryRuntimeStore();
+
+    return new SessionService(options, store);
   }
 
   async createSession(agent: AgentPresetId = 'ask'): Promise<SessionRecord> {
@@ -59,7 +65,7 @@ export class SessionService {
     );
 
     return this.sessionStore.createSession({
-      id: randomUUID(),
+      id: crypto.randomUUID(),
       cwd: this.cwd,
       roots: [this.cwd],
       agent,
@@ -78,15 +84,15 @@ export class SessionService {
   }
 
   async createRunRecord(record: RunRecord): Promise<void> {
-    this.store.createRun(record);
+    await this.store.createRun(record);
   }
 
   async updateRunRecord(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): Promise<void> {
-    this.store.updateRun(runId, patch);
+    await this.store.updateRun(runId, patch);
   }
 
   async appendRunEvent(runId: string, event: PendingRunEvent): Promise<void> {
-    this.store.appendRunEvent(runId, event);
+    await this.store.appendRunEvent(runId, event);
   }
 
   async getSession(id: string): Promise<SessionRecord> {

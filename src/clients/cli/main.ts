@@ -1,20 +1,15 @@
-#!/usr/bin/env node
-import type http from 'node:http';
-import { parseCliArgs, usage } from './args.js';
-import { startSessionServer } from '../../http/session-server.js';
-import { startHttpServer } from '../../http/server.js';
-import { startFilespaceServer } from '../../http/filespace-server.js';
-import { HttpSessionStore } from '../../runtime/http-session-store.js';
-import { loadRuntimeMounts } from '../../runtime/mount-loader.js';
+#!/usr/bin/env bun
+import { parseCliArgs, usage } from './args.ts';
+import type { LocalServerHandle } from '../../http/bun-server.ts';
+import { startSessionServer } from '../../http/session-server.ts';
+import { startHttpServer } from '../../http/server.ts';
+import { startFilespaceServer } from '../../http/filespace-server.ts';
+import { HttpSessionStore } from '../../runtime/http-session-store.ts';
+import { loadRuntimeMounts } from '../../runtime/mount-loader.ts';
 
-function getServerUrl(server: http.Server, hostname: string): string {
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    throw new Error('Expected an inet server address');
-  }
-
+function getServerUrl(server: LocalServerHandle, hostname: string): string {
   const host = hostname === '0.0.0.0' ? '127.0.0.1' : hostname;
-  return `http://${host}:${address.port}`;
+  return `http://${host}:${server.port}`;
 }
 
 async function main(): Promise<void> {

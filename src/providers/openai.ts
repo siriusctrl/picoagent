@@ -6,8 +6,8 @@ import {
   TextContent,
   ToolCall,
   ToolDefinition
-} from '../core/types.js';
-import { Provider, ProviderConfig, StreamEvent } from '../core/provider.js';
+} from '../core/types.ts';
+import { Provider, ProviderConfig, StreamEvent } from '../core/provider.ts';
 
 export interface OpenAIProviderConfig extends ProviderConfig {
   baseURL?: string;  // override for compatible APIs (DeepSeek, Groq, Together, Ollama, etc.)

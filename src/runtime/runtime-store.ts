@@ -1,17 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { dirname, join } from 'node:path';
-import type { PicoConfig } from '../config/config.js';
-import type { AgentPresetId, Message } from '../core/types.js';
+import type { PicoConfig } from '../config/config.ts';
+import type { AgentPresetId, Message } from '../core/types.ts';
+import { dirnamePath, joinPath, relativePath } from '../fs/path.ts';
 import type {
   PendingRunEvent,
   RunEvent,
@@ -23,14 +12,14 @@ import type {
   SessionCompactResult,
   SessionRecord,
   SessionSnapshot,
-} from './store.js';
+} from './store.ts';
 import {
   compactSessionRecord,
   listSessionResourceEntries,
   projectRunSnapshot,
   projectSessionSnapshot,
   readSessionResourceContent,
-} from './store-helpers.js';
+} from './store-helpers.ts';
 
 interface PersistedRunRecord extends Omit<RunRecord, 'events'> {}
 
@@ -39,7 +28,7 @@ export class InMemoryRuntimeStore implements RuntimeStore {
   protected readonly runs = new Map<string, RunRecord>();
   protected readonly runListeners = new Map<string, Set<RunListener>>();
 
-  createSession(record: SessionRecord): SessionRecord {
+  async createSession(record: SessionRecord): Promise<SessionRecord> {
     this.sessions.set(record.id, record);
     return record;
   }
@@ -48,7 +37,7 @@ export class InMemoryRuntimeStore implements RuntimeStore {
     return this.sessions.get(id);
   }
 
-  setSessionAgent(sessionId: string, agent: AgentPresetId): void {
+  async setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return;
@@ -57,14 +46,14 @@ export class InMemoryRuntimeStore implements RuntimeStore {
     session.agent = agent;
   }
 
-  refreshSessionControl(
+  async refreshSessionControl(
     sessionId: string,
     control: {
       controlVersion: string;
       controlConfig: PicoConfig;
       systemPrompts: Record<AgentPresetId, string>;
     },
-  ): void {
+  ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return;
@@ -75,7 +64,7 @@ export class InMemoryRuntimeStore implements RuntimeStore {
     session.systemPrompts = control.systemPrompts;
   }
 
-  attachRunToSession(sessionId: string, runId: string): void {
+  async attachRunToSession(sessionId: string, runId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return;
@@ -87,7 +76,7 @@ export class InMemoryRuntimeStore implements RuntimeStore {
     }
   }
 
-  finishSessionRun(sessionId: string, runId: string, messages: Message[]): void {
+  async finishSessionRun(sessionId: string, runId: string, messages: Message[]): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return;
@@ -99,7 +88,7 @@ export class InMemoryRuntimeStore implements RuntimeStore {
     }
   }
 
-  clearSessionActiveRun(sessionId: string, runId: string): void {
+  async clearSessionActiveRun(sessionId: string, runId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return;
@@ -110,7 +99,7 @@ export class InMemoryRuntimeStore implements RuntimeStore {
     }
   }
 
-  createRun(record: RunRecord): RunRecord {
+  async createRun(record: RunRecord): Promise<RunRecord> {
     this.runs.set(record.id, record);
     return record;
   }
@@ -119,7 +108,10 @@ export class InMemoryRuntimeStore implements RuntimeStore {
     return this.runs.get(id);
   }
 
-  updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): RunRecord | undefined {
+  async updateRun(
+    runId: string,
+    patch: Partial<Omit<RunRecord, 'id' | 'events'>>,
+  ): Promise<RunRecord | undefined> {
     const run = this.runs.get(runId);
     if (!run) {
       return undefined;
@@ -129,7 +121,7 @@ export class InMemoryRuntimeStore implements RuntimeStore {
     return run;
   }
 
-  appendRunEvent(runId: string, event: PendingRunEvent): RunEvent | undefined {
+  async appendRunEvent(runId: string, event: PendingRunEvent): Promise<RunEvent | undefined> {
     const run = this.runs.get(runId);
     if (!run) {
       return undefined;
@@ -222,7 +214,7 @@ export class InMemoryRuntimeStore implements RuntimeStore {
     return readSessionResourceContent(session, this.runs, resourcePath);
   }
 
-  compactSession(sessionId: string, keepLastMessages = 8): SessionCompactResult | undefined {
+  async compactSession(sessionId: string, keepLastMessages = 8): Promise<SessionCompactResult | undefined> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return undefined;
@@ -233,135 +225,141 @@ export class InMemoryRuntimeStore implements RuntimeStore {
 }
 
 export class FileRuntimeStore extends InMemoryRuntimeStore {
-  constructor(private readonly runtimeRoot: string) {
+  private writeQueue = Promise.resolve();
+
+  private constructor(private readonly runtimeRoot: string) {
     super();
-    mkdirSync(this.sessionsDir(), { recursive: true });
-    mkdirSync(this.runsDir(), { recursive: true });
-    this.loadFromDisk();
-    this.markInterruptedRuns();
   }
 
-  override createSession(record: SessionRecord): SessionRecord {
-    const session = super.createSession(record);
-    this.persistSession(session);
+  static async create(runtimeRoot: string): Promise<FileRuntimeStore> {
+    const store = new FileRuntimeStore(runtimeRoot);
+    await store.loadFromDisk();
+    await store.markInterruptedRuns();
+    return store;
+  }
+
+  override async createSession(record: SessionRecord): Promise<SessionRecord> {
+    const session = await super.createSession(record);
+    await this.enqueueWrite(() => this.persistSession(session));
     return session;
   }
 
-  override setSessionAgent(sessionId: string, agent: AgentPresetId): void {
-    super.setSessionAgent(sessionId, agent);
+  override async setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void> {
+    await super.setSessionAgent(sessionId, agent);
     const session = this.getSession(sessionId);
     if (session) {
-      this.persistSession(session);
+      await this.enqueueWrite(() => this.persistSession(session));
     }
   }
 
-  override refreshSessionControl(
+  override async refreshSessionControl(
     sessionId: string,
     control: {
       controlVersion: string;
       controlConfig: PicoConfig;
       systemPrompts: Record<AgentPresetId, string>;
     },
-  ): void {
-    super.refreshSessionControl(sessionId, control);
+  ): Promise<void> {
+    await super.refreshSessionControl(sessionId, control);
     const session = this.getSession(sessionId);
     if (session) {
-      this.persistSession(session);
+      await this.enqueueWrite(() => this.persistSession(session));
     }
   }
 
-  override attachRunToSession(sessionId: string, runId: string): void {
-    super.attachRunToSession(sessionId, runId);
+  override async attachRunToSession(sessionId: string, runId: string): Promise<void> {
+    await super.attachRunToSession(sessionId, runId);
     const session = this.getSession(sessionId);
     if (session) {
-      this.persistSession(session);
+      await this.enqueueWrite(() => this.persistSession(session));
     }
   }
 
-  override finishSessionRun(sessionId: string, runId: string, messages: Message[]): void {
-    super.finishSessionRun(sessionId, runId, messages);
+  override async finishSessionRun(sessionId: string, runId: string, messages: Message[]): Promise<void> {
+    await super.finishSessionRun(sessionId, runId, messages);
     const session = this.getSession(sessionId);
     if (session) {
-      this.persistSession(session);
+      await this.enqueueWrite(() => this.persistSession(session));
     }
   }
 
-  override clearSessionActiveRun(sessionId: string, runId: string): void {
-    super.clearSessionActiveRun(sessionId, runId);
+  override async clearSessionActiveRun(sessionId: string, runId: string): Promise<void> {
+    await super.clearSessionActiveRun(sessionId, runId);
     const session = this.getSession(sessionId);
     if (session) {
-      this.persistSession(session);
+      await this.enqueueWrite(() => this.persistSession(session));
     }
   }
 
-  override createRun(record: RunRecord): RunRecord {
-    const run = super.createRun(record);
-    this.persistRun(run);
+  override async createRun(record: RunRecord): Promise<RunRecord> {
+    const run = await super.createRun(record);
+    await this.enqueueWrite(() => this.persistRun(run));
     return run;
   }
 
-  override updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): RunRecord | undefined {
-    const run = super.updateRun(runId, patch);
+  override async updateRun(
+    runId: string,
+    patch: Partial<Omit<RunRecord, 'id' | 'events'>>,
+  ): Promise<RunRecord | undefined> {
+    const run = await super.updateRun(runId, patch);
     if (run) {
-      this.persistRun(run);
+      await this.enqueueWrite(() => this.persistRun(run));
     }
     return run;
   }
 
-  override appendRunEvent(runId: string, event: PendingRunEvent): RunEvent | undefined {
-    const record = super.appendRunEvent(runId, event);
+  override async appendRunEvent(runId: string, event: PendingRunEvent): Promise<RunEvent | undefined> {
+    const record = await super.appendRunEvent(runId, event);
     const run = this.getRun(runId);
     if (record && run) {
-      this.appendRunEventRecord(runId, record);
-      this.persistRun(run);
+      await this.enqueueWrite(async () => {
+        await this.appendRunEventRecord(runId, record);
+        await this.persistRun(run);
+      });
     }
     return record;
   }
 
-  override compactSession(sessionId: string, keepLastMessages = 8): SessionCompactResult | undefined {
-    const result = super.compactSession(sessionId, keepLastMessages);
+  override async compactSession(sessionId: string, keepLastMessages = 8): Promise<SessionCompactResult | undefined> {
+    const result = await super.compactSession(sessionId, keepLastMessages);
     const session = this.getSession(sessionId);
     if (result && session) {
-      this.persistSession(session);
+      await this.enqueueWrite(() => this.persistSession(session));
     }
     return result;
   }
 
-  private loadFromDisk(): void {
-    for (const entry of readdirSync(this.sessionsDir(), { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
+  private enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.writeQueue.then(task, task);
+    this.writeQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
 
-      const sessionPath = join(this.sessionsDir(), entry.name, 'session.json');
-      if (!existsSync(sessionPath)) {
-        continue;
-      }
-
-      const session = parseJsonFile<SessionRecord>(sessionPath);
+  private async loadFromDisk(): Promise<void> {
+    for (const sessionPath of await scanFiles(this.sessionsDir(), '*/session.json')) {
+      const session = await parseJsonFile<SessionRecord>(sessionPath);
       this.sessions.set(session.id, session);
     }
 
-    for (const entry of readdirSync(this.runsDir(), { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.json') || entry.name.endsWith('.events.jsonl')) {
-        continue;
-      }
-
-      const runPath = join(this.runsDir(), entry.name);
-      const stored = parseJsonFile<PersistedRunRecord>(runPath);
-      const runId = entry.name.slice(0, -'.json'.length);
-      const events = this.loadRunEvents(runId);
+    for (const runPath of await scanFiles(this.runsDir(), '*.json')) {
+      const stored = await parseJsonFile<PersistedRunRecord>(runPath);
+      const runId = relativePath(this.runsDir(), runPath).slice(0, -'.json'.length);
+      const events = await this.loadRunEvents(runId);
       this.runs.set(runId, { ...stored, events });
     }
   }
 
-  private loadRunEvents(runId: string): RunEvent[] {
+  private async loadRunEvents(runId: string): Promise<RunEvent[]> {
     const eventsPath = this.runEventsPath(runId);
-    if (!existsSync(eventsPath)) {
+    const file = Bun.file(eventsPath);
+    if (!(await file.exists())) {
       return [];
     }
 
-    const content = readFileSync(eventsPath, 'utf8').trim();
+    const content = (await file.text()).trim();
     if (!content) {
       return [];
     }
@@ -372,7 +370,7 @@ export class FileRuntimeStore extends InMemoryRuntimeStore {
       .map((line) => JSON.parse(line) as RunEvent);
   }
 
-  private markInterruptedRuns(): void {
+  private async markInterruptedRuns(): Promise<void> {
     const timestamp = new Date().toISOString();
 
     for (const run of this.runs.values()) {
@@ -383,54 +381,55 @@ export class FileRuntimeStore extends InMemoryRuntimeStore {
       run.status = 'failed';
       run.error = 'Run interrupted by server restart';
       run.finishedAt = timestamp;
-      const event = super.appendRunEvent(run.id, {
+      const event = await super.appendRunEvent(run.id, {
         type: 'error',
         timestamp,
         runId: run.id,
         sessionId: run.sessionId,
         message: run.error,
       });
-      if (event) {
-        this.appendRunEventRecord(run.id, event);
-      }
 
       if (run.sessionId) {
         const session = this.sessions.get(run.sessionId);
         if (session?.activeRunId === run.id) {
           session.activeRunId = undefined;
-          this.persistSession(session);
+          await this.persistSession(session);
         }
       }
 
-      this.persistRun(run);
+      if (event) {
+        await this.appendRunEventRecord(run.id, event);
+      }
+
+      await this.persistRun(run);
     }
   }
 
   private sessionsDir(): string {
-    return join(this.runtimeRoot, 'sessions');
+    return joinPath(this.runtimeRoot, 'sessions');
   }
 
   private runsDir(): string {
-    return join(this.runtimeRoot, 'runs');
+    return joinPath(this.runtimeRoot, 'runs');
   }
 
   private sessionPath(sessionId: string): string {
-    return join(this.sessionsDir(), sessionId, 'session.json');
+    return joinPath(this.sessionsDir(), sessionId, 'session.json');
   }
 
   private runPath(runId: string): string {
-    return join(this.runsDir(), `${runId}.json`);
+    return joinPath(this.runsDir(), `${runId}.json`);
   }
 
   private runEventsPath(runId: string): string {
-    return join(this.runsDir(), `${runId}.events.jsonl`);
+    return joinPath(this.runsDir(), `${runId}.events.jsonl`);
   }
 
-  private persistSession(session: SessionRecord): void {
-    writeJsonFileAtomic(this.sessionPath(session.id), session);
+  private persistSession(session: SessionRecord): Promise<void> {
+    return writeJsonFile(this.sessionPath(session.id), session);
   }
 
-  private persistRun(run: RunRecord): void {
+  private persistRun(run: RunRecord): Promise<void> {
     const persisted: PersistedRunRecord = {
       id: run.id,
       sessionId: run.sessionId,
@@ -443,27 +442,53 @@ export class FileRuntimeStore extends InMemoryRuntimeStore {
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
     };
-    writeJsonFileAtomic(this.runPath(run.id), persisted);
+    return writeJsonFile(this.runPath(run.id), persisted);
   }
 
-  private appendRunEventRecord(runId: string, event: RunEvent): void {
+  private async appendRunEventRecord(runId: string, event: RunEvent): Promise<void> {
     const eventsPath = this.runEventsPath(runId);
-    mkdirSync(dirname(eventsPath), { recursive: true });
-    appendFileSync(eventsPath, `${JSON.stringify(event)}\n`, 'utf8');
+    const file = Bun.file(eventsPath);
+    const existing = await file.exists() ? await file.text() : '';
+    await Bun.write(eventsPath, `${existing}${JSON.stringify(event)}\n`);
   }
 }
 
-function parseJsonFile<T>(path: string): T {
-  return JSON.parse(readFileSync(path, 'utf8')) as T;
+async function scanFiles(root: string, pattern: string): Promise<string[]> {
+  try {
+    const matches: string[] = [];
+    for await (const filePath of new Bun.Glob(pattern).scan({
+      cwd: root,
+      absolute: true,
+      dot: true,
+      onlyFiles: true,
+      followSymlinks: false,
+    })) {
+      matches.push(filePath);
+    }
+
+    return matches.sort((left, right) => left.localeCompare(right));
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('ENOENT')) {
+      return [];
+    }
+
+    throw error;
+  }
 }
 
-function writeJsonFileAtomic(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tempPath = join(dirname(path), `${randomUUID()}.tmp`);
-  writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  renameSync(tempPath, path);
+async function parseJsonFile<T>(filePath: string): Promise<T> {
+  return JSON.parse(await Bun.file(filePath).text()) as T;
 }
 
-export function resetFileRuntimeStore(runtimeRoot: string): void {
-  rmSync(runtimeRoot, { recursive: true, force: true });
+async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+  await Bun.write(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export async function resetFileRuntimeStore(runtimeRoot: string): Promise<void> {
+  const process = Bun.spawn(['rm', '-rf', runtimeRoot]);
+  const exitCode = await process.exited;
+  if (exitCode !== 0) {
+    throw new Error(`Failed to reset runtime store at ${runtimeRoot}`);
+  }
 }

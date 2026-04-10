@@ -1,9 +1,14 @@
-import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { FileRuntimeStore, InMemoryRuntimeStore } from '../../src/runtime/runtime-store.js';
+import { expect, test } from 'bun:test';
+import { FileRuntimeStore, InMemoryRuntimeStore } from '../../src/runtime/runtime-store.ts';
+import { makeTempDir, removeDir } from '../helpers/fs.ts';
+
+function requireValue<T>(value: T | undefined, message: string): T {
+  if (value === undefined) {
+    throw new Error(message);
+  }
+
+  return value;
+}
 
 const controlConfig = {
   provider: 'echo' as const,
@@ -18,10 +23,10 @@ const systemPrompts = {
   exec: 'exec prompt',
 };
 
-test('runtime store projects ordered session and run snapshots', () => {
+test('runtime store projects ordered session and run snapshots', async () => {
   const store = new InMemoryRuntimeStore();
 
-  store.createSession({
+  await store.createSession({
     id: 'session-1',
     cwd: '/workspace',
     roots: ['/workspace'],
@@ -35,7 +40,7 @@ test('runtime store projects ordered session and run snapshots', () => {
     checkpoints: [],
   });
 
-  store.createRun({
+  await store.createRun({
     id: 'run-1',
     sessionId: 'session-1',
     agent: 'ask',
@@ -47,7 +52,7 @@ test('runtime store projects ordered session and run snapshots', () => {
     events: [],
   });
 
-  store.createRun({
+  await store.createRun({
     id: 'run-2',
     sessionId: 'session-1',
     agent: 'exec',
@@ -58,18 +63,18 @@ test('runtime store projects ordered session and run snapshots', () => {
     events: [],
   });
 
-  store.attachRunToSession('session-1', 'run-1');
-  store.clearSessionActiveRun('session-1', 'run-1');
-  store.attachRunToSession('session-1', 'run-2');
+  await store.attachRunToSession('session-1', 'run-1');
+  await store.clearSessionActiveRun('session-1', 'run-1');
+  await store.attachRunToSession('session-1', 'run-2');
 
-  const session = store.getSessionSnapshot('session-1');
-  assert.ok(session);
-  assert.equal(session.activeRunId, 'run-2');
-  assert.equal(session.controlVersion, 'v1');
-  assert.equal(session.controlConfig.provider, 'echo');
-  assert.equal(session.checkpointCount, 0);
-  assert.deepEqual(
+  const session = requireValue(store.getSessionSnapshot('session-1'), 'session snapshot should exist');
+  expect(session.activeRunId).toBe('run-2');
+  expect(session.controlVersion).toBe('v1');
+  expect(session.controlConfig.provider).toBe('echo');
+  expect(session.checkpointCount).toBe(0);
+  expect(
     session.runs.map((run) => [run.id, run.agent, run.status]),
+  ).toEqual(
     [
       ['run-1', 'ask', 'completed'],
       ['run-2', 'exec', 'running'],
@@ -77,9 +82,9 @@ test('runtime store projects ordered session and run snapshots', () => {
   );
 });
 
-test('runtime store replays historical run events before streaming new ones', () => {
+test('runtime store replays historical run events before streaming new ones', async () => {
   const store = new InMemoryRuntimeStore();
-  store.createRun({
+  await store.createRun({
     id: 'run-1',
     agent: 'ask',
     prompt: 'hello',
@@ -89,7 +94,7 @@ test('runtime store replays historical run events before streaming new ones', ()
     events: [],
   });
 
-  store.appendRunEvent('run-1', {
+  await store.appendRunEvent('run-1', {
     type: 'run_started',
     timestamp: '2025-01-01T00:00:00.000Z',
     runId: 'run-1',
@@ -98,12 +103,11 @@ test('runtime store replays historical run events before streaming new ones', ()
   });
 
   const seen: string[] = [];
-  const unsubscribe = store.subscribeToRun('run-1', (event) => {
+  const unsubscribe = requireValue(store.subscribeToRun('run-1', (event) => {
     seen.push(event.type);
-  });
-  assert.ok(unsubscribe);
+  }), 'subscription should exist');
 
-  store.appendRunEvent('run-1', {
+  await store.appendRunEvent('run-1', {
     type: 'assistant_delta',
     timestamp: '2025-01-01T00:00:01.000Z',
     runId: 'run-1',
@@ -112,20 +116,20 @@ test('runtime store replays historical run events before streaming new ones', ()
 
   unsubscribe();
 
-  store.appendRunEvent('run-1', {
+  await store.appendRunEvent('run-1', {
     type: 'done',
     timestamp: '2025-01-01T00:00:02.000Z',
     runId: 'run-1',
     output: 'received',
   });
 
-  assert.deepEqual(seen, ['run_started', 'assistant_delta']);
+  expect(seen).toEqual(['run_started', 'assistant_delta']);
 });
 
-test('runtime store clears active session runs and persists conversation on completion', () => {
+test('runtime store clears active session runs and persists conversation on completion', async () => {
   const store = new InMemoryRuntimeStore();
 
-  store.createSession({
+  await store.createSession({
     id: 'session-1',
     cwd: '/workspace',
     roots: ['/workspace'],
@@ -139,22 +143,21 @@ test('runtime store clears active session runs and persists conversation on comp
     checkpoints: [],
   });
 
-  store.attachRunToSession('session-1', 'run-1');
-  store.finishSessionRun('session-1', 'run-1', [
+  await store.attachRunToSession('session-1', 'run-1');
+  await store.finishSessionRun('session-1', 'run-1', [
     { role: 'user', content: 'hello' },
     { role: 'assistant', content: [{ type: 'text', text: 'received: hello' }] },
   ]);
 
-  const session = store.getSession('session-1');
-  assert.ok(session);
-  assert.equal(session.activeRunId, undefined);
-  assert.equal(session.messages.length, 2);
+  const session = requireValue(store.getSession('session-1'), 'session should exist');
+  expect(session.activeRunId).toBeUndefined();
+  expect(session.messages).toHaveLength(2);
 });
 
-test('runtime store compacts session messages into checkpoints and exposes session resources', () => {
+test('runtime store compacts session messages into checkpoints and exposes session resources', async () => {
   const store = new InMemoryRuntimeStore();
 
-  store.createSession({
+  await store.createSession({
     id: 'session-1',
     cwd: '/workspace',
     roots: ['/workspace'],
@@ -173,7 +176,7 @@ test('runtime store compacts session messages into checkpoints and exposes sessi
     checkpoints: [],
   });
 
-  store.createRun({
+  await store.createRun({
     id: 'run-1',
     sessionId: 'session-1',
     agent: 'exec',
@@ -185,32 +188,30 @@ test('runtime store compacts session messages into checkpoints and exposes sessi
     events: [],
   });
 
-  const compacted = store.compactSession('session-1', 2);
-  assert.ok(compacted);
-  assert.equal(compacted.checkpointId.length > 0, true);
-  assert.equal(compacted.compactedMessages, 2);
-  assert.equal(compacted.keptMessages, 2);
+  const compacted = requireValue(await store.compactSession('session-1', 2), 'compaction should succeed');
+  expect(compacted.checkpointId).not.toHaveLength(0);
+  expect(compacted.compactedMessages).toBe(2);
+  expect(compacted.keptMessages).toBe(2);
 
-  const session = store.getSession('session-1');
-  assert.ok(session);
-  assert.equal(session.checkpoints.length, 1);
-  assert.equal(session.activeCheckpointId, session.checkpoints[0]?.id);
-  assert.equal(session.messages.length, 3);
+  const session = requireValue(store.getSession('session-1'), 'session should exist');
+  expect(session.checkpoints).toHaveLength(1);
+  expect(session.activeCheckpointId).toBe(session.checkpoints[0]?.id);
+  expect(session.messages).toHaveLength(3);
 
-  assert.deepEqual(store.listSessionResources('session-1', '.'), ['summary.md', 'checkpoints/', 'runs/', 'events/']);
-  assert.deepEqual(store.listSessionResources('session-1', 'checkpoints'), [`${session.checkpoints[0]?.id}.md`]);
-  assert.match(store.readSessionResource('session-1', 'summary.md') ?? '', /# Checkpoint/);
-  assert.match(store.readSessionResource('session-1', 'runs/run-1.md') ?? '', /# Run run-1/);
-  assert.equal(store.listSessionResources('session-1', 'events')?.[0], 'run-1.jsonl');
+  expect(store.listSessionResources('session-1', '.')).toEqual(['summary.md', 'checkpoints/', 'runs/', 'events/']);
+  expect(store.listSessionResources('session-1', 'checkpoints')).toEqual([`${session.checkpoints[0]?.id}.md`]);
+  expect(store.readSessionResource('session-1', 'summary.md') ?? '').toMatch(/# Checkpoint/);
+  expect(store.readSessionResource('session-1', 'runs/run-1.md') ?? '').toMatch(/# Run run-1/);
+  expect(store.listSessionResources('session-1', 'events')?.[0]).toBe('run-1.jsonl');
 });
 
-test('file runtime store reloads sessions, runs, checkpoints, and event logs from disk', () => {
-  const runtimeRoot = mkdtempSync(join(tmpdir(), 'picoagent-runtime-store-'));
+test('file runtime store reloads sessions, runs, checkpoints, and event logs from disk', async () => {
+  const runtimeRoot = await makeTempDir('picoagent-runtime-store-');
 
   try {
     {
-      const store = new FileRuntimeStore(runtimeRoot);
-      store.createSession({
+      const store = await FileRuntimeStore.create(runtimeRoot);
+      await store.createSession({
         id: 'session-1',
         cwd: '/workspace',
         roots: ['/workspace'],
@@ -224,7 +225,7 @@ test('file runtime store reloads sessions, runs, checkpoints, and event logs fro
         checkpoints: [],
       });
 
-      store.createRun({
+      await store.createRun({
         id: 'run-1',
         sessionId: 'session-1',
         agent: 'exec',
@@ -234,8 +235,8 @@ test('file runtime store reloads sessions, runs, checkpoints, and event logs fro
         createdAt: '2025-01-01T00:00:01.000Z',
         events: [],
       });
-      store.attachRunToSession('session-1', 'run-1');
-      store.appendRunEvent('run-1', {
+      await store.attachRunToSession('session-1', 'run-1');
+      await store.appendRunEvent('run-1', {
         type: 'run_started',
         timestamp: '2025-01-01T00:00:01.000Z',
         runId: 'run-1',
@@ -243,41 +244,38 @@ test('file runtime store reloads sessions, runs, checkpoints, and event logs fro
         agent: 'exec',
         prompt: 'persist me',
       });
-      store.finishSessionRun('session-1', 'run-1', [
+      await store.finishSessionRun('session-1', 'run-1', [
         { role: 'user', content: 'persist me' },
         { role: 'assistant', content: [{ type: 'text', text: 'persisted' }] },
       ]);
-      store.updateRun('run-1', {
+      await store.updateRun('run-1', {
         status: 'completed',
         output: 'persisted',
         finishedAt: '2025-01-01T00:00:02.000Z',
       });
-      store.appendRunEvent('run-1', {
+      await store.appendRunEvent('run-1', {
         type: 'done',
         timestamp: '2025-01-01T00:00:02.000Z',
         runId: 'run-1',
         sessionId: 'session-1',
         output: 'persisted',
       });
-      store.compactSession('session-1', 1);
+      await store.compactSession('session-1', 1);
     }
 
-    const reloaded = new FileRuntimeStore(runtimeRoot);
-    const session = reloaded.getSessionSnapshot('session-1');
-    assert.ok(session);
-    assert.equal(session.checkpointCount, 1);
+    const reloaded = await FileRuntimeStore.create(runtimeRoot);
+    const session = requireValue(reloaded.getSessionSnapshot('session-1'), 'reloaded session should exist');
+    expect(session.checkpointCount).toBe(1);
 
-    const run = reloaded.getRunSnapshot('run-1');
-    assert.ok(run);
-    assert.equal(run.status, 'completed');
-    assert.equal(run.output, 'persisted');
+    const run = requireValue(reloaded.getRunSnapshot('run-1'), 'reloaded run should exist');
+    expect(run.status).toBe('completed');
+    expect(run.output).toBe('persisted');
 
-    const events = reloaded.getRunEvents('run-1');
-    assert.ok(events);
-    assert.equal(events.events.at(-1)?.type, 'done');
-    assert.match(reloaded.readSessionResource('session-1', 'summary.md') ?? '', /# Checkpoint/);
-    assert.match(reloaded.readSessionResource('session-1', 'events/run-1.jsonl') ?? '', /"type":"run_started"/);
+    const events = requireValue(reloaded.getRunEvents('run-1'), 'reloaded events should exist');
+    expect(events.events.at(-1)?.type).toBe('done');
+    expect(reloaded.readSessionResource('session-1', 'summary.md') ?? '').toMatch(/# Checkpoint/);
+    expect(reloaded.readSessionResource('session-1', 'events/run-1.jsonl') ?? '').toMatch(/"type":"run_started"/);
   } finally {
-    rmSync(runtimeRoot, { recursive: true, force: true });
+    await removeDir(runtimeRoot);
   }
 });

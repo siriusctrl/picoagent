@@ -1,7 +1,6 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { buildSystemPrompt } from '../../src/prompting/prompt.js';
-import { grepTool } from '../../src/tools/grep.js';
+import { expect, test } from 'bun:test';
+import { buildSystemPrompt } from '../../src/prompting/prompt.ts';
+import { grepTool } from '../../src/tools/grep.ts';
 
 test('buildSystemPrompt formats a preloaded control surface', () => {
   const prompt = buildSystemPrompt(
@@ -21,13 +20,13 @@ test('buildSystemPrompt formats a preloaded control surface', () => {
     [grepTool],
   );
 
-  assert.match(prompt, /workspace soul/);
-  assert.match(prompt, /workspace user/);
-  assert.match(prompt, /workspace agents/);
-  assert.match(prompt, /user memory/);
-  assert.match(prompt, /workspace memory/);
-  assert.match(prompt, /Available Skills/);
-  assert.match(prompt, /readme: read docs/);
-  assert.match(prompt, /Available Agents/);
-  assert.match(prompt, /exec: run changes/);
+  expect(prompt).toMatch(/workspace soul/);
+  expect(prompt).toMatch(/workspace user/);
+  expect(prompt).toMatch(/workspace agents/);
+  expect(prompt).toMatch(/user memory/);
+  expect(prompt).toMatch(/workspace memory/);
+  expect(prompt).toMatch(/Available Skills/);
+  expect(prompt).toMatch(/readme: read docs/);
+  expect(prompt).toMatch(/Available Agents/);
+  expect(prompt).toMatch(/exec: run changes/);
 });

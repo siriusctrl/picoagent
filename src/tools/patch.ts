@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { FilePatchChange, FilePatchOperation } from '../core/file-view.js';
-import { Tool } from '../core/types.js';
-import { resolveSessionPath } from '../fs/filesystem.js';
-import { parseNamespacePath } from './namespace-path.js';
+import { FilePatchChange, FilePatchOperation } from '../core/file-view.ts';
+import { Tool } from '../core/types.ts';
+import { resolveSessionPath } from '../fs/filesystem.ts';
+import { parseNamespacePath } from './namespace-path.ts';
 
 const PatchOperationSchema = z.discriminatedUnion('type', [
   z.object({

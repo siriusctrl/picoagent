@@ -1,11 +1,10 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { ToolContext } from '../../src/core/types.js';
-import { cmdTool } from '../../src/tools/cmd.js';
-import { globTool } from '../../src/tools/glob.js';
-import { grepTool } from '../../src/tools/grep.js';
-import { patchTool } from '../../src/tools/patch.js';
-import { readTool } from '../../src/tools/read.js';
+import { expect, test } from 'bun:test';
+import { ToolContext } from '../../src/core/types.ts';
+import { cmdTool } from '../../src/tools/cmd.ts';
+import { globTool } from '../../src/tools/glob.ts';
+import { grepTool } from '../../src/tools/grep.ts';
+import { patchTool } from '../../src/tools/patch.ts';
+import { readTool } from '../../src/tools/read.ts';
 
 const context: ToolContext = {
   runId: 'run-1',
@@ -51,12 +50,12 @@ const context: ToolContext = {
 
 test('glob lists matching paths from a target file-view', async () => {
   const result = await globTool.execute({ pattern: '/session/**/*.md' }, context);
-  assert.equal(result.content, '/session/summary.md\n/session/runs/run-1.md');
+  expect(result.content).toBe('/session/summary.md\n/session/runs/run-1.md');
 });
 
 test('grep searches a target file-view', async () => {
   const result = await grepTool.execute({ path: '/workspace', query: 'needle' }, context);
-  assert.equal(result.content, '/workspace/src/http/server.ts:12: needle here');
+  expect(result.content).toBe('/workspace/src/http/server.ts:12: needle here');
 });
 
 test('grep renders surrounding context lines distinctly', async () => {
@@ -74,16 +73,15 @@ test('grep renders surrounding context lines distinctly', async () => {
 
   const result = await grepTool.execute({ path: '/workspace', query: 'needle', context: 1 }, contextWithSurrounding);
 
-  assert.equal(
-    result.content,
+  expect(result.content).toBe(
     '/workspace/src/http/server.ts-11- before\n/workspace/src/http/server.ts:12: needle here\n/workspace/src/http/server.ts-13- after',
   );
-  assert.deepEqual(result.locations, [{ path: '/workspace/src/http/server.ts', line: 12 }]);
+  expect(result.locations).toEqual([{ path: '/workspace/src/http/server.ts', line: 12 }]);
 });
 
 test('read reads one target-relative path', async () => {
   const result = await readTool.execute({ path: '/session/summary.md' }, context);
-  assert.match(result.content, /\/session\/summary.md/);
+  expect(result.content).toMatch(/\/session\/summary.md/);
 });
 
 test('patch applies multi-file changes through the file-view', async () => {
@@ -106,12 +104,12 @@ test('patch applies multi-file changes through the file-view', async () => {
     context,
   );
 
-  assert.equal(result.display?.length, 2);
-  assert.equal(result.locations?.length, 2);
+  expect(result.display).toHaveLength(2);
+  expect(result.locations).toHaveLength(2);
 });
 
 test('cmd executes against an executable target', async () => {
   const result = await cmdTool.execute({ command: 'npm test' }, context);
-  assert.match(result.content, /bash -lc npm test/);
-  assert.equal(result.display?.[0]?.type, 'terminal');
+  expect(result.content).toMatch(/bash -lc npm test/);
+  expect(result.display?.[0]?.type).toBe('terminal');
 });

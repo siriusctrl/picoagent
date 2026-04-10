@@ -1,7 +1,7 @@
-import type http from 'node:http';
 import { hc } from 'hono/client';
-import { AgentPresetId } from '../core/types.js';
-import { startHttpServer, type HttpAppType } from '../http/server.js';
+import { AgentPresetId } from '../core/types.ts';
+import type { LocalServerHandle } from '../http/bun-server.ts';
+import { startHttpServer, type HttpAppType } from '../http/server.ts';
 
 export type ClientEvent =
   | { type: 'status'; text: string }
@@ -48,13 +48,8 @@ type RunEvent = {
   message?: string;
 };
 
-function getServerUrl(server: http.Server): string {
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    throw new Error('Expected an inet server address');
-  }
-
-  return `http://127.0.0.1:${address.port}`;
+function getServerUrl(server: LocalServerHandle): string {
+  return server.url.origin;
 }
 
 function parseSseFrame(frame: string): RunEvent | null {
@@ -81,7 +76,7 @@ function parseSseFrame(frame: string): RunEvent | null {
 export class LocalHttpClient {
   private readonly cwd: string;
   private readonly onEvent: (event: ClientEvent) => void;
-  private server?: http.Server;
+  private server?: LocalServerHandle;
   private serverUrl?: string;
   private api?: LocalHttpClientApi;
   private sessionId?: string;
@@ -243,15 +238,6 @@ export class LocalHttpClient {
     this.serverUrl = undefined;
     this.sessionId = undefined;
     this.api = undefined;
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        resolve();
-      });
-    });
+    await server.stop(true);
   }
 }

@@ -1,16 +1,16 @@
-import { join } from 'node:path';
-import { createRuntimeContext } from './index.js';
-import type { ExecutionBackend } from '../core/execution.js';
-import type { MutableFilesystem } from '../core/filesystem.js';
-import type { AgentPresetId } from '../core/types.js';
-import type { NamespaceMount } from '../fs/namespace.js';
-import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.js';
-import { RuntimeConflictError, RuntimeEngine, RuntimeValidationError } from './engine.js';
-import type { SessionStore } from './store.js';
-import { LocalExecutionBackend } from './local-execution-backend.js';
-import { FileRuntimeStore, InMemoryRuntimeStore } from './runtime-store.js';
-import { StoreBackedSessionStore } from './store-backed-session-store.js';
-import type { RunEvent, RunSnapshot, RunStatus, RuntimeStore, SessionRecord, SessionSnapshot } from './store.js';
+import { createRuntimeContext } from './index.ts';
+import type { ExecutionBackend } from '../core/execution.ts';
+import type { MutableFilesystem } from '../core/filesystem.ts';
+import type { AgentPresetId } from '../core/types.ts';
+import type { NamespaceMount } from '../fs/namespace.ts';
+import { joinPath } from '../fs/path.ts';
+import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.ts';
+import { RuntimeConflictError, RuntimeEngine, RuntimeValidationError } from './engine.ts';
+import type { SessionStore } from './store.ts';
+import { LocalExecutionBackend } from './local-execution-backend.ts';
+import { FileRuntimeStore, InMemoryRuntimeStore } from './runtime-store.ts';
+import { StoreBackedSessionStore } from './store-backed-session-store.ts';
+import type { RunEvent, RunSnapshot, RunStatus, RuntimeStore, SessionRecord, SessionSnapshot } from './store.ts';
 
 export interface RuntimeServiceOptions {
   cwd?: string;
@@ -31,17 +31,13 @@ export class RuntimeService {
   private readonly sessionStore: SessionStore;
   private readonly engine: RuntimeEngine;
 
-  constructor(options: RuntimeServiceOptions = {}) {
+  private constructor(options: RuntimeServiceOptions, store: RuntimeStore) {
     const cwd = options.cwd ?? process.cwd();
     const filesystem = options.filesystem ?? new LocalWorkspaceFileSystem();
     const executionBackend = options.executionBackend ?? new LocalExecutionBackend();
-    const runtimeRoot = options.runtimeRoot ?? join(cwd, '.pico', 'runtime');
-    const persistentRuntime = options.persistentRuntime ?? true;
     const runtimeContext = createRuntimeContext(cwd);
 
-    this.store = persistentRuntime
-      ? new FileRuntimeStore(runtimeRoot)
-      : new InMemoryRuntimeStore();
+    this.store = store;
     this.sessionStore = options.sessionStore ?? new StoreBackedSessionStore(this.store);
     this.engine = new RuntimeEngine({
       cwd,
@@ -52,6 +48,17 @@ export class RuntimeService {
       runStore: this.store,
       sessionStore: this.sessionStore,
     });
+  }
+
+  static async create(options: RuntimeServiceOptions = {}): Promise<RuntimeService> {
+    const cwd = options.cwd ?? process.cwd();
+    const runtimeRoot = options.runtimeRoot ?? joinPath(cwd, '.pico', 'runtime');
+    const persistentRuntime = options.persistentRuntime ?? true;
+    const store = persistentRuntime
+      ? await FileRuntimeStore.create(runtimeRoot)
+      : new InMemoryRuntimeStore();
+
+    return new RuntimeService(options, store);
   }
 
   async createSession(agent: AgentPresetId = 'ask'): Promise<SessionRecord> {

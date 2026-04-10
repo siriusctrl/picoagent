@@ -1,17 +1,17 @@
-import { isAbsolute, relative } from 'node:path';
-import type { ExecutionBackend } from '../core/execution.js';
+import type { ExecutionBackend } from '../core/execution.ts';
 import {
   FilePatchChange,
   FilePatchOperation,
   FileViewAccess,
   NamespaceLikePath,
-} from '../core/file-view.js';
-import type { SearchMatch } from '../core/filesystem.js';
-import { filterGlob, grepTextBlobs, TextBlob } from '../fs/file-view.js';
-import { relativeToCwd, resolveSessionPath } from '../fs/filesystem.js';
-import { Namespace } from '../fs/namespace.js';
-import { SessionFilesystem } from './session-filesystem.js';
-import type { SessionStore } from './store.js';
+} from '../core/file-view.ts';
+import type { SearchMatch } from '../core/filesystem.ts';
+import { filterGlob, grepTextBlobs, TextBlob } from '../fs/file-view.ts';
+import { relativeToCwd, resolveSessionPath } from '../fs/filesystem.ts';
+import { Namespace } from '../fs/namespace.ts';
+import { isAbsolutePath, relativePath } from '../fs/path.ts';
+import { SessionFilesystem } from './session-filesystem.ts';
+import type { SessionStore } from './store.ts';
 
 function dataAsRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
@@ -392,12 +392,12 @@ class RuntimeFileView {
     const resolved = resolveSessionPath(pathFilter, this.options.cwd, this.options.roots);
     return this.options.roots
       .filter((root) => {
-        const candidate = relative(root, resolved);
-        return candidate === '' || (!candidate.startsWith('..') && !isAbsolute(candidate));
+        const candidate = relativePath(root, resolved);
+        return candidate === '' || (!candidate.startsWith('..') && !isAbsolutePath(candidate));
       })
       .map((root) => ({
         root,
-        searchPath: relative(root, resolved) || '.',
+        searchPath: relativePath(root, resolved) || '.',
       }));
   }
 

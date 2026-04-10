@@ -1,12 +1,11 @@
-import { Dirent } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
-import path from 'node:path';
-import type { SearchMatch } from '../core/filesystem.js';
+import type { SearchMatch } from '../core/filesystem.ts';
+import { isAbsolutePath, normalizePath, relativePath, resolvePath } from './path.ts';
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist']);
+const LOCAL_FILE_GLOB = new Bun.Glob('**/*');
 
 export function resolveSessionPath(inputPath: string, cwd: string, roots: string[]): string {
-  const resolved = path.resolve(cwd, inputPath);
+  const resolved = resolvePath(cwd, inputPath);
   if (roots.some((root) => isWithinRoot(resolved, root))) {
     return resolved;
   }
@@ -15,54 +14,45 @@ export function resolveSessionPath(inputPath: string, cwd: string, roots: string
 }
 
 export function relativeToCwd(targetPath: string, cwd: string): string {
-  const relative = path.relative(cwd, targetPath);
+  const relative = relativePath(cwd, targetPath);
   return relative === '' ? '.' : relative;
 }
 
 function isWithinRoot(targetPath: string, root: string): boolean {
-  const relative = path.relative(root, targetPath);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  const relative = relativePath(root, targetPath);
+  return relative === '' || (!relative.startsWith('..') && !isAbsolutePath(relative));
 }
 
-function shouldSkipDir(entry: Dirent): boolean {
-  return entry.isDirectory() && SKIP_DIRS.has(entry.name);
+function shouldSkipPath(root: string, filePath: string): boolean {
+  return relativePath(root, filePath).split('/').some((segment) => SKIP_DIRS.has(segment));
+}
+
+async function scanLocalFiles(root: string, signal: AbortSignal): Promise<string[]> {
+  const results: string[] = [];
+
+  for await (const filePath of LOCAL_FILE_GLOB.scan({
+    cwd: root,
+    absolute: true,
+    dot: true,
+    onlyFiles: true,
+    followSymlinks: false,
+  })) {
+    if (signal.aborted) {
+      break;
+    }
+
+    if (shouldSkipPath(root, filePath)) {
+      continue;
+    }
+
+    results.push(normalizePath(filePath));
+  }
+
+  return results.sort((left, right) => left.localeCompare(right));
 }
 
 export async function walkFiles(root: string, limit: number, signal: AbortSignal): Promise<string[]> {
-  const results: string[] = [];
-
-  async function visit(dir: string): Promise<void> {
-    if (signal.aborted || results.length >= limit) {
-      return;
-    }
-
-    const entries = (await readdir(dir, { withFileTypes: true })).sort((left, right) =>
-      left.name.localeCompare(right.name),
-    );
-
-    for (const entry of entries) {
-      if (signal.aborted || results.length >= limit) {
-        return;
-      }
-
-      if (shouldSkipDir(entry)) {
-        continue;
-      }
-
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await visit(fullPath);
-        continue;
-      }
-
-      if (entry.isFile()) {
-        results.push(fullPath);
-      }
-    }
-  }
-
-  await visit(root);
-  return results;
+  return (await scanLocalFiles(root, signal)).slice(0, limit);
 }
 
 export async function searchFiles(
@@ -73,66 +63,42 @@ export async function searchFiles(
 ): Promise<SearchMatch[]> {
   const matches: SearchMatch[] = [];
   const needle = query.toLowerCase();
+  const decoder = new TextDecoder();
+  const files = await scanLocalFiles(root, signal);
 
-  async function visit(dir: string): Promise<void> {
+  for (const filePath of files) {
     if (signal.aborted || matches.length >= limit) {
-      return;
+      break;
     }
 
-    const entries = (await readdir(dir, { withFileTypes: true })).sort((left, right) =>
-      left.name.localeCompare(right.name),
-    );
+    let bytes: Uint8Array;
+    try {
+      bytes = await Bun.file(filePath).bytes();
+    } catch {
+      continue;
+    }
 
-    for (const entry of entries) {
+    if (bytes.includes(0)) {
+      continue;
+    }
+
+    const lines = decoder.decode(bytes).split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
       if (signal.aborted || matches.length >= limit) {
-        return;
+        break;
       }
 
-      if (shouldSkipDir(entry)) {
+      if (!lines[index].toLowerCase().includes(needle)) {
         continue;
       }
 
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await visit(fullPath);
-        continue;
-      }
-
-      if (!entry.isFile()) {
-        continue;
-      }
-
-      let content: string;
-      try {
-        content = await readFile(fullPath, 'utf8');
-      } catch {
-        continue;
-      }
-
-      if (content.includes('\u0000')) {
-        continue;
-      }
-
-      const lines = content.split(/\r?\n/);
-      for (let index = 0; index < lines.length; index += 1) {
-        if (signal.aborted || matches.length >= limit) {
-          return;
-        }
-
-        if (!lines[index].toLowerCase().includes(needle)) {
-          continue;
-        }
-
-        matches.push({
-          path: fullPath,
-          line: index + 1,
-          text: lines[index],
-        });
-      }
+      matches.push({
+        path: filePath,
+        line: index + 1,
+        text: lines[index],
+      });
     }
   }
-
-  await visit(root);
 
   return matches;
 }

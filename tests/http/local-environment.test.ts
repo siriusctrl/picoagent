@@ -1,10 +1,8 @@
-import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { test } from 'node:test';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { LocalWorkspaceFileSystem, WorkspaceFileSystem } from '../../src/fs/workspace-fs.js';
-import { LocalExecutionBackend } from '../../src/runtime/local-execution-backend.js';
+import { expect, test } from 'bun:test';
+import { LocalWorkspaceFileSystem, WorkspaceFileSystem } from '../../src/fs/workspace-fs.ts';
+import { LocalExecutionBackend } from '../../src/runtime/local-execution-backend.ts';
+import { joinPath } from '../../src/fs/path.ts';
+import { makeTempDir, readTextFile, removeDir, writeTextFile } from '../helpers/fs.ts';
 
 test('local environment delegates file reads and writes to the workspace filesystem', async () => {
   const calls: string[] = [];
@@ -26,29 +24,29 @@ test('local environment delegates file reads and writes to the workspace filesys
   };
 
   const filesystem = new LocalWorkspaceFileSystem(fileSystem);
-  assert.equal(await filesystem.readTextFile('/workspace/a.ts', { line: 2, limit: 3 }), 'hello');
+  expect(await filesystem.readTextFile('/workspace/a.ts', { line: 2, limit: 3 })).toBe('hello');
   await filesystem.writeTextFile('/workspace/a.ts', 'updated');
 
-  assert.deepEqual(calls, [
+  expect(calls).toEqual([
     'read:/workspace/a.ts:2:3',
     'write:/workspace/a.ts:updated',
   ]);
 });
 
 test('local environment deletes files directly from the filesystem', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'picoagent-local-env-'));
+  const root = await makeTempDir('picoagent-local-env-');
 
   try {
-    const filePath = join(root, 'delete-me.txt');
-    writeFileSync(filePath, 'bye', 'utf8');
+    const filePath = joinPath(root, 'delete-me.txt');
+    await writeTextFile(filePath, 'bye');
 
     const filesystem = new LocalWorkspaceFileSystem();
 
     await filesystem.deleteTextFile(filePath);
 
-    assert.throws(() => readFileSync(filePath, 'utf8'));
+    await expect(readTextFile(filePath)).rejects.toThrow();
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await removeDir(root);
   }
 });
 
@@ -61,24 +59,27 @@ test('local environment delegates listing and text search to the workspace files
     async writeTextFile() {},
     async deleteTextFile() {},
     async listFiles(root, limit, receivedSignal) {
-      assert.equal(root, '/workspace');
-      assert.equal(limit, 2);
-      assert.equal(receivedSignal, signal);
+      expect(root).toBe('/workspace');
+      expect(limit).toBe(2);
+      expect(receivedSignal).toBe(signal);
       return ['/workspace/a.ts', '/workspace/b.ts'];
     },
     async searchText(root, query, limit, receivedSignal) {
-      assert.equal(root, '/workspace');
-      assert.equal(query, 'needle');
-      assert.equal(limit, 1);
-      assert.equal(receivedSignal, signal);
+      expect(root).toBe('/workspace');
+      expect(query).toBe('needle');
+      expect(limit).toBe(1);
+      expect(receivedSignal).toBe(signal);
       return [{ path: '/workspace/a.ts', line: 4, text: 'needle' }];
     },
   };
 
   const filesystem = new LocalWorkspaceFileSystem(fileSystem);
 
-  assert.deepEqual(await filesystem.listFiles('/workspace', 2, signal), ['/workspace/a.ts', '/workspace/b.ts']);
-  assert.deepEqual(await filesystem.searchText('/workspace', 'needle', 1, signal), [
+  expect(await filesystem.listFiles('/workspace', 2, signal)).toEqual([
+    '/workspace/a.ts',
+    '/workspace/b.ts',
+  ]);
+  expect(await filesystem.searchText('/workspace', 'needle', 1, signal)).toEqual([
     { path: '/workspace/a.ts', line: 4, text: 'needle' },
   ]);
 });
@@ -87,13 +88,28 @@ test('local execution backend runs a command and returns terminal metadata', asy
   const execution = new LocalExecutionBackend();
   const result = await execution.run({
     runId: 'test-run',
-    command: 'node',
+    command: 'bun',
     args: ['-e', 'console.log("hello")'],
     outputByteLimit: 64000,
   });
 
-  assert.equal(result.terminalId.startsWith('test-run:'), true);
-  assert.match(result.output, /hello/);
-  assert.equal(result.exitCode, 0);
-  assert.equal(result.signal, null);
+  expect(result.terminalId).toMatch(/^test-run:/);
+  expect(result.output).toMatch(/hello/);
+  expect(result.exitCode).toBe(0);
+  expect(result.signal).toBe(null);
+});
+
+test('local execution backend captures stderr and truncates oversized output', async () => {
+  const execution = new LocalExecutionBackend();
+  const result = await execution.run({
+    runId: 'test-run',
+    command: 'bun',
+    args: ['-e', 'process.stdout.write("a".repeat(40000)); process.stderr.write("!");'],
+    outputByteLimit: 1024,
+  });
+
+  expect(result.truncated).toBeTruthy();
+  expect(result.output.length).toBeLessThanOrEqual(1024);
+  expect(result.output).toContain('!');
+  expect(result.exitCode).toBe(0);
 });

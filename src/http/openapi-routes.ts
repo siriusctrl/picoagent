@@ -19,7 +19,7 @@ import {
   jsonContent,
   plainTextContent,
   textEventStreamContent,
-} from './openapi-schemas.js';
+} from './openapi-schemas.ts';
 
 export const createStandaloneRunRoute = createRoute({
   method: 'post',

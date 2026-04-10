@@ -1,13 +1,20 @@
-import { describe, it } from "node:test";
-import assert from "node:assert";
+import { describe, test, expect } from 'bun:test';
 import { join } from "path";
-import { parseFrontmatter, scan, load, scanMarkdownDocuments } from "../../src/prompting/frontmatter.js";
+import { parseFrontmatter, scan, load, scanMarkdownDocuments } from "../../src/prompting/frontmatter.ts";
 
 const fixturesDir = join(process.cwd(), "tests/fixtures");
 
+function requireValue<T>(value: T | undefined, message: string): T {
+  if (value === undefined) {
+    throw new Error(message);
+  }
+
+  return value;
+}
+
 describe("Scanner", () => {
   describe("parseFrontmatter", () => {
-    it("should parse simple frontmatter", () => {
+    test("should parse simple frontmatter", () => {
       const content = `---
 name: test
 value: 123
@@ -15,39 +22,39 @@ enabled: true
 ---
 Body content`;
       const { frontmatter, body } = parseFrontmatter(content);
-      assert.deepStrictEqual(frontmatter, { name: "test", value: 123, enabled: true });
-      assert.strictEqual(body, "Body content");
+      expect(frontmatter).toEqual({ name: "test", value: 123, enabled: true });
+      expect(body).toBe("Body content");
     });
 
-    it("should parse inline arrays", () => {
+    test("should parse inline arrays", () => {
       const content = `---
 tags: [a, b, c]
 ---
 Body`;
       const { frontmatter } = parseFrontmatter(content);
-      assert.deepStrictEqual(frontmatter, { tags: ["a", "b", "c"] });
+      expect(frontmatter).toEqual({ tags: ["a", "b", "c"] });
     });
 
-    it("should handle empty frontmatter", () => {
+    test("should handle empty frontmatter", () => {
       const content = `Body only`;
       const { frontmatter, body } = parseFrontmatter(content);
-      assert.deepStrictEqual(frontmatter, {});
-      assert.strictEqual(body, "Body only");
+      expect(frontmatter).toEqual({});
+      expect(body).toBe("Body only");
     });
 
-    it("should handle strings with quotes", () => {
+    test("should handle strings with quotes", () => {
         const content = `---
 title: "Hello World"
 desc: 'Single quotes'
 ---
 Body`;
         const { frontmatter } = parseFrontmatter(content);
-        assert.deepStrictEqual(frontmatter, { title: "Hello World", desc: "Single quotes" });
+        expect(frontmatter).toEqual({ title: "Hello World", desc: "Single quotes" });
     });
   });
 
   describe("scan", () => {
-    it("should scan markdown documents without filesystem access", () => {
+    test("should scan markdown documents without filesystem access", () => {
       const results = scanMarkdownDocuments([
         {
           path: "memory/doc.md",
@@ -67,44 +74,63 @@ Body`,
         },
       ], { category: "test" });
 
-      assert.strictEqual(results.length, 1);
-      assert.strictEqual(results[0].path, "memory/doc.md");
-      assert.strictEqual(results[0].frontmatter.name, "doc");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.path).toBe("memory/doc.md");
+      expect(results[0]!.frontmatter.name).toBe("doc");
     });
 
-    it("should find markdown files in directory", () => {
-      const results = scan(fixturesDir);
+    test("should find markdown files in directory", async () => {
+      const results = await scan(fixturesDir);
       // We expect doc1.md, doc2.md, subdir/doc3.md
       // no-front.md also is found but has empty frontmatter
-      assert.ok(results.length >= 4);
-      const doc1 = results.find(r => r.path.endsWith("doc1.md"));
-      assert.ok(doc1);
-      assert.strictEqual(doc1.frontmatter.name, "doc1");
+      expect(results.length).toBeGreaterThanOrEqual(4);
+      const doc1 = requireValue(results.find(r => r.path.endsWith("doc1.md")), "expected doc1 fixture");
+      expect(doc1.frontmatter.name).toBe("doc1");
     });
 
-    it("should filter by pattern", () => {
-      const results = scan(fixturesDir, { category: "test" });
-      assert.strictEqual(results.length, 1);
-      assert.ok(results[0].path.endsWith("doc2.md"));
+    test("should filter by pattern", async () => {
+      const results = await scan(fixturesDir, { category: "test" });
+      expect(results).toHaveLength(1);
+      expect(results[0]!.path).toMatch(/doc2\.md$/);
     });
 
-    it("should support wildcard pattern", () => {
-        const results = scan(fixturesDir, { category: "*" });
+    test("should support wildcard pattern", async () => {
+        const results = await scan(fixturesDir, { category: "*" });
         // matches "test" and "nested"
         const paths = results.map(r => r.path);
-        const hasDoc2 = paths.some(p => p.endsWith("doc2.md"));
-        const hasDoc3 = paths.some(p => p.endsWith("subdir/doc3.md")); // absolute path
-        assert.ok(hasDoc2);
-        assert.ok(hasDoc3);
+        expect(paths.filter(p => p.endsWith("doc2.md"))).toHaveLength(1);
+        expect(paths.filter(p => p.endsWith("subdir/doc3.md"))).toHaveLength(1); // absolute path
+    });
+
+    test("should treat regex metacharacters literally in wildcard patterns", () => {
+      const results = scanMarkdownDocuments([
+        {
+          path: "memory/doc.md",
+          content: `---
+name: a+b*c?.md
+---
+Body`,
+        },
+        {
+          path: "memory/skip.md",
+          content: `---
+name: abZZcXmd
+---
+Body`,
+        },
+      ], { name: "a+b*c?.md" });
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.path).toBe("memory/doc.md");
     });
   });
 
   describe("load", () => {
-    it("should load full document", () => {
+    test("should load full document", async () => {
       const docPath = join(fixturesDir, "doc1.md");
-      const doc = load(docPath);
-      assert.strictEqual(doc.frontmatter.name, "doc1");
-      assert.ok(doc.body.includes("This is the body of doc1."));
+      const doc = await load(docPath);
+      expect(doc.frontmatter.name).toBe("doc1");
+      expect(doc.body).toContain("This is the body of doc1.");
     });
   });
 });

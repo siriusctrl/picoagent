@@ -1,6 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { joinPath } from '../fs/path.ts';
 
 export interface PicoConfig {
   provider: 'anthropic' | 'openai' | 'gemini' | 'echo';
@@ -146,16 +144,21 @@ function parseJsonc(raw: string, filePath: string): Record<string, unknown> {
   }
 }
 
-function readConfigFile(filePath: string): Record<string, unknown> | null {
-  if (!existsSync(filePath)) {
+async function readConfigFile(filePath: string): Promise<Record<string, unknown> | null> {
+  const file = Bun.file(filePath);
+  if (!(await file.exists())) {
     return null;
   }
 
-  return parseJsonc(readFileSync(filePath, 'utf8'), filePath);
+  return parseJsonc(await file.text(), filePath);
 }
 
 function configPath(root: string): string {
-  return join(root, PICO_DIR, CONFIG_FILE);
+  return joinPath(root, PICO_DIR, CONFIG_FILE);
+}
+
+export function userHomeDir(): string {
+  return process.env.HOME || Bun.env.HOME || '/';
 }
 
 export function workspaceConfigPath(workspaceDir: string): string {
@@ -163,13 +166,13 @@ export function workspaceConfigPath(workspaceDir: string): string {
 }
 
 export function userConfigPath(): string {
-  return configPath(homedir());
+  return configPath(userHomeDir());
 }
 
-function mergedFrontmatter(workspaceDir: string): Record<string, unknown> {
+async function mergedFrontmatter(workspaceDir: string): Promise<Record<string, unknown>> {
   return {
-    ...readConfigFile(userConfigPath()),
-    ...readConfigFile(workspaceConfigPath(workspaceDir)),
+    ...await readConfigFile(userConfigPath()),
+    ...await readConfigFile(workspaceConfigPath(workspaceDir)),
   };
 }
 
@@ -212,8 +215,8 @@ export function loadConfigFromContents(
  * `<workspace>/.pico/config.jsonc`. Workspace fields override user fields.
  * If neither file exists, use built-in defaults.
  */
-export function loadConfig(workspaceDir: string): PicoConfig {
-  return resolveConfig(workspaceDir, mergedFrontmatter(workspaceDir));
+export async function loadConfig(workspaceDir: string): Promise<PicoConfig> {
+  return resolveConfig(workspaceDir, await mergedFrontmatter(workspaceDir));
 }
 
 /**

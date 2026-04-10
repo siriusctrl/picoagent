@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { FileViewAccess } from './file-view.js';
+import type { FileViewAccess } from './file-view.ts';
 
 export interface TextContent {
   type: 'text';

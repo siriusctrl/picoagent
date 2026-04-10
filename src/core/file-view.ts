@@ -1,5 +1,5 @@
-import type { ExecutionRequest, ExecutionResult } from './execution.js';
-import type { SearchMatch } from './filesystem.js';
+import type { ExecutionRequest, ExecutionResult } from './execution.ts';
+import type { SearchMatch } from './filesystem.ts';
 
 export type NamespaceLikePath = `/${string}`;
 

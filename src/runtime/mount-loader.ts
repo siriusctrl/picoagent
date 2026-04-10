@@ -1,9 +1,8 @@
-import path from 'node:path';
-import { statSync } from 'node:fs';
-import type { NamespaceMount } from '../fs/namespace.js';
-import { HttpFilesystem } from '../fs/http-filesystem.js';
-import { RootedFilesystem } from '../fs/rooted-fs.js';
-import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.js';
+import type { NamespaceMount } from '../fs/namespace.ts';
+import { resolvePath } from '../fs/path.ts';
+import { HttpFilesystem } from '../fs/http-filesystem.ts';
+import { RootedFilesystem } from '../fs/rooted-fs.ts';
+import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.ts';
 
 export interface RuntimeMountSpec {
   label: string;
@@ -18,17 +17,34 @@ function normalizeLabel(label: string): string {
 
 function resolveLocalMountSource(source: string, cwd: string): string {
   const localSource = source.startsWith('local:') ? source.slice('local:'.length) : source;
-  return path.resolve(cwd, localSource || '.');
+  return resolvePath(cwd, localSource || '.');
 }
 
-function validateLocalRoot(root: string): void {
-  const stats = statSync(root, { throwIfNoEntry: false });
-  if (!stats) {
-    throw new Error(`Local mount root does not exist: ${root}`);
+async function validateLocalRoot(root: string): Promise<void> {
+  if (await Bun.file(root).exists()) {
+    throw new Error(`Local mount root must be a directory: ${root}`);
   }
 
-  if (!stats.isDirectory()) {
-    throw new Error(`Local mount root must be a directory: ${root}`);
+  try {
+    for await (const _entry of new Bun.Glob('*').scan({
+      cwd: root,
+      onlyFiles: false,
+      dot: true,
+      followSymlinks: false,
+    })) {
+      break;
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('ENOENT')) {
+      throw new Error(`Local mount root does not exist: ${root}`);
+    }
+
+    if (message.includes('ENOTDIR')) {
+      throw new Error(`Local mount root must be a directory: ${root}`);
+    }
+
+    throw error;
   }
 }
 
@@ -70,7 +86,7 @@ export async function loadRuntimeMounts(mounts: RuntimeMountSpec[], cwd: string)
     }
 
     const root = resolveLocalMountSource(mount.source, cwd);
-    validateLocalRoot(root);
+    await validateLocalRoot(root);
     resolved.push({
       name: label,
       filesystem: new RootedFilesystem(new LocalWorkspaceFileSystem(), root),

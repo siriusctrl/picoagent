@@ -1,6 +1,3 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { extname, join } from "node:path";
-
 export interface DocMeta {
   path: string;
   frontmatter: Record<string, unknown>;
@@ -13,6 +10,10 @@ export interface DocFull extends DocMeta {
 export interface MarkdownDocument {
   path: string;
   content: string;
+}
+
+function wildcardPatternToRegExp(pattern: string): RegExp {
+  return new RegExp(`^${pattern.split("*").map(RegExp.escape).join(".*")}$`);
 }
 
 /**
@@ -90,7 +91,7 @@ function matchesPattern(frontmatter: Record<string, unknown>, pattern: Record<st
 
     const valStr = String(val);
     if (pat.includes('*')) {
-      const regex = new RegExp(`^${pat.replace(/\*/g, '.*')}$`);
+      const regex = wildcardPatternToRegExp(pat);
       if (!regex.test(valStr)) {
         return false;
       }
@@ -129,36 +130,27 @@ export function scanMarkdownDocuments(documents: MarkdownDocument[], pattern?: R
  * Scan a directory for markdown files and return their frontmatter.
  * Optionally filter by a pattern matching frontmatter fields.
  */
-export function scan(dir: string, pattern?: Record<string, string>): DocMeta[] {
+export async function scan(dir: string, pattern?: Record<string, string>): Promise<DocMeta[]> {
   try {
     const documents: MarkdownDocument[] = [];
 
-    function visit(currentDir: string): void {
-      const files = readdirSync(currentDir);
-
-      for (const file of files) {
-        const fullPath = join(currentDir, file);
-        const stat = statSync(fullPath);
-
-        if (stat.isDirectory()) {
-          visit(fullPath);
-          continue;
-        }
-
-        if (stat.isFile() && extname(file) === ".md") {
-          try {
-            documents.push({
-              path: fullPath,
-              content: readFileSync(fullPath, "utf-8"),
-            });
-          } catch {
-            continue;
-          }
-        }
+    for await (const filePath of new Bun.Glob('**/*.md').scan({
+      cwd: dir,
+      absolute: true,
+      dot: true,
+      onlyFiles: true,
+      followSymlinks: false,
+    })) {
+      try {
+        documents.push({
+          path: filePath,
+          content: await Bun.file(filePath).text(),
+        });
+      } catch {
+        continue;
       }
     }
 
-    visit(dir);
     return scanMarkdownDocuments(documents, pattern);
   } catch {
     return [];
@@ -168,8 +160,8 @@ export function scan(dir: string, pattern?: Record<string, string>): DocMeta[] {
 /**
  * Load a file fully: frontmatter + body.
  */
-export function load(filePath: string): DocFull {
-  const content = readFileSync(filePath, "utf-8");
+export async function load(filePath: string): Promise<DocFull> {
+  const content = await Bun.file(filePath).text();
   const { frontmatter, body } = parseFrontmatter(content);
   return {
     path: filePath,

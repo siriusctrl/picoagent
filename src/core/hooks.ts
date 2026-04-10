@@ -1,4 +1,4 @@
-import { AssistantMessage, ExecutedToolResult, Message, Tool, ToolCall } from './types.js';
+import { AssistantMessage, ExecutedToolResult, Message, Tool, ToolCall } from './types.ts';
 
 export interface AgentHooks {
   onLoopStart?(): void | Promise<void>;

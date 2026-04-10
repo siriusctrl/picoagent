@@ -6,6 +6,11 @@ Simple, controllable agent harness with one HTTP API.
 
 `picoagent` is a small TypeScript codebase for building a controllable agent harness.
 
+The repository is Bun-first for local development, testing, and CI.
+The default local runtime is Bun-native end to end: HTTP serving, filesystem access, hashing, globbing, process execution, and tests all run through Bun APIs unless a boundary absolutely requires something else.
+Source files use native `.ts` and `.tsx` import specifiers, and the TypeScript build rewrites them to `.js` in `dist/`.
+Those Bun-specific choices stay behind the existing runtime boundaries so `session`, `runtime`, and `resource` semantics do not depend on one transport or one host API surface.
+
 The core design goal is to keep four concerns explicit and separate:
 
 - context management through sessions
@@ -19,7 +24,7 @@ The current reference shape is:
 
 - one core agent loop
 - one global tool registry
-- one async Hono-backed HTTP runtime surface
+- one async Bun-hosted Hono HTTP runtime surface
 - thin local clients for debugging
 
 The current implementation stays intentionally small:
@@ -51,26 +56,31 @@ What is still incomplete:
 Install and run the local server:
 
 ```bash
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 That starts the HTTP server from the current working directory.
 Persistent runtime state is stored under `.pico/runtime/`.
 
-Build and run the compiled output:
+Build output:
 
 ```bash
-npm run build
-npm run start
+bun run build
+```
+
+The default `start` scripts also run source files directly through Bun:
+
+```bash
+bun run start
 ```
 
 Verification:
 
 ```bash
-npm run build
-npm run test
-npm run typecheck
+bun run build
+bun run test
+bun run typecheck
 ```
 
 ## Config
@@ -187,6 +197,7 @@ The model can browse session history through the session file-view with:
 
 That file-view is read-only. It is a projection of session state for model-side inspection, not a second writable workspace.
 Raw event logs and compaction stay on the session or HTTP side, not the model tool surface.
+Under Bun, `glob` matching follows Bun's glob syntax rather than a custom reduced parser.
 For the executable workspace target, `grep` prefers `rg` when available and falls back to the built-in file-view search when it is not.
 
 File-view tools now address mounted surfaces through namespace paths such as:
@@ -276,42 +287,39 @@ The OpenAPI document is generated from the HTTP route schemas rather than mainta
 
 The CLI is intentionally small. It starts the HTTP server and little else.
 
-Development:
+Default:
 
 ```bash
-npm run dev:cli -- help
-npm run dev:cli -- serve
+bun run start:cli -- help
+bun run start:cli -- serve
 ```
 
-Built output:
+Build output:
 
 ```bash
-npm run build
-npm run start:cli -- help
-npm run start:cli -- serve
+bun run build
 ```
 
 ### TUI
 
 The TUI is a thin local HTTP client for smoke tests and debugging, not the primary product surface.
 
-Development:
+Default:
 
 ```bash
-npm run dev:tui
+bun run start:tui
 ```
 
 With a real provider:
 
 ```bash
-OPENAI_API_KEY=... npm run dev:tui
+OPENAI_API_KEY=... bun run start:tui
 ```
 
-Built output:
+Build output:
 
 ```bash
-npm run build
-npm run start:tui
+bun run build
 ```
 
 ## Source Layout

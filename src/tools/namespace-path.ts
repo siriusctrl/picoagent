@@ -1,4 +1,4 @@
-import type { NamespaceLikePath } from '../core/file-view.js';
+import type { NamespaceLikePath } from '../core/file-view.ts';
 
 export function parseNamespacePath(inputPath: string): { namespace: string; relativePath: string } {
   if (!inputPath.startsWith('/')) {

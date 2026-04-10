@@ -1,4 +1,4 @@
-import { AssistantMessage, Message, ToolDefinition } from './types.js';
+import { AssistantMessage, Message, ToolDefinition } from './types.ts';
 
 export interface ProviderConfig {
   apiKey: string;

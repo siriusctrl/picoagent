@@ -201,6 +201,29 @@ Reason:
 Rejected direction:
 - manually maintaining a separate hard-coded OpenAPI document
 
+## Toolchain
+
+The repository is Bun-first for local development, test execution, and CI.
+
+Current shape:
+- dependency installation uses `bun install`
+- package scripts are expected to run through `bun run`
+- tests run through Bun's native test runner
+- source entrypoints run directly from `.ts` and `.tsx` files
+- source imports use `.ts` and `.tsx` extensions, with `tsc` rewriting them for emitted JavaScript
+- `tsc` is still used for `build` and `typecheck`
+- local runtime code should prefer Bun-native APIs over Node compatibility shims when Bun already provides the needed primitive
+- Bun-specific primitives still need to stay behind the existing HTTP, filesystem, and execution boundaries
+
+Reason:
+- Bun gives a simpler TypeScript and TSX runtime story for this project
+- it removes the extra `tsx` loader layer from normal development and test flows
+- it improves local iteration and keeps the default runtime stack smaller
+- it still keeps the domain model transport-agnostic because Bun usage is confined to local backend implementations
+
+Rejected direction:
+- keeping npm plus `tsx` as the default workflow for local development and CI
+
 ## Source-Area Guidance
 
 Repository guidance docs belong under `docs/`, not under `src/`.

@@ -1,5 +1,5 @@
-import type { Filesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.js';
-import type { SessionStore } from './store.js';
+import type { Filesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.ts';
+import type { SessionStore } from './store.ts';
 
 function normalizeSessionPath(value: string): string {
   return value.replace(/^\/+|\/+$/g, '') || '.';

@@ -1,7 +1,6 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { EchoProvider } from '../../src/providers/echo.js';
-import { Message } from '../../src/core/types.js';
+import { expect, test } from 'bun:test';
+import { EchoProvider } from '../../src/providers/echo.ts';
+import { Message } from '../../src/core/types.ts';
 
 test('echo provider completes with the last user message', async () => {
   const provider = new EchoProvider({
@@ -16,7 +15,7 @@ test('echo provider completes with the last user message', async () => {
 
   const response = await provider.complete(messages, []);
 
-  assert.deepEqual(response, {
+  expect(response).toEqual({
     role: 'assistant',
     content: [{ type: 'text', text: 'received: hello world' }],
   });
@@ -36,8 +35,8 @@ test('echo provider streams text deltas before the final message', async () => {
   const deltas = events.filter((event) => event.type === 'text_delta').map((event) => event.text).join('');
   const done = events.find((event) => event.type === 'done');
 
-  assert.equal(deltas, 'received: stream me');
-  assert.deepEqual(done?.message, {
+  expect(deltas).toBe('received: stream me');
+  expect(done?.message).toEqual({
     role: 'assistant',
     content: [{ type: 'text', text: 'received: stream me' }],
   });

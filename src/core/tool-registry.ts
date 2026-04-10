@@ -1,4 +1,4 @@
-import { AgentPresetId, Tool } from './types.js';
+import { AgentPresetId, Tool } from './types.ts';
 
 export interface ToolRegistryConfig {
   tools: Tool[];

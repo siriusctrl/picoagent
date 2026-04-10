@@ -1,5 +1,5 @@
-import type { MutableFilesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.js';
-import type { FilespaceInfo } from '../http/filespace-server.js';
+import type { MutableFilesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.ts';
+import type { FilespaceInfo } from '../http/filespace-server.ts';
 
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {

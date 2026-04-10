@@ -1,14 +1,12 @@
-import assert from 'node:assert/strict';
-import { afterEach, test } from 'node:test';
-import type http from 'node:http';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { afterEach, expect, test } from 'bun:test';
+import { joinPath } from '../../src/fs/path.ts';
 import {
   createHttpApp,
   startHttpServer,
   type HttpAppType,
-} from '../../src/http/server.js';
+} from '../../src/http/server.ts';
+import type { LocalServerHandle } from '../../src/http/bun-server.ts';
+import { ensureDir, makeTempDir, removeDir, writeTextFile } from '../helpers/fs.ts';
 
 type RunEvent = { type: string; [key: string]: unknown };
 type RunStatus = 'running' | 'completed' | 'failed';
@@ -16,80 +14,57 @@ type HttpClient = {
   request(path: string, init?: RequestInit): Promise<Response>;
 };
 
-const servers = new Set<http.Server>();
+const servers = new Set<LocalServerHandle>();
 const runtimeRoots = new Set<string>();
 
 afterEach(async () => {
-  await Promise.all(
-    Array.from(servers, (server) => new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        resolve();
-      });
-    })),
-  );
+  await Promise.all(Array.from(servers, (server) => server.stop(true)));
   servers.clear();
 
   for (const runtimeRoot of runtimeRoots) {
-    rmSync(runtimeRoot, { recursive: true, force: true });
+    await removeDir(runtimeRoot);
   }
   runtimeRoots.clear();
 });
 
-async function stopServer(server: http.Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-
-      resolve();
-    });
-  });
+async function stopServer(server: LocalServerHandle): Promise<void> {
+  await server.stop(true);
   servers.delete(server);
 }
 
 async function startServer(
   cwd = process.cwd(),
-  runtimeRoot = mkdtempSync(join(tmpdir(), 'picoagent-http-runtime-')),
-): Promise<{ baseUrl: string; client: HttpClient; server: http.Server; runtimeRoot: string }> {
-  runtimeRoots.add(runtimeRoot);
+  runtimeRoot?: string,
+): Promise<{ baseUrl: string; client: HttpClient; server: LocalServerHandle; runtimeRoot: string }> {
+  const resolvedRuntimeRoot = runtimeRoot ?? await makeTempDir('picoagent-http-runtime-');
+  runtimeRoots.add(resolvedRuntimeRoot);
   const server = await startHttpServer({
     cwd,
     hostname: '127.0.0.1',
     port: 0,
-    runtimeRoot,
+    runtimeRoot: resolvedRuntimeRoot,
   });
   servers.add(server);
 
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    throw new Error('Expected an inet server address');
-  }
-
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: server.url.origin,
     client: {
-      request: (path, init) => fetch(`${`http://127.0.0.1:${address.port}`}${path}`, init),
+      request: (path, init) => fetch(`${server.url.origin}${path}`, init),
     },
     server,
-    runtimeRoot,
+    runtimeRoot: resolvedRuntimeRoot,
   };
 }
 
 async function startApp(
   cwd = process.cwd(),
-  runtimeRoot = mkdtempSync(join(tmpdir(), 'picoagent-http-runtime-')),
+  runtimeRoot?: string,
 ): Promise<{ client: HttpClient; runtimeRoot: string }> {
-  runtimeRoots.add(runtimeRoot);
+  const resolvedRuntimeRoot = runtimeRoot ?? await makeTempDir('picoagent-http-runtime-');
+  runtimeRoots.add(resolvedRuntimeRoot);
   const { app }: { app: HttpAppType } = await createHttpApp({
     cwd,
-    runtimeRoot,
+    runtimeRoot: resolvedRuntimeRoot,
   });
 
   return {
@@ -98,7 +73,7 @@ async function startApp(
         return app.request(new URL(path, 'http://127.0.0.1'), init) as Promise<Response>;
       },
     },
-    runtimeRoot,
+    runtimeRoot: resolvedRuntimeRoot,
   };
 }
 
@@ -170,7 +145,7 @@ async function waitForRun(client: HttpClient, runId: string): Promise<{
 }> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const response = await client.request(`/runs/${runId}`);
-    assert.equal(response.status, 200);
+    expect(response.status).toBe(200);
     const payload = (await response.json()) as {
       id: string;
       sessionId?: string;
@@ -200,17 +175,17 @@ test('POST /runs creates an async run and GET /runs/:id returns the final snapsh
     body: JSON.stringify({ prompt: 'hello' }),
   });
 
-  assert.equal(createResponse.status, 202);
+  expect(createResponse.status).toBe(202);
   const created = (await createResponse.json()) as { runId: string; status: RunStatus };
-  assert.match(created.runId, /^[0-9a-f-]{36}$/);
-  assert.equal(created.status, 'running');
+  expect(created.runId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(created.status).toBe('running');
 
   const run = await waitForRun(client, created.runId);
-  assert.equal(run.id, created.runId);
-  assert.equal(run.status, 'completed');
-  assert.equal(run.agent, 'ask');
-  assert.equal(run.prompt, 'hello');
-  assert.equal(run.output, 'received: hello');
+  expect(run.id).toBe(created.runId);
+  expect(run.status).toBe('completed');
+  expect(run.agent).toBe('ask');
+  expect(run.prompt).toBe('hello');
+  expect(run.output).toBe('received: hello');
 });
 
 test('GET /events/:runId returns the full event log as JSON', async () => {
@@ -226,7 +201,7 @@ test('GET /events/:runId returns the full event log as JSON', async () => {
   await waitForRun(client, created.runId);
 
   const response = await client.request(`/events/${created.runId}`);
-  assert.equal(response.status, 200);
+  expect(response.status).toBe(200);
 
   const payload = (await response.json()) as {
     runId: string;
@@ -234,17 +209,17 @@ test('GET /events/:runId returns the full event log as JSON', async () => {
     events: RunEvent[];
   };
 
-  assert.equal(payload.runId, created.runId);
-  assert.equal(payload.status, 'completed');
-  assert.equal(payload.events[0]?.type, 'run_started');
-  assert.equal(payload.events.at(-1)?.type, 'done');
+  expect(payload.runId).toBe(created.runId);
+  expect(payload.status).toBe('completed');
+  expect(payload.events[0]?.type).toBe('run_started');
+  expect(payload.events.at(-1)?.type).toBe('done');
 
   const deltaEvents = payload.events.filter((event) => event.type === 'assistant_delta');
-  assert.ok(deltaEvents.length >= 1);
-  assert.equal(
+  expect(deltaEvents).not.toHaveLength(0);
+  expect(
     deltaEvents.map((event) => String(event.text ?? '')).join(''),
     'received: hello json events',
-  );
+  ).toBe('received: hello json events');
 });
 
 test('GET /events/:runId streams the same run events over SSE', async () => {
@@ -260,15 +235,15 @@ test('GET /events/:runId streams the same run events over SSE', async () => {
   const response = await client.request(`/events/${created.runId}`, {
     headers: { accept: 'text/event-stream' },
   });
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get('content-type') ?? '', /^text\/event-stream\b/);
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type') ?? '').toMatch(/^text\/event-stream\b/);
 
   const events = await readEvents(response, (all) => all.some((event) => event.type === 'done'));
-  assert.equal(events[0]?.type, 'run_started');
-  assert.equal(events.at(-1)?.type, 'done');
+  expect(events[0]?.type).toBe('run_started');
+  expect(events.at(-1)?.type).toBe('done');
 
   const doneEvent = events.find((event) => event.type === 'done');
-  assert.equal(doneEvent?.output, 'received: hello stream events');
+  expect(doneEvent?.output).toBe('received: hello stream events');
 });
 
 test('GET /events/:runId returns 404 for unknown SSE runs without killing the server', async () => {
@@ -277,13 +252,13 @@ test('GET /events/:runId returns 404 for unknown SSE runs without killing the se
   const response = await client.request('/events/missing-run-id', {
     headers: { accept: 'text/event-stream' },
   });
-  assert.equal(response.status, 404);
+  expect(response.status).toBe(404);
 
   const payload = (await response.json()) as { error: string };
-  assert.match(payload.error, /Run missing-run-id not found/);
+  expect(payload.error).toMatch(/Run missing-run-id not found/);
 
   const healthCheck = await client.request('/openapi');
-  assert.equal(healthCheck.status, 200);
+  expect(healthCheck.status).toBe(200);
 });
 
 test('sessions keep ordered run history and expose the related run ids', async () => {
@@ -294,7 +269,7 @@ test('sessions keep ordered run history and expose the related run ids', async (
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ agent: 'ask' }),
   });
-  assert.equal(createSessionResponse.status, 201);
+  expect(createSessionResponse.status).toBe(201);
 
   const session = (await createSessionResponse.json()) as {
     id: string;
@@ -302,17 +277,17 @@ test('sessions keep ordered run history and expose the related run ids', async (
     controlVersion: string;
     controlConfig: { provider: string };
   };
-  assert.equal(session.agent, 'ask');
-  assert.equal(session.controlConfig.provider, 'echo');
+  expect(session.agent).toBe('ask');
+  expect(session.controlConfig.provider).toBe('echo');
 
   const firstRunResponse = await client.request(`/sessions/${session.id}/runs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'first turn' }),
   });
-  assert.equal(firstRunResponse.status, 202);
+  expect(firstRunResponse.status).toBe(202);
   const firstRun = (await firstRunResponse.json()) as { runId: string; sessionId: string };
-  assert.equal(firstRun.sessionId, session.id);
+  expect(firstRun.sessionId).toBe(session.id);
 
   await waitForRun(client, firstRun.runId);
 
@@ -321,13 +296,13 @@ test('sessions keep ordered run history and expose the related run ids', async (
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'second turn' }),
   });
-  assert.equal(secondRunResponse.status, 202);
+  expect(secondRunResponse.status).toBe(202);
   const secondRun = (await secondRunResponse.json()) as { runId: string; sessionId: string };
 
   await waitForRun(client, secondRun.runId);
 
   const sessionResponse = await client.request(`/sessions/${session.id}`);
-  assert.equal(sessionResponse.status, 200);
+  expect(sessionResponse.status).toBe(200);
 
   const snapshot = (await sessionResponse.json()) as {
     id: string;
@@ -337,18 +312,12 @@ test('sessions keep ordered run history and expose the related run ids', async (
     runs: Array<{ id: string; agent: string; status: RunStatus; prompt: string; output: string }>;
   };
 
-  assert.equal(snapshot.id, session.id);
-  assert.equal(snapshot.agent, 'ask');
-  assert.match(snapshot.controlVersion, /^[0-9a-f]{64}$/);
-  assert.equal(snapshot.controlConfig.provider, 'echo');
-  assert.deepEqual(
-    snapshot.runs.map((run) => run.id),
-    [firstRun.runId, secondRun.runId],
-  );
-  assert.deepEqual(
-    snapshot.runs.map((run) => run.prompt),
-    ['first turn', 'second turn'],
-  );
+  expect(snapshot.id).toBe(session.id);
+  expect(snapshot.agent).toBe('ask');
+  expect(snapshot.controlVersion).toMatch(/^[0-9a-f]{64}$/);
+  expect(snapshot.controlConfig.provider).toBe('echo');
+  expect(snapshot.runs.map((run) => run.id)).toEqual([firstRun.runId, secondRun.runId]);
+  expect(snapshot.runs.map((run) => run.prompt)).toEqual(['first turn', 'second turn']);
 });
 
 test('sessions keep a default agent and allow it to be updated over HTTP', async () => {
@@ -366,11 +335,11 @@ test('sessions keep a default agent and allow it to be updated over HTTP', async
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ agent: 'exec' }),
   });
-  assert.equal(agentResponse.status, 200);
+  expect(agentResponse.status).toBe(200);
 
   const updated = (await agentResponse.json()) as { id: string; agent: string };
-  assert.equal(updated.id, session.id);
-  assert.equal(updated.agent, 'exec');
+  expect(updated.id).toBe(session.id);
+  expect(updated.agent).toBe('exec');
 
   const runResponse = await client.request(`/sessions/${session.id}/runs`, {
     method: 'POST',
@@ -379,7 +348,7 @@ test('sessions keep a default agent and allow it to be updated over HTTP', async
   });
   const run = (await runResponse.json()) as { runId: string };
   const snapshot = await waitForRun(client, run.runId);
-  assert.equal(snapshot.agent, 'exec');
+  expect(snapshot.agent).toBe('exec');
 });
 
 test('POST /sessions/:id/agent rejects missing agent values', async () => {
@@ -397,14 +366,14 @@ test('POST /sessions/:id/agent rejects missing agent values', async () => {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({}),
   });
-  assert.equal(agentResponse.status, 400);
+  expect(agentResponse.status).toBe(400);
 
   const errorPayload = (await agentResponse.json()) as { error: string };
-  assert.equal(errorPayload.error, 'agent is required');
+  expect(errorPayload.error).toBe('agent is required');
 
   const sessionResponse = await client.request(`/sessions/${session.id}`);
   const snapshot = (await sessionResponse.json()) as { agent: string };
-  assert.equal(snapshot.agent, 'exec');
+  expect(snapshot.agent).toBe('exec');
 });
 
 test('session runs inherit the session default agent unless the request overrides it', async () => {
@@ -422,34 +391,34 @@ test('session runs inherit the session default agent unless the request override
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'override just this run', agent: 'exec' }),
   });
-  assert.equal(runResponse.status, 202);
+  expect(runResponse.status).toBe(202);
 
   const run = (await runResponse.json()) as { runId: string };
   const snapshot = await waitForRun(client, run.runId);
-  assert.equal(snapshot.agent, 'exec');
+  expect(snapshot.agent).toBe('exec');
 
   const sessionResponse = await client.request(`/sessions/${session.id}`);
   const updatedSession = (await sessionResponse.json()) as { agent: string };
-  assert.equal(updatedSession.agent, 'ask');
+  expect(updatedSession.agent).toBe('ask');
 });
 
 test('GET /openapi documents the async run and event endpoints', async () => {
   const { client } = await startApp();
 
   const response = await client.request('/openapi');
-  assert.equal(response.status, 200);
+  expect(response.status).toBe(200);
 
   const document = (await response.json()) as {
     paths: Record<string, Record<string, { description?: string; responses?: Record<string, { content?: Record<string, unknown> }> }>>;
   };
 
-  assert.ok(document.paths['/runs']);
-  assert.ok(document.paths['/events/{runId}']?.get?.description?.includes('Accept: text/event-stream'));
-  assert.ok(document.paths['/sessions/{sessionId}/runs']);
-  assert.ok(document.paths['/sessions/{sessionId}/resources']);
-  assert.ok(document.paths['/sessions/{sessionId}/resources/{resourcePath}']);
-  assert.ok(document.paths['/sessions/{sessionId}/agent']);
-  assert.ok(document.paths['/sessions/{sessionId}/compact']);
+  expect(document.paths).toHaveProperty('/runs');
+  expect(document.paths['/events/{runId}']?.get?.description ?? '').toContain('Accept: text/event-stream');
+  expect(document.paths).toHaveProperty('/sessions/{sessionId}/runs');
+  expect(document.paths).toHaveProperty('/sessions/{sessionId}/resources');
+  expect(document.paths).toHaveProperty('/sessions/{sessionId}/resources/{resourcePath}');
+  expect(document.paths).toHaveProperty('/sessions/{sessionId}/agent');
+  expect(document.paths).toHaveProperty('/sessions/{sessionId}/compact');
 });
 
 test('POST endpoints return 400 for malformed JSON bodies', async () => {
@@ -460,18 +429,18 @@ test('POST endpoints return 400 for malformed JSON bodies', async () => {
     headers: { 'content-type': 'application/json' },
     body: '{"prompt":',
   });
-  assert.equal(response.status, 400);
+  expect(response.status).toBe(400);
 
   const payload = (await response.json()) as { error: string };
-  assert.equal(payload.error, 'Malformed JSON in request body');
+  expect(payload.error).toBe('Malformed JSON in request body');
 });
 
 test('session runs automatically refresh control inputs when the workspace changes', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'picoagent-http-workspace-'));
+  const root = await makeTempDir('picoagent-http-workspace-');
 
   try {
-    mkdirSync(join(root, '.pico'), { recursive: true });
-    writeFileSync(join(root, '.pico', 'config.jsonc'), '{ "provider": "echo", "model": "echo" }\n', 'utf8');
+    await ensureDir(joinPath(root, '.pico'));
+    await writeTextFile(joinPath(root, '.pico', 'config.jsonc'), '{ "provider": "echo", "model": "echo" }\n');
 
     const { client } = await startApp(root);
 
@@ -480,37 +449,37 @@ test('session runs automatically refresh control inputs when the workspace chang
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agent: 'ask' }),
     });
-    assert.equal(createSessionResponse.status, 201);
+    expect(createSessionResponse.status).toBe(201);
 
     const session = (await createSessionResponse.json()) as {
       id: string;
       controlVersion: string;
       controlConfig: { provider: string };
     };
-    assert.equal(session.controlConfig.provider, 'echo');
+    expect(session.controlConfig.provider).toBe('echo');
 
-    writeFileSync(join(root, '.pico', 'config.jsonc'), '{ "provider": "wat", "model": "echo" }\n', 'utf8');
+    await writeTextFile(joinPath(root, '.pico', 'config.jsonc'), '{ "provider": "wat", "model": "echo" }\n');
 
     const runResponse = await client.request(`/sessions/${session.id}/runs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: 'should fail after refresh' }),
     });
-    assert.equal(runResponse.status, 500);
+    expect(runResponse.status).toBe(500);
 
     const errorPayload = (await runResponse.json()) as { error: string };
-    assert.match(errorPayload.error, /invalid provider "wat"/);
+    expect(errorPayload.error).toMatch(/invalid provider \"wat\"/);
 
     const sessionResponse = await client.request(`/sessions/${session.id}`);
-    assert.equal(sessionResponse.status, 200);
+    expect(sessionResponse.status).toBe(200);
     const snapshot = (await sessionResponse.json()) as {
       controlVersion: string;
       controlConfig: { provider: string };
     };
-    assert.equal(snapshot.controlVersion, session.controlVersion);
-    assert.equal(snapshot.controlConfig.provider, 'echo');
+    expect(snapshot.controlVersion).toBe(session.controlVersion);
+    expect(snapshot.controlConfig.provider).toBe('echo');
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await removeDir(root);
   }
 });
 
@@ -522,7 +491,7 @@ test('sessions compact into checkpoints and expose the compacted snapshot over H
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ agent: 'ask' }),
   });
-  assert.equal(createSessionResponse.status, 201);
+  expect(createSessionResponse.status).toBe(201);
 
   const session = (await createSessionResponse.json()) as { id: string };
 
@@ -531,7 +500,7 @@ test('sessions compact into checkpoints and expose the compacted snapshot over H
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'first turn to compact' }),
   });
-  assert.equal(firstRunResponse.status, 202);
+  expect(firstRunResponse.status).toBe(202);
   const firstRun = (await firstRunResponse.json()) as { runId: string };
   await waitForRun(client, firstRun.runId);
 
@@ -540,7 +509,7 @@ test('sessions compact into checkpoints and expose the compacted snapshot over H
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: 'second turn to keep' }),
   });
-  assert.equal(secondRunResponse.status, 202);
+  expect(secondRunResponse.status).toBe(202);
   const secondRun = (await secondRunResponse.json()) as { runId: string };
   await waitForRun(client, secondRun.runId);
 
@@ -549,27 +518,27 @@ test('sessions compact into checkpoints and expose the compacted snapshot over H
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ keepLastMessages: 2 }),
   });
-  assert.equal(compactResponse.status, 200);
+  expect(compactResponse.status).toBe(200);
 
   const compacted = (await compactResponse.json()) as {
     checkpoint: { checkpointId: string; compactedMessages: number; keptMessages: number; summary: string };
     session: { id: string; activeCheckpointId?: string; checkpointCount: number };
   };
-  assert.equal(compacted.session.id, session.id);
-  assert.equal(compacted.session.activeCheckpointId, compacted.checkpoint.checkpointId);
-  assert.equal(compacted.session.checkpointCount, 1);
-  assert.equal(compacted.checkpoint.compactedMessages, 2);
-  assert.equal(compacted.checkpoint.keptMessages, 2);
-  assert.match(compacted.checkpoint.summary, /first turn to compact/);
+  expect(compacted.session.id).toBe(session.id);
+  expect(compacted.session.activeCheckpointId).toBe(compacted.checkpoint.checkpointId);
+  expect(compacted.session.checkpointCount).toBe(1);
+  expect(compacted.checkpoint.compactedMessages).toBe(2);
+  expect(compacted.checkpoint.keptMessages).toBe(2);
+  expect(compacted.checkpoint.summary).toMatch(/first turn to compact/);
 
   const sessionResponse = await client.request(`/sessions/${session.id}`);
-  assert.equal(sessionResponse.status, 200);
+  expect(sessionResponse.status).toBe(200);
   const snapshot = (await sessionResponse.json()) as {
     activeCheckpointId?: string;
     checkpointCount: number;
   };
-  assert.equal(snapshot.activeCheckpointId, compacted.checkpoint.checkpointId);
-  assert.equal(snapshot.checkpointCount, 1);
+  expect(snapshot.activeCheckpointId).toBe(compacted.checkpoint.checkpointId);
+  expect(snapshot.checkpointCount).toBe(1);
 });
 
 test('session history resources are available over HTTP', async () => {
@@ -597,29 +566,29 @@ test('session history resources are available over HTTP', async () => {
   });
 
   const listResponse = await client.request(`/sessions/${session.id}/resources`);
-  assert.equal(listResponse.status, 200);
+  expect(listResponse.status).toBe(200);
   const listing = (await listResponse.json()) as { entries: string[] };
-  assert.deepEqual(listing.entries, ['summary.md', 'checkpoints/', 'runs/', 'events/']);
+  expect(listing.entries).toEqual(['summary.md', 'checkpoints/', 'runs/', 'events/']);
 
   const runsListResponse = await client.request(`/sessions/${session.id}/resources?path=runs`);
-  assert.equal(runsListResponse.status, 200);
+  expect(runsListResponse.status).toBe(200);
   const runsListing = (await runsListResponse.json()) as { entries: string[] };
-  assert.deepEqual(runsListing.entries, [`${run.runId}.md`]);
+  expect(runsListing.entries).toEqual([`${run.runId}.md`]);
 
   const summaryResponse = await client.request(`/sessions/${session.id}/resources/summary.md`);
-  assert.equal(summaryResponse.status, 200);
-  assert.match(summaryResponse.headers.get('content-type') ?? '', /^text\/plain\b/);
-  assert.match(await summaryResponse.text(), /# Checkpoint/);
+  expect(summaryResponse.status).toBe(200);
+  expect(summaryResponse.headers.get('content-type') ?? '').toMatch(/^text\/plain\b/);
+  expect(await summaryResponse.text()).toMatch(/# Checkpoint/);
 
   const eventsResponse = await client.request(`/sessions/${session.id}/resources/events/${run.runId}.jsonl`);
-  assert.equal(eventsResponse.status, 200);
-  assert.match(eventsResponse.headers.get('content-type') ?? '', /^application\/x-ndjson\b/);
-  assert.match(await eventsResponse.text(), /"type":"run_started"/);
+  expect(eventsResponse.status).toBe(200);
+  expect(eventsResponse.headers.get('content-type') ?? '').toMatch(/^application\/x-ndjson\b/);
+  expect(await eventsResponse.text()).toMatch(/"type":"run_started"/);
 });
 
 test('sessions and runs survive a server restart through the file runtime store', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'picoagent-http-persist-workspace-'));
-  const runtimeRoot = mkdtempSync(join(tmpdir(), 'picoagent-http-persist-runtime-'));
+  const root = await makeTempDir('picoagent-http-persist-workspace-');
+  const runtimeRoot = await makeTempDir('picoagent-http-persist-runtime-');
   runtimeRoots.add(root);
 
   try {
@@ -646,7 +615,7 @@ test('sessions and runs survive a server restart through the file runtime store'
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ keepLastMessages: 1 }),
     });
-    assert.equal(compactResponse.status, 200);
+    expect(compactResponse.status).toBe(200);
 
     await stopServer(first.server);
 
@@ -654,22 +623,22 @@ test('sessions and runs survive a server restart through the file runtime store'
     const { client: secondClient } = second;
 
     const sessionResponse = await secondClient.request(`/sessions/${session.id}`);
-    assert.equal(sessionResponse.status, 200);
+    expect(sessionResponse.status).toBe(200);
     const snapshot = (await sessionResponse.json()) as { checkpointCount: number; runs: Array<{ id: string }> };
-    assert.equal(snapshot.checkpointCount, 1);
-    assert.deepEqual(snapshot.runs.map((item) => item.id), [run.runId]);
+    expect(snapshot.checkpointCount).toBe(1);
+    expect(snapshot.runs.map((item) => item.id)).toEqual([run.runId]);
 
     const runSnapshotResponse = await secondClient.request(`/runs/${run.runId}`);
-    assert.equal(runSnapshotResponse.status, 200);
+    expect(runSnapshotResponse.status).toBe(200);
     const runSnapshot = (await runSnapshotResponse.json()) as { status: RunStatus; output: string };
-    assert.equal(runSnapshot.status, 'completed');
-    assert.equal(runSnapshot.output, 'received: persist across restart');
+    expect(runSnapshot.status).toBe('completed');
+    expect(runSnapshot.output).toBe('received: persist across restart');
 
     const eventsResponse = await secondClient.request(`/sessions/${session.id}/resources/events/${run.runId}.jsonl`);
-    assert.equal(eventsResponse.status, 200);
-    assert.match(await eventsResponse.text(), /"type":"done"/);
+    expect(eventsResponse.status).toBe(200);
+    expect(await eventsResponse.text()).toMatch(/"type":"done"/);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await removeDir(root);
     runtimeRoots.delete(root);
   }
 });

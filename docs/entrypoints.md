@@ -17,8 +17,8 @@ Primary entry file: `src/http/server.ts`
 
 Behavior:
 
-- serves a minimal local Hono HTTP API
-- exposes a reusable `createHttpApp()` for in-process clients and tests
+- serves a minimal local Hono HTTP API hosted by Bun
+- exposes an async `createHttpApp()` for in-process clients and tests
 - reuses the shared runtime context assembly and core loop
 - exposes async-first run, session, and event resources
 - keeps streaming and non-streaming reads behind the same `/events/:runId` endpoint
@@ -101,8 +101,9 @@ All entrypoints rely on the same runtime context path:
 1. resolve the workspace root
 2. assemble the global tool registry
 3. build or refresh the session control snapshot when a session needs it
-4. create the provider for the current control snapshot
-5. create transport-specific run and session state only where needed
+4. open the local runtime/session backends that persist or project state
+5. create the provider for the current control snapshot
+6. create transport-specific run and session state only where needed
 
 The boundary is:
 

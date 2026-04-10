@@ -170,4 +170,5 @@ Today this means:
 - tool-facing files can be virtualized behind the workspace filesystem boundary
 - sessions can reuse the same file-view logic for read-only history inspection
 - control loading reads workspace files through the injected filesystem boundary and host defaults through the local host filesystem
+- the default local filesystem, hashing, globbing, and process backends are Bun-native implementations
 - `cmd` is still an OS process boundary rather than a virtual workspace command layer

@@ -1,13 +1,12 @@
-import http from 'node:http';
 import { $, OpenAPIHono } from '@hono/zod-openapi';
-import type { ExecutionBackend } from '../core/execution.js';
-import type { MutableFilesystem } from '../core/filesystem.js';
-import type { NamespaceMount } from '../fs/namespace.js';
-import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.js';
-import { LocalExecutionBackend } from '../runtime/local-execution-backend.js';
-import type { RunEvent } from '../runtime/store.js';
-import type { SessionStore } from '../runtime/store.js';
-import { RuntimeService } from '../runtime/service.js';
+import type { ExecutionBackend } from '../core/execution.ts';
+import type { MutableFilesystem } from '../core/filesystem.ts';
+import type { NamespaceMount } from '../fs/namespace.ts';
+import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.ts';
+import { LocalExecutionBackend } from '../runtime/local-execution-backend.ts';
+import type { RunEvent } from '../runtime/store.ts';
+import type { SessionStore } from '../runtime/store.ts';
+import { RuntimeService } from '../runtime/service.ts';
 import {
   buildOpenApiDocument,
   compactSessionRoute,
@@ -20,9 +19,9 @@ import {
   listSessionResourcesRoute,
   readSessionResourceRoute,
   setSessionAgentRoute,
-} from './openapi.js';
-import { startNodeFetchServer } from './node-server.js';
-import { projectSessionSummary } from './session-summary.js';
+} from './openapi.ts';
+import { type LocalServerHandle, startBunFetchServer } from './bun-server.ts';
+import { projectSessionSummary } from './session-summary.ts';
 
 export interface HttpServerOptions {
   cwd?: string;
@@ -58,8 +57,8 @@ function errorStatus(error: unknown): 400 | 404 | 409 | 500 {
   return 500;
 }
 
-export function createHttpApp(options: HttpAppOptions = {}) {
-  const service = new RuntimeService({
+export async function createHttpApp(options: HttpAppOptions = {}) {
+  const service = await RuntimeService.create({
     cwd: options.cwd,
     filesystem: options.filesystem ?? new LocalWorkspaceFileSystem(),
     mounts: options.mounts,
@@ -230,11 +229,11 @@ export function createHttpApp(options: HttpAppOptions = {}) {
   };
 }
 
-export type HttpAppType = ReturnType<typeof createHttpApp>['app'];
+export type HttpAppType = Awaited<ReturnType<typeof createHttpApp>>['app'];
 
-export async function startHttpServer(options: HttpServerOptions = {}): Promise<http.Server> {
+export async function startHttpServer(options: HttpServerOptions = {}): Promise<LocalServerHandle> {
   const hostname = options.hostname ?? '127.0.0.1';
   const port = options.port ?? 4096;
-  const { app } = createHttpApp(options);
-  return startNodeFetchServer(app.fetch, hostname, port);
+  const { app } = await createHttpApp(options);
+  return startBunFetchServer(app.fetch, hostname, port);
 }

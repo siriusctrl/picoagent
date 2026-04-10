@@ -1,16 +1,14 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { loadConfig, resolveApiKey } from '../../src/config/config.js';
+import { test, expect } from 'bun:test';
+import { loadConfig, resolveApiKey } from '../../src/config/config.ts';
+import { joinPath } from '../../src/fs/path.ts';
+import { ensureDir, makeTempDir, removeDir, writeTextFile } from '../helpers/fs.ts';
 
-function withHome<T>(homeDir: string, fn: () => T): T {
+async function withHome<T>(homeDir: string, fn: () => Promise<T>): Promise<T> {
   const previousHome = process.env.HOME;
   process.env.HOME = homeDir;
 
   try {
-    return fn();
+    return await fn();
   } finally {
     if (previousHome === undefined) {
       delete process.env.HOME;
@@ -20,14 +18,14 @@ function withHome<T>(homeDir: string, fn: () => T): T {
   }
 }
 
-test('loadConfig falls back to built-in echo defaults when no config files exist', () => {
-  const root = mkdtempSync(join(tmpdir(), 'picoagent-config-missing-'));
-  const home = mkdtempSync(join(tmpdir(), 'picoagent-home-'));
+test('loadConfig falls back to built-in echo defaults when no config files exist', async () => {
+  const root = await makeTempDir('picoagent-config-missing-');
+  const home = await makeTempDir('picoagent-home-');
 
   try {
-    const config = withHome(home, () => loadConfig(root));
+    const config = await withHome(home, () => loadConfig(root));
 
-    assert.deepEqual(config, {
+    expect(config).toEqual({
       provider: 'echo',
       model: 'echo',
       maxTokens: 4096,
@@ -35,33 +33,31 @@ test('loadConfig falls back to built-in echo defaults when no config files exist
       baseURL: undefined,
     });
   } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
+    await removeDir(root);
+    await removeDir(home);
   }
 });
 
-test('loadConfig merges ~/.pico/config.jsonc with workspace overrides from ./.pico/config.jsonc', () => {
-  const root = mkdtempSync(join(tmpdir(), 'picoagent-config-local-'));
-  const home = mkdtempSync(join(tmpdir(), 'picoagent-home-'));
+test('loadConfig merges ~/.pico/config.jsonc with workspace overrides from ./.pico/config.jsonc', async () => {
+  const root = await makeTempDir('picoagent-config-local-');
+  const home = await makeTempDir('picoagent-home-');
 
   try {
-    mkdirSync(join(home, '.pico'), { recursive: true });
-    writeFileSync(
-      join(home, '.pico', 'config.jsonc'),
+    await ensureDir(joinPath(home, '.pico'));
+    await writeTextFile(
+      joinPath(home, '.pico', 'config.jsonc'),
       '{\n  // defaults for this user\n  "provider": "openai",\n  "model": "gpt-4o-mini",\n  "maxTokens": 2048,\n}\n',
-      'utf8',
     );
 
-    mkdirSync(join(root, '.pico'), { recursive: true });
-    writeFileSync(
-      join(root, '.pico', 'config.jsonc'),
+    await ensureDir(joinPath(root, '.pico'));
+    await writeTextFile(
+      joinPath(root, '.pico', 'config.jsonc'),
       '{\n  "provider": "echo",\n  "model": "echo",\n}\n',
-      'utf8',
     );
 
-    const config = withHome(home, () => loadConfig(root));
+    const config = await withHome(home, () => loadConfig(root));
 
-    assert.deepEqual(config, {
+    expect(config).toEqual({
       provider: 'echo',
       model: 'echo',
       maxTokens: 2048,
@@ -69,46 +65,46 @@ test('loadConfig merges ~/.pico/config.jsonc with workspace overrides from ./.pi
       baseURL: undefined,
     });
   } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
+    await removeDir(root);
+    await removeDir(home);
   }
 });
 
-test('loadConfig reports invalid JSONC clearly', () => {
-  const root = mkdtempSync(join(tmpdir(), 'picoagent-config-invalid-'));
-  const home = mkdtempSync(join(tmpdir(), 'picoagent-home-'));
+test('loadConfig reports invalid JSONC clearly', async () => {
+  const root = await makeTempDir('picoagent-config-invalid-');
+  const home = await makeTempDir('picoagent-home-');
 
   try {
-    mkdirSync(join(root, '.pico'), { recursive: true });
-    writeFileSync(join(root, '.pico', 'config.jsonc'), '{ invalid jsonc }', 'utf8');
+    await ensureDir(joinPath(root, '.pico'));
+    await writeTextFile(joinPath(root, '.pico', 'config.jsonc'), '{ invalid jsonc }');
 
-    assert.throws(() => withHome(home, () => loadConfig(root)), /Invalid JSONC/);
+    await expect(withHome(home, () => loadConfig(root))).rejects.toThrow(/Invalid JSONC/);
   } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
+    await removeDir(root);
+    await removeDir(home);
   }
 });
 
-test('loadConfig accepts the built-in echo provider without an API key', () => {
-  const root = mkdtempSync(join(tmpdir(), 'picoagent-config-echo-'));
-  const home = mkdtempSync(join(tmpdir(), 'picoagent-home-'));
+test('loadConfig accepts the built-in echo provider without an API key', async () => {
+  const root = await makeTempDir('picoagent-config-echo-');
+  const home = await makeTempDir('picoagent-home-');
 
   try {
-    mkdirSync(join(root, '.pico'), { recursive: true });
-    writeFileSync(join(root, '.pico', 'config.jsonc'), '{ "provider": "echo", "model": "echo" }', 'utf8');
+    await ensureDir(joinPath(root, '.pico'));
+    await writeTextFile(joinPath(root, '.pico', 'config.jsonc'), '{ "provider": "echo", "model": "echo" }');
 
-    const config = withHome(home, () => loadConfig(root));
+    const config = await withHome(home, () => loadConfig(root));
 
-    assert.deepEqual(config, {
+    expect(config).toEqual({
       provider: 'echo',
       model: 'echo',
       maxTokens: 4096,
       contextWindow: 200000,
       baseURL: undefined,
     });
-    assert.equal(resolveApiKey('echo'), '');
+    expect(resolveApiKey('echo')).toBe('');
   } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
+    await removeDir(root);
+    await removeDir(home);
   }
 });

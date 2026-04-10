@@ -1,13 +1,13 @@
-import path from 'node:path';
-import type { MutableFilesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.js';
+import type { MutableFilesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.ts';
+import { isAbsolutePath, relativePath, resolvePath } from './path.ts';
 
 export class RootedFilesystemValidationError extends Error {
   readonly status = 400;
 }
 
 function isWithinRoot(targetPath: string, root: string): boolean {
-  const relative = path.relative(root, targetPath);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  const relative = relativePath(root, targetPath);
+  return relative === '' || (!relative.startsWith('..') && !isAbsolutePath(relative));
 }
 
 function normalizeRelativePath(inputPath: string): string {
@@ -21,7 +21,7 @@ export class RootedFilesystem implements MutableFilesystem {
   ) {}
 
   private resolveRelativePath(inputPath: string): string {
-    const resolved = path.resolve(this.root, inputPath);
+    const resolved = resolvePath(this.root, inputPath);
     if (!isWithinRoot(resolved, this.root)) {
       throw new RootedFilesystemValidationError(`Path is outside the rooted filesystem: ${inputPath}`);
     }
@@ -30,7 +30,7 @@ export class RootedFilesystem implements MutableFilesystem {
   }
 
   private toRelativePath(filePath: string): string {
-    const relative = path.relative(this.root, filePath);
+    const relative = relativePath(this.root, filePath);
     return normalizeRelativePath(relative);
   }
 

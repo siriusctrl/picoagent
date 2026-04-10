@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto';
-import type { Message } from '../core/types.js';
+import type { Message } from '../core/types.ts';
 import type {
   RunRecord,
   RunSnapshot,
@@ -7,7 +6,7 @@ import type {
   SessionCompactResult,
   SessionRecord,
   SessionSnapshot,
-} from './store.js';
+} from './store.ts';
 
 export function projectRunSnapshot(run: RunRecord): RunSnapshot {
   return {
@@ -132,7 +131,7 @@ export function compactSessionRecord(
   const tail = session.messages.slice(compactedMessages);
   const summary = summarizeMessages(compacted);
   const checkpoint: SessionCheckpointRecord = {
-    id: randomUUID(),
+    id: crypto.randomUUID(),
     sessionId,
     parentCheckpointId: session.activeCheckpointId,
     createdAt: new Date().toISOString(),

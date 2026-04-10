@@ -1,10 +1,9 @@
 import React, { useEffect, useEffectEvent, useRef, useState } from 'react';
-import { randomUUID } from 'node:crypto';
 import { Box, render, Text, useApp, useStdin, useWindowSize } from 'ink';
-import { TuiController, UiEvent } from './controller.js';
-import { AgentPresetId } from '../../core/types.js';
-import { clampScrollOffset, getHistoryWindow, preserveScrollOffsetOnAppend } from './history.js';
-import { estimateEntryHeight } from './layout.js';
+import { TuiController, UiEvent } from './controller.ts';
+import { AgentPresetId } from '../../core/types.ts';
+import { clampScrollOffset, getHistoryWindow, preserveScrollOffsetOnAppend } from './history.ts';
+import { estimateEntryHeight } from './layout.ts';
 import {
   clearToEnd,
   clearToStart,
@@ -18,7 +17,7 @@ import {
   parseTerminalInput,
   renderPrompt,
   TerminalAction,
-} from './input.js';
+} from './input.ts';
 
 type Entry =
   | { id: string; type: 'system' | 'error'; text: string }
@@ -167,7 +166,7 @@ function App() {
             return [...current.slice(0, -1), { ...last, text: last.text + event.text }];
           }
 
-          return [...current, { id: randomUUID(), type: 'assistant', text: event.text }];
+          return [...current, { id: crypto.randomUUID(), type: 'assistant', text: event.text }];
         });
         return;
       case 'tool_call':
@@ -196,7 +195,7 @@ function App() {
         );
         return;
       case 'error':
-        setEntries((current) => [...current, { id: randomUUID(), type: 'error', text: event.text }]);
+        setEntries((current) => [...current, { id: crypto.randomUUID(), type: 'error', text: event.text }]);
         setStatus(event.text);
         return;
     }
@@ -285,7 +284,7 @@ function App() {
       return;
     }
 
-    setEntries((current) => [...current, { id: randomUUID(), type: 'user', text }]);
+    setEntries((current) => [...current, { id: crypto.randomUUID(), type: 'user', text }]);
     promptHistoryRef.current = [...promptHistoryRef.current, text];
     setPromptHistory(promptHistoryRef.current);
     promptHistoryIndexRef.current = -1;

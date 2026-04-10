@@ -1,4 +1,4 @@
-import type { SessionRecord } from '../runtime/store.js';
+import type { SessionRecord } from '../runtime/store.ts';
 
 export function projectSessionSummary(session: SessionRecord) {
   return {

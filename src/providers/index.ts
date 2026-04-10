@@ -1,9 +1,9 @@
-import { Provider } from '../core/provider.js';
-import { PicoConfig, resolveApiKey } from '../config/config.js';
-import { AnthropicProvider } from './anthropic.js';
-import { OpenAIProvider } from './openai.js';
-import { GeminiProvider } from './gemini.js';
-import { EchoProvider } from './echo.js';
+import { Provider } from '../core/provider.ts';
+import { PicoConfig, resolveApiKey } from '../config/config.ts';
+import { AnthropicProvider } from './anthropic.ts';
+import { OpenAIProvider } from './openai.ts';
+import { GeminiProvider } from './gemini.ts';
+import { EchoProvider } from './echo.ts';
 
 /**
  * Create a provider from PicoConfig.

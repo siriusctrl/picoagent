@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { AgentHooks } from './hooks.js';
-import { Provider } from './provider.js';
+import { AgentHooks } from './hooks.ts';
+import { Provider } from './provider.ts';
 import {
   AssistantMessage,
   ExecutedToolResult,
@@ -9,7 +9,7 @@ import {
   ToolContext,
   ToolDefinition,
   ToolLocation,
-} from './types.js';
+} from './types.ts';
 
 function toToolDefinitions(tools: Tool[]): ToolDefinition[] {
   return tools.map((tool) => ({
@@ -62,7 +62,7 @@ function resolveLocations(
 }
 
 async function executeTool(
-  toolCall: import('./types.js').ToolCall,
+  toolCall: import('./types.ts').ToolCall,
   tools: Tool[],
   context: ToolContext,
 ): Promise<ExecutedToolResult> {
@@ -169,7 +169,7 @@ export async function runAgentLoop(
       messages.push(response);
 
       const toolCalls = response.content.filter(
-        (block): block is import('./types.js').ToolCall => block.type === 'toolCall',
+        (block): block is import('./types.ts').ToolCall => block.type === 'toolCall',
       );
 
       if (toolCalls.length === 0) {

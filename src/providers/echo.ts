@@ -1,5 +1,5 @@
-import { AssistantMessage, Message, ToolDefinition } from '../core/types.js';
-import { Provider, ProviderConfig, StreamEvent } from '../core/provider.js';
+import { AssistantMessage, Message, ToolDefinition } from '../core/types.ts';
+import { Provider, ProviderConfig, StreamEvent } from '../core/provider.ts';
 
 function lastUserContent(messages: Message[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {

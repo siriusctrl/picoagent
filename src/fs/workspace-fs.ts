@@ -1,7 +1,5 @@
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import type { MutableFilesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.js';
-import { searchFiles, walkFiles } from './filesystem.js';
+import type { MutableFilesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.ts';
+import { searchFiles, walkFiles } from './filesystem.ts';
 
 export interface WorkspaceFileSystem extends MutableFilesystem {}
 
@@ -24,7 +22,7 @@ export class LocalWorkspaceFileSystem implements WorkspaceFileSystem {
       return this.delegate.readTextFile(filePath, options);
     }
 
-    return sliceTextByLines(await fs.readFile(filePath, 'utf8'), options);
+    return sliceTextByLines(await Bun.file(filePath).text(), options);
   }
 
   async writeTextFile(filePath: string, content: string): Promise<void> {
@@ -33,8 +31,7 @@ export class LocalWorkspaceFileSystem implements WorkspaceFileSystem {
       return;
     }
 
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, content, 'utf8');
+    await Bun.write(filePath, content);
   }
 
   async deleteTextFile(filePath: string): Promise<void> {
@@ -43,7 +40,10 @@ export class LocalWorkspaceFileSystem implements WorkspaceFileSystem {
       return;
     }
 
-    await fs.rm(filePath, { force: true });
+    const file = Bun.file(filePath);
+    if (await file.exists()) {
+      await file.delete();
+    }
   }
 
   listFiles(root: string, limit: number, signal: AbortSignal): Promise<string[]> {
