@@ -1,7 +1,41 @@
 import { z } from 'zod';
 import { FilePatchChange, FilePatchOperation } from '../core/file-view.js';
 import { Tool } from '../core/types.js';
-import { relativeToCwd, resolveSessionPath } from '../fs/filesystem.js';
+
+type FileViewTarget = 'workspace' | 'session';
+
+function parseNamespacePath(inputPath: string): { target: FileViewTarget; path: string } {
+  if (!inputPath.startsWith('/')) {
+    throw new Error(`Expected a namespace path, for example '/workspace/src/app.ts'.`);
+  }
+
+  const [, namespace, ...parts] = inputPath.split('/');
+  if (!namespace) {
+    throw new Error(`Expected a namespace path, for example '/workspace/src/app.ts'.`);
+  }
+
+  const normalized = namespace.split('@').at(-1);
+  if (normalized !== 'workspace' && normalized !== 'session') {
+    throw new Error(`Unsupported namespace '${namespace}'.`);
+  }
+
+  return {
+    target: normalized,
+    path: parts.length ? parts.join('/') : '.',
+  };
+}
+
+function namespacePath(target: FileViewTarget, relativePath: string): string {
+  if (relativePath.startsWith('/')) {
+    return relativePath;
+  }
+
+  if (relativePath === '.') {
+    return `/${target}`;
+  }
+
+  return `/${target}/${relativePath}`;
+}
 
 const PatchOperationSchema = z.discriminatedUnion('type', [
   z.object({
@@ -23,15 +57,12 @@ const PatchOperationSchema = z.discriminatedUnion('type', [
 ]);
 
 const PatchParams = z.object({
-  target: z.enum(['workspace', 'session']).describe('Which file-view to patch.'),
-  operations: z.array(PatchOperationSchema).min(1).max(50).describe('One or more patch operations.'),
+  operations: z
+    .array(PatchOperationSchema)
+    .min(1)
+    .max(50)
+    .describe('One or more patch operations using namespace paths.'),
 });
-
-function collectWorkspaceLocations(operations: FilePatchOperation[], cwd: string, roots: string[]) {
-  return operations.map((operation) => ({
-    path: resolveSessionPath(operation.path, cwd, roots),
-  }));
-}
 
 function describeAction(action: FilePatchChange['action']): string {
   if (action === 'create') {
@@ -47,22 +78,44 @@ function describeAction(action: FilePatchChange['action']): string {
 
 export const patchTool: Tool<typeof PatchParams> = {
   name: 'patch',
-  description: 'Apply one or more create, replace, or delete operations to a file-view.',
+  description: 'Apply one or more create, replace, or delete operations to namespace paths.',
   kind: 'edit',
   parameters: PatchParams,
-  title: (args) => `Patch ${args.target}`,
-  locations: (args, context) =>
-    args.target === 'workspace'
-      ? collectWorkspaceLocations(args.operations as FilePatchOperation[], context.cwd, context.roots)
-      : [],
+  title: () => 'Patch',
+  locations: (args) => {
+    const first = parseNamespacePath(args.operations[0].path);
+    return args.operations.map((operation) => {
+      const parsed = parseNamespacePath(operation.path);
+      if (parsed.target !== first.target) {
+        throw new Error('All patch operations must target the same namespace.');
+      }
+
+      return { path: namespacePath(parsed.target, parsed.path) };
+    });
+  },
   async execute(args, context) {
-    const changes = await context.fileView.patch(args.target, args.operations as FilePatchOperation[]);
+    const first = parseNamespacePath(args.operations[0].path);
+    const operations = args.operations.map((operation) => {
+      const parsed = parseNamespacePath(operation.path);
+      if (parsed.target !== first.target) {
+        throw new Error('All patch operations must target the same namespace.');
+      }
+
+      return {
+        ...operation,
+        path: parsed.path,
+      };
+    });
+
+    const changes = await context.fileView.patch(first.target, operations as FilePatchOperation[]);
 
     return {
       content:
         changes.length === 1
-          ? `${describeAction(changes[0].action)} ${relativeToCwd(changes[0].path, context.cwd)}`
-          : changes.map((change) => `${change.action} ${relativeToCwd(change.path, context.cwd)}`).join('\n'),
+          ? `${describeAction(changes[0].action)} ${namespacePath(first.target, changes[0].path)}`
+          : changes
+              .map((change) => `${change.action} ${namespacePath(first.target, change.path)}`)
+              .join('\n'),
       display: changes.map((change) => ({
         type: 'diff' as const,
         path: change.path,
@@ -70,10 +123,9 @@ export const patchTool: Tool<typeof PatchParams> = {
         newText: change.newText ?? '',
       })),
       rawOutput: {
-        target: args.target,
         count: changes.length,
       },
-      locations: changes.map((change) => ({ path: change.path })),
+      locations: changes.map((change) => ({ path: namespacePath(first.target, change.path) })),
     };
   },
 };

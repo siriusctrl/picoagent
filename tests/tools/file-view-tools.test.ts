@@ -50,13 +50,13 @@ const context: ToolContext = {
 };
 
 test('glob lists matching paths from a target file-view', async () => {
-  const result = await globTool.execute({ target: 'session', pattern: '**/*.md' }, context);
-  assert.equal(result.content, 'summary.md\nruns/run-1.md');
+  const result = await globTool.execute({ pattern: '/session/**/*.md' }, context);
+  assert.equal(result.content, '/session/summary.md\n/session/runs/run-1.md');
 });
 
 test('grep searches a target file-view', async () => {
-  const result = await grepTool.execute({ target: 'workspace', query: 'needle' }, context);
-  assert.equal(result.content, 'src/http/server.ts:12: needle here');
+  const result = await grepTool.execute({ path: '/workspace', query: 'needle' }, context);
+  assert.equal(result.content, '/workspace/src/http/server.ts:12: needle here');
 });
 
 test('grep renders surrounding context lines distinctly', async () => {
@@ -72,37 +72,33 @@ test('grep renders surrounding context lines distinctly', async () => {
     },
   };
 
-  const result = await grepTool.execute(
-    { target: 'workspace', query: 'needle', context: 1 },
-    contextWithSurrounding,
-  );
+  const result = await grepTool.execute({ path: '/workspace', query: 'needle', context: 1 }, contextWithSurrounding);
 
   assert.equal(
     result.content,
-    'src/http/server.ts-11- before\nsrc/http/server.ts:12: needle here\nsrc/http/server.ts-13- after',
+    '/workspace/src/http/server.ts-11- before\n/workspace/src/http/server.ts:12: needle here\n/workspace/src/http/server.ts-13- after',
   );
   assert.deepEqual(result.locations, [{ path: '/workspace/src/http/server.ts', line: 12 }]);
 });
 
 test('read reads one target-relative path', async () => {
-  const result = await readTool.execute({ target: 'session', path: 'summary.md' }, context);
+  const result = await readTool.execute({ path: '/session/summary.md' }, context);
   assert.match(result.content, /session:summary.md/);
 });
 
 test('patch applies multi-file changes through the file-view', async () => {
   const result = await patchTool.execute(
     {
-      target: 'workspace',
       operations: [
         {
           type: 'replace',
-          path: 'src/http/server.ts',
+          path: '/workspace/src/http/server.ts',
           oldText: 'old',
           newText: 'new',
         },
         {
           type: 'create',
-          path: 'src/http/routes.ts',
+          path: '/workspace/src/http/routes.ts',
           content: 'created',
         },
       ],
@@ -115,7 +111,7 @@ test('patch applies multi-file changes through the file-view', async () => {
 });
 
 test('cmd executes against an executable target', async () => {
-  const result = await cmdTool.execute({ target: 'workspace', command: 'npm test' }, context);
+  const result = await cmdTool.execute({ command: 'npm test' }, context);
   assert.match(result.content, /bash -lc npm test/);
   assert.equal(result.display?.[0]?.type, 'terminal');
 });

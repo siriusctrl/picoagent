@@ -1,30 +1,68 @@
 import { z } from 'zod';
 import { Tool } from '../core/types.js';
-import { relativeToCwd } from '../fs/filesystem.js';
+
+type FileViewTarget = 'workspace' | 'session';
+
+function parseNamespacePath(value: string): { target: FileViewTarget; path?: string } {
+  if (!value.startsWith('/')) {
+    throw new Error(`Expected a namespace path, for example '/workspace/src'.`);
+  }
+
+  const [, namespace, ...parts] = value.split('/');
+  if (!namespace) {
+    throw new Error(`Expected a namespace path, for example '/workspace/src'.`);
+  }
+
+  const normalized = namespace.split('@').at(-1);
+  if (normalized !== 'workspace' && normalized !== 'session') {
+    throw new Error(`Unsupported namespace '${namespace}'.`);
+  }
+
+  const suffix = parts.join('/');
+  return {
+    target: normalized,
+    path: suffix ? suffix : undefined,
+  };
+}
+
+function namespacePath(target: FileViewTarget, relativePath: string): string {
+  if (relativePath.startsWith('/')) {
+    return relativePath;
+  }
+
+  if (relativePath === '.') {
+    return `/${target}`;
+  }
+
+  return `/${target}/${relativePath}`;
+}
 
 const GrepParams = z.object({
-  target: z.enum(['workspace', 'session']).describe('Which file-view to search.'),
   query: z.string().min(1).describe('Case-insensitive literal text to search for.'),
-  path: z.string().optional().describe('Optional target-relative file or directory prefix.'),
+  path: z
+    .string()
+    .optional()
+    .describe('Optional namespace-rooted prefix filter, e.g. /workspace/src or /session/runs.'),
   context: z.number().int().min(0).max(20).optional().describe('Optional number of surrounding lines to include around each match.'),
   limit: z.number().int().positive().max(500).optional().describe('Maximum number of matches to return.'),
 });
 
 export const grepTool: Tool<typeof GrepParams> = {
   name: 'grep',
-  description: 'Search text across a workspace or session file-view.',
+  description: 'Search text under a namespace path.',
   kind: 'search',
   parameters: GrepParams,
-  title: (args) => `Grep ${args.target}:${args.query}`,
+  title: (args) => `Grep ${args.query}`,
   async execute(args, context) {
-    const matches = await context.fileView.grep(args.target, args.query, {
-      path: args.path,
+    const parsedPath = args.path ? parseNamespacePath(args.path) : undefined;
+    const matches = await context.fileView.grep(parsedPath?.target ?? 'workspace', args.query, {
+      path: parsedPath?.path,
       context: args.context,
       limit: args.limit ?? 50,
     });
 
     const renderPath = (path: string) =>
-      args.target === 'workspace' ? relativeToCwd(path, context.cwd) : path;
+      namespacePath(parsedPath?.target ?? 'workspace', path);
 
     return {
       content:
@@ -36,15 +74,15 @@ export const grepTool: Tool<typeof GrepParams> = {
             .join('\n')
           : 'No matches found.',
       rawOutput: {
-        target: args.target,
         query: args.query,
         context: args.context ?? 0,
         count: matches.length,
       },
       locations:
-        args.target === 'workspace'
-          ? matches.filter((match) => match.kind !== 'context').slice(0, 20).map((match) => ({ path: match.path, line: match.line }))
-          : undefined,
+        matches.filter((match) => match.kind !== 'context').map((match) => ({
+          path: renderPath(match.path),
+          line: match.line,
+        })),
     };
   },
 };
