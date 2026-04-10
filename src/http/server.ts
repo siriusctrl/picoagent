@@ -3,9 +3,11 @@ import { createAdaptorServer } from '@hono/node-server';
 import { $, OpenAPIHono } from '@hono/zod-openapi';
 import type { ExecutionBackend } from '../core/execution.js';
 import type { MutableFilesystem } from '../core/filesystem.js';
+import type { NamespaceMount } from '../fs/namespace.js';
 import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.js';
 import { LocalExecutionBackend } from '../runtime/local-execution-backend.js';
 import type { RunEvent } from '../runtime/store.js';
+import type { SessionStore } from '../runtime/store.js';
 import { RuntimeService } from '../runtime/service.js';
 import {
   buildOpenApiDocument,
@@ -26,7 +28,9 @@ export interface HttpServerOptions {
   hostname?: string;
   port?: number;
   filesystem?: MutableFilesystem;
+  mounts?: NamespaceMount[];
   executionBackend?: ExecutionBackend;
+  sessionStore?: SessionStore;
   runtimeRoot?: string;
   persistentRuntime?: boolean;
 }
@@ -34,7 +38,9 @@ export interface HttpServerOptions {
 export interface HttpAppOptions {
   cwd?: string;
   filesystem?: MutableFilesystem;
+  mounts?: NamespaceMount[];
   executionBackend?: ExecutionBackend;
+  sessionStore?: SessionStore;
   runtimeRoot?: string;
   persistentRuntime?: boolean;
 }
@@ -57,12 +63,12 @@ function projectSessionSummary(session: Awaited<ReturnType<RuntimeService['creat
   };
 }
 
-function errorStatus(error: unknown): 400 | 404 | 409 | 500 {
+function errorStatus(error: unknown): 400 | 404 | 405 | 409 | 500 {
   const status = typeof (error as { status?: unknown } | undefined)?.status === 'number'
     ? (error as { status: number }).status
     : undefined;
 
-  if (status === 400 || status === 404 || status === 409) {
+  if (status === 400 || status === 404 || status === 405 || status === 409) {
     return status;
   }
 
@@ -73,7 +79,9 @@ export function createHttpApp(options: HttpAppOptions = {}) {
   const service = new RuntimeService({
     cwd: options.cwd,
     filesystem: options.filesystem ?? new LocalWorkspaceFileSystem(),
+    mounts: options.mounts,
     executionBackend: options.executionBackend ?? new LocalExecutionBackend(),
+    sessionStore: options.sessionStore,
     runtimeRoot: options.runtimeRoot,
     persistentRuntime: options.persistentRuntime,
   });
@@ -186,9 +194,9 @@ export function createHttpApp(options: HttpAppOptions = {}) {
     return c.json(projectSessionSummary(session), 201);
   });
 
-  const appWithGetSession = appWithCreateSession.openapi(getSessionRoute, (c) => {
+  const appWithGetSession = appWithCreateSession.openapi(getSessionRoute, async (c) => {
     const { sessionId } = c.req.valid('param');
-    return c.json(service.getSessionSnapshot(sessionId), 200);
+    return c.json(await service.getSessionSnapshot(sessionId), 200);
   });
 
   const appWithCreateSessionRun = appWithGetSession.openapi(createSessionRunRoute, async (c) => {
@@ -198,7 +206,7 @@ export function createHttpApp(options: HttpAppOptions = {}) {
     return c.json({ runId: run.id, status: run.status, sessionId: run.sessionId }, 202);
   });
 
-  const appWithListResources = appWithCreateSessionRun.openapi(listSessionResourcesRoute, (c) => {
+  const appWithListResources = appWithCreateSessionRun.openapi(listSessionResourcesRoute, async (c) => {
     const { sessionId } = c.req.valid('param');
     const query = c.req.valid('query');
     const resourcePath = query.path ?? '.';
@@ -206,31 +214,31 @@ export function createHttpApp(options: HttpAppOptions = {}) {
       {
         sessionId,
         path: resourcePath,
-        entries: service.listSessionResources(sessionId, resourcePath),
+        entries: await service.listSessionResources(sessionId, resourcePath),
       },
       200,
     );
   });
 
-  const appWithReadResource = appWithListResources.openapi(readSessionResourceRoute, (c) => {
+  const appWithReadResource = appWithListResources.openapi(readSessionResourceRoute, async (c) => {
     const { sessionId, resourcePath } = c.req.valid('param');
-    return c.text(service.readSessionResource(sessionId, resourcePath), 200, {
+    return c.text(await service.readSessionResource(sessionId, resourcePath), 200, {
       'content-type': resourcePath.endsWith('.jsonl')
         ? 'application/x-ndjson; charset=utf-8'
         : 'text/plain; charset=utf-8',
     });
   });
 
-  const appWithSetAgent = appWithReadResource.openapi(setSessionAgentRoute, (c) => {
+  const appWithSetAgent = appWithReadResource.openapi(setSessionAgentRoute, async (c) => {
     const { sessionId } = c.req.valid('param');
     const body = c.req.valid('json');
-    return c.json(service.setSessionAgent(sessionId, body.agent), 200);
+    return c.json(await service.setSessionAgent(sessionId, body.agent), 200);
   });
 
-  const finalApp = appWithSetAgent.openapi(compactSessionRoute, (c) => {
+  const finalApp = appWithSetAgent.openapi(compactSessionRoute, async (c) => {
     const { sessionId } = c.req.valid('param');
     const body = c.req.valid('json');
-    return c.json(service.compactSession(sessionId, body.keepLastMessages), 200);
+    return c.json(await service.compactSession(sessionId, body.keepLastMessages), 200);
   });
 
   return {

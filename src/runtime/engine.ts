@@ -8,16 +8,17 @@ import { runAgentLoop } from '../core/loop.js';
 import { AgentPresetId, AssistantMessage, Message } from '../core/types.js';
 import { filterGlob, grepTextBlobs, TextBlob } from '../fs/file-view.js';
 import { relativeToCwd, resolveSessionPath } from '../fs/filesystem.js';
-import { Namespace } from '../fs/namespace.js';
+import { Namespace, type NamespaceMount } from '../fs/namespace.js';
 import { createProvider } from '../providers/index.js';
 import { RuntimeContext } from './index.js';
 import { SessionFilesystem } from './session-filesystem.js';
 import type {
   EmittedRunEvent,
   RunRecord,
+  RunStore,
   RunSnapshot,
-  RuntimeStore,
   SessionRecord,
+  SessionStore,
 } from './store.js';
 
 export class RuntimeConflictError extends Error {
@@ -99,20 +100,25 @@ export interface RuntimeEngineOptions {
   filesystem: MutableFilesystem;
   executionBackend: ExecutionBackend;
   runtimeContext: RuntimeContext;
-  store: RuntimeStore;
+  runStore: RunStore;
+  sessionStore: SessionStore;
+  mounts?: NamespaceMount[];
 }
 
 export class RuntimeEngine {
   private readonly namespace: Namespace;
 
   constructor(private readonly options: RuntimeEngineOptions) {
-    this.namespace = new Namespace([{
-      name: 'workspace',
-      filesystem: options.filesystem,
-      root: '.',
-      writable: true,
-      executable: true,
-    }]);
+    this.namespace = new Namespace([
+      {
+        name: 'workspace',
+        filesystem: options.filesystem,
+        root: '.',
+        writable: true,
+        executable: true,
+      },
+      ...(options.mounts ?? []),
+    ]);
   }
 
   async createSession(agent: AgentPresetId = 'ask'): Promise<SessionRecord> {
@@ -130,12 +136,12 @@ export class RuntimeEngine {
       messages: [],
       checkpoints: [],
     };
-    return this.options.store.createSession(session);
+    return this.options.sessionStore.createSession(session);
   }
 
   async createStandaloneRun(prompt: string, agent: AgentPresetId): Promise<RunSnapshot> {
     const control = await this.buildControlSnapshot(this.options.cwd);
-    const run = this.createRun(prompt, agent);
+    const run = await this.createRun(prompt, agent);
     this.startRun(run, control);
     return this.requireRunSnapshot(run.id);
   }
@@ -146,7 +152,7 @@ export class RuntimeEngine {
     }
 
     const control = await this.ensureSessionControlSnapshot(session);
-    const latestSession = this.options.store.getSession(session.id);
+    const latestSession = await this.options.sessionStore.getSession(session.id);
     if (!latestSession) {
       throw new Error(`Session ${session.id} not found`);
     }
@@ -155,14 +161,14 @@ export class RuntimeEngine {
       throw new RuntimeConflictError(`Session ${session.id} already has an active run`);
     }
 
-    const run = this.createRun(prompt, agent ?? latestSession.agent, latestSession.id);
-    this.options.store.attachRunToSession(latestSession.id, run.id);
+    const run = await this.createRun(prompt, agent ?? latestSession.agent, latestSession.id);
+    await this.options.sessionStore.attachRunToSession(latestSession.id, run.id);
     this.startRun(run, control, latestSession);
     return this.requireRunSnapshot(run.id);
   }
 
   private requireRunSnapshot(runId: string): RunSnapshot {
-    const snapshot = this.options.store.getRunSnapshot(runId);
+    const snapshot = this.options.runStore.getRunSnapshot(runId);
     if (!snapshot) {
       throw new Error(`Run ${runId} not found`);
     }
@@ -170,8 +176,8 @@ export class RuntimeEngine {
     return snapshot;
   }
 
-  private createRun(prompt: string, agent: AgentPresetId, sessionId?: string): RunRecord {
-    return this.options.store.createRun({
+  private async createRun(prompt: string, agent: AgentPresetId, sessionId?: string): Promise<RunRecord> {
+    const run = this.options.runStore.createRun({
       id: randomUUID(),
       sessionId,
       agent,
@@ -181,6 +187,11 @@ export class RuntimeEngine {
       createdAt: nowIso(),
       events: [],
     });
+    if (sessionId) {
+      await this.options.sessionStore.createRun(run);
+    }
+
+    return run;
   }
 
   private async buildControlSnapshot(workspaceRoot: string, controlVersion?: string): Promise<SessionControlSnapshot> {
@@ -204,7 +215,7 @@ export class RuntimeEngine {
     }
 
     const refreshed = await this.buildControlSnapshot(session.cwd, latestVersion);
-    this.options.store.refreshSessionControl(session.id, {
+    await this.options.sessionStore.refreshSessionControl(session.id, {
       controlVersion: refreshed.controlVersion,
       controlConfig: refreshed.config,
       systemPrompts: refreshed.systemPrompts,
@@ -218,11 +229,15 @@ export class RuntimeEngine {
     });
   }
 
-  private emit(runId: string, event: EmittedRunEvent): void {
-    this.options.store.appendRunEvent(runId, {
+  private async emit(runId: string, event: EmittedRunEvent): Promise<void> {
+    const pendingEvent = {
       ...event,
       timestamp: nowIso(),
-    });
+    };
+    this.options.runStore.appendRunEvent(runId, pendingEvent);
+    if (event.sessionId) {
+      await this.options.sessionStore.appendRunEvent(runId, pendingEvent);
+    }
   }
 
   private fileView(
@@ -247,10 +262,10 @@ export class RuntimeEngine {
     }
 
     return new Namespace([
-      this.namespace.mount('workspace'),
+      ...this.namespace.listMounts(),
       {
         name: 'session',
-        filesystem: new SessionFilesystem(this.options.store, sessionId),
+        filesystem: new SessionFilesystem(this.options.sessionStore, sessionId),
         root: '.',
       },
     ]);
@@ -669,8 +684,11 @@ export class RuntimeEngine {
   private async executeRun(run: RunRecord, control: SessionControlSnapshot, session?: SessionRecord): Promise<void> {
     const controller = new AbortController();
     const startedAt = nowIso();
-    this.options.store.updateRun(run.id, { startedAt });
-    this.emit(run.id, {
+    this.options.runStore.updateRun(run.id, { startedAt });
+    if (run.sessionId) {
+      await this.options.sessionStore.updateRun(run.id, { startedAt });
+    }
+    await this.emit(run.id, {
       type: 'run_started',
       runId: run.id,
       sessionId: run.sessionId,
@@ -704,13 +722,16 @@ export class RuntimeEngine {
         systemPrompt,
         {
           onTextDelta: async (text) => {
-            const latestRun = this.options.store.getRun(run.id);
+            const latestRun = this.options.runStore.getRun(run.id);
             if (!latestRun) {
               return;
             }
 
-            this.options.store.updateRun(run.id, { output: latestRun.output + text });
-            this.emit(run.id, {
+            this.options.runStore.updateRun(run.id, { output: latestRun.output + text });
+            if (run.sessionId) {
+              await this.options.sessionStore.updateRun(run.id, { output: latestRun.output + text });
+            }
+            await this.emit(run.id, {
               type: 'assistant_delta',
               runId: run.id,
               sessionId: run.sessionId,
@@ -718,7 +739,7 @@ export class RuntimeEngine {
             });
           },
           onToolStart: async (toolCall, tool) => {
-            this.emit(run.id, {
+            await this.emit(run.id, {
               type: 'tool_call',
               runId: run.id,
               sessionId: run.sessionId,
@@ -730,7 +751,7 @@ export class RuntimeEngine {
             });
           },
           onToolEnd: async (toolCall, _tool, result) => {
-            this.emit(run.id, {
+            await this.emit(run.id, {
               type: 'tool_call_update',
               runId: run.id,
               sessionId: run.sessionId,
@@ -744,12 +765,19 @@ export class RuntimeEngine {
         },
       );
 
-      this.options.store.updateRun(run.id, {
+      this.options.runStore.updateRun(run.id, {
         output: assistantText(finalMessage),
         status: 'completed',
         finishedAt: nowIso(),
       });
-      this.emit(run.id, {
+      if (run.sessionId) {
+        await this.options.sessionStore.updateRun(run.id, {
+          output: assistantText(finalMessage),
+          status: 'completed',
+          finishedAt: nowIso(),
+        });
+      }
+      await this.emit(run.id, {
         type: 'done',
         runId: run.id,
         sessionId: run.sessionId,
@@ -757,16 +785,23 @@ export class RuntimeEngine {
       });
 
       if (session) {
-        this.options.store.finishSessionRun(session.id, run.id, conversation);
+        await this.options.sessionStore.finishSessionRun(session.id, run.id, conversation);
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      this.options.store.updateRun(run.id, {
+      this.options.runStore.updateRun(run.id, {
         status: 'failed',
         error: message,
         finishedAt: nowIso(),
       });
-      this.emit(run.id, {
+      if (run.sessionId) {
+        await this.options.sessionStore.updateRun(run.id, {
+          status: 'failed',
+          error: message,
+          finishedAt: nowIso(),
+        });
+      }
+      await this.emit(run.id, {
         type: 'error',
         runId: run.id,
         sessionId: run.sessionId,
@@ -774,7 +809,7 @@ export class RuntimeEngine {
       });
     } finally {
       if (session) {
-        this.options.store.clearSessionActiveRun(session.id, run.id);
+        await this.options.sessionStore.clearSessionActiveRun(session.id, run.id);
       }
     }
   }

@@ -30,6 +30,9 @@ Host-level defaults such as `$HOME/.pico/*` and bundled defaults are also read d
 
 Each conversation is one HTTP session.
 
+In the local default harness, the runtime can still create sessions directly.
+For explicit isolation, a session may instead live behind a dedicated session service that is started before the runtime and then bound into the runtime over HTTP.
+
 A session carries:
 - bound workspace root in the current local implementation
 - optional additional roots
@@ -64,6 +67,13 @@ Any UI around it should stay replaceable.
 
 The session is not owned by one request handler.
 Runtime state lives behind a store boundary and is projected back out as session and run snapshots.
+
+When the runtime is bound to an external session service:
+
+- clients still create sessions through the runtime API
+- the runtime forwards those creates into the external session service instead of storing them locally
+- the runtime consumes session state over the session-store boundary
+- run state still lives locally in the runtime, but session-facing run snapshots and event logs are mirrored back into the session service so `/session/...` remains consistent
 
 What is still missing:
 - session history is still projected through a dedicated read-only file-view rather than a general mounted filesystem namespace

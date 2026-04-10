@@ -49,9 +49,14 @@ export class Namespace {
 
   constructor(mounts: NamespaceMount[]) {
     for (const mount of mounts) {
-      this.mounts.set(normalizeMountName(mount.name), {
+      const normalizedName = normalizeMountName(mount.name);
+      if (this.mounts.has(normalizedName)) {
+        throw new Error(`Duplicate namespace mount: ${normalizedName}`);
+      }
+
+      this.mounts.set(normalizedName, {
         ...mount,
-        name: normalizeMountName(mount.name),
+        name: normalizedName,
       });
     }
   }
@@ -90,6 +95,10 @@ export class Namespace {
     }
 
     return mount;
+  }
+
+  listMounts(): NamespaceMount[] {
+    return Array.from(this.mounts.values());
   }
 
   writableMount(name: string): NamespaceMount & { filesystem: MutableFilesystem } {

@@ -75,7 +75,20 @@ Secondary entry file: `src/clients/cli/main.ts`
 Behavior:
 
 - exposes a minimum command surface
-- `serve` starts the HTTP server in the foreground
+- `pico serve` starts the HTTP server in the foreground
+- `pico serve --mount <label=source> ...` resolves extra namespace mounts before starting the runtime
+- `pico serve --session <url>` binds the runtime to an already running external session service
+- `pico session serve` starts the session service in the foreground
+- `pico filespace serve` starts a filespace-facing entrypoint with `--hostname`, `--port`, `--name`, and `--root`
+
+Current status:
+
+- `--mount` accepts local directory sources or remote filespace URLs
+- extra mount labels are runtime-facing namespace labels and must not reuse reserved names like `workspace` or `session`
+- `--session` keeps session storage external while preserving the normal runtime-facing `POST /sessions` flow for clients
+- `session serve` exposes session creation, snapshots, compaction, and session resource reads without exposing run execution
+- `filespace serve` starts a rooted filespace HTTP service and prints a mountable endpoint
+- runtime startup resolves mount labels into filesystem-backed namespace mounts before HTTP begins serving agent runs
 
 This client is also thin. It should prefer reusing the existing runtime paths over inventing a second agent architecture.
 

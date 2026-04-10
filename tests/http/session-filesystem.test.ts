@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { InMemoryRuntimeStore } from '../../src/runtime/runtime-store.js';
 import { SessionFilesystem } from '../../src/runtime/session-filesystem.js';
+import { StoreBackedSessionStore } from '../../src/runtime/store-backed-session-store.js';
 
 const controlConfig = {
   provider: 'echo' as const,
@@ -52,7 +53,7 @@ test('session filesystem projects summary, checkpoints, and runs as a read-only 
 
   store.compactSession('session-1', 2);
 
-  const filesystem = new SessionFilesystem(store, 'session-1');
+  const filesystem = new SessionFilesystem(new StoreBackedSessionStore(store), 'session-1');
   const signal = new AbortController().signal;
   const files = await filesystem.listFiles('.', 20, signal);
 

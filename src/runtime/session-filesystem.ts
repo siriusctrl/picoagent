@@ -1,13 +1,13 @@
 import type { Filesystem, ReadTextFileOptions, SearchMatch } from '../core/filesystem.js';
-import type { RuntimeStore } from './store.js';
+import type { SessionStore } from './store.js';
 
 function normalizeSessionPath(value: string): string {
   return value.replace(/^\/+|\/+$/g, '') || '.';
 }
 
-function listSessionHistoryPaths(store: RuntimeStore, sessionId: string): string[] {
-  const resources = store.listSessionResources(sessionId, 'checkpoints') ?? [];
-  const runs = store.listSessionResources(sessionId, 'runs') ?? [];
+async function listSessionHistoryPaths(store: SessionStore, sessionId: string): Promise<string[]> {
+  const resources = (await store.listSessionResources(sessionId, 'checkpoints')) ?? [];
+  const runs = (await store.listSessionResources(sessionId, 'runs')) ?? [];
 
   return [
     'summary.md',
@@ -29,17 +29,17 @@ function sliceTextByLines(content: string, options?: ReadTextFileOptions): strin
 
 export class SessionFilesystem implements Filesystem {
   constructor(
-    private readonly store: RuntimeStore,
+    private readonly store: SessionStore,
     private readonly sessionId: string,
   ) {}
 
   async readTextFile(filePath: string, options?: ReadTextFileOptions): Promise<string> {
     const normalized = normalizeSessionPath(filePath);
-    if (!listSessionHistoryPaths(this.store, this.sessionId).includes(normalized)) {
+    if (!(await listSessionHistoryPaths(this.store, this.sessionId)).includes(normalized)) {
       throw new Error(`Session file-view path not found: ${filePath}`);
     }
 
-    const content = this.store.readSessionResource(this.sessionId, normalized);
+    const content = await this.store.readSessionResource(this.sessionId, normalized);
     if (content === undefined) {
       throw new Error(`Session file-view path not found: ${filePath}`);
     }
@@ -53,7 +53,7 @@ export class SessionFilesystem implements Filesystem {
     }
 
     const normalizedRoot = normalizeSessionPath(root);
-    const allPaths = listSessionHistoryPaths(this.store, this.sessionId);
+    const allPaths = await listSessionHistoryPaths(this.store, this.sessionId);
     const selected = normalizedRoot === '.'
       ? allPaths
       : allPaths.filter((candidate) => candidate === normalizedRoot || candidate.startsWith(`${normalizedRoot}/`));

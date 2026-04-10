@@ -36,6 +36,7 @@ What is already present:
 - file-backed runtime state under `.pico/runtime/`
 - a model-facing session file-view for browsing compacted history without forcing it all into the live prompt
 - a runtime engine that owns prompt assembly, control refresh, tool wiring, and run orchestration
+- standalone filespace and session services that can be started before the runtime binds to them
 
 What is still incomplete:
 
@@ -221,6 +222,15 @@ curl -X POST http://127.0.0.1:4096/sessions \
   -H 'content-type: application/json' \
   -d '{"agent":"ask"}'
 ```
+
+For an explicitly isolated flow, start a session service first, create the session there, and then bind the runtime to it:
+
+```bash
+pico session serve --port 4097
+pico serve --port 4096 --session http://127.0.0.1:4097
+```
+
+In that bound mode, clients still create sessions through the runtime. The difference is that the runtime persists those sessions in the external session service instead of a local in-process store.
 
 Create a run in a session:
 

@@ -147,6 +147,40 @@ export interface SessionCompactResult {
   keptMessages: number;
 }
 
+export interface RunStore {
+  createRun(record: RunRecord): RunRecord;
+  getRun(id: string): RunRecord | undefined;
+  updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): RunRecord | undefined;
+  appendRunEvent(runId: string, event: PendingRunEvent): RunEvent | undefined;
+  getRunEvents(runId: string): { runId: string; status: RunStatus; events: RunEvent[] } | undefined;
+  subscribeToRun(runId: string, listener: RunListener): (() => void) | undefined;
+  getRunSnapshot(runId: string): RunSnapshot | undefined;
+}
+
+export interface SessionStore {
+  createSession(record: SessionRecord): Promise<SessionRecord>;
+  getSession(id: string): Promise<SessionRecord | undefined>;
+  createRun(record: RunRecord): Promise<void>;
+  updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): Promise<void>;
+  appendRunEvent(runId: string, event: PendingRunEvent): Promise<void>;
+  setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void>;
+  refreshSessionControl(
+    sessionId: string,
+    control: {
+      controlVersion: string;
+      controlConfig: PicoConfig;
+      systemPrompts: Record<AgentPresetId, string>;
+    },
+  ): Promise<void>;
+  attachRunToSession(sessionId: string, runId: string): Promise<void>;
+  finishSessionRun(sessionId: string, runId: string, messages: Message[]): Promise<void>;
+  clearSessionActiveRun(sessionId: string, runId: string): Promise<void>;
+  getSessionSnapshot(sessionId: string): Promise<SessionSnapshot | undefined>;
+  listSessionResources(sessionId: string, resourcePath?: string): Promise<string[] | undefined>;
+  readSessionResource(sessionId: string, resourcePath: string): Promise<string | undefined>;
+  compactSession(sessionId: string, keepLastMessages?: number): Promise<SessionCompactResult | undefined>;
+}
+
 export interface RuntimeStore {
   createSession(record: SessionRecord): SessionRecord;
   getSession(id: string): SessionRecord | undefined;
