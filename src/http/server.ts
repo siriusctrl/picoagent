@@ -1,5 +1,4 @@
 import http from 'node:http';
-import { createAdaptorServer } from '@hono/node-server';
 import { $, OpenAPIHono } from '@hono/zod-openapi';
 import type { ExecutionBackend } from '../core/execution.js';
 import type { MutableFilesystem } from '../core/filesystem.js';
@@ -22,6 +21,8 @@ import {
   readSessionResourceRoute,
   setSessionAgentRoute,
 } from './openapi.js';
+import { startNodeFetchServer } from './node-server.js';
+import { projectSessionSummary } from './session-summary.js';
 
 export interface HttpServerOptions {
   cwd?: string;
@@ -45,30 +46,12 @@ export interface HttpAppOptions {
   persistentRuntime?: boolean;
 }
 
-function projectSessionSummary(session: Awaited<ReturnType<RuntimeService['createSession']>>) {
-  return {
-    id: session.id,
-    agent: session.agent,
-    cwd: session.cwd,
-    controlVersion: session.controlVersion,
-    controlConfig: {
-      provider: session.controlConfig.provider,
-      model: session.controlConfig.model,
-      maxTokens: session.controlConfig.maxTokens,
-      contextWindow: session.controlConfig.contextWindow,
-      baseURL: session.controlConfig.baseURL,
-    },
-    checkpointCount: session.checkpoints.length,
-    createdAt: session.createdAt,
-  };
-}
-
-function errorStatus(error: unknown): 400 | 404 | 405 | 409 | 500 {
+function errorStatus(error: unknown): 400 | 404 | 409 | 500 {
   const status = typeof (error as { status?: unknown } | undefined)?.status === 'number'
     ? (error as { status: number }).status
     : undefined;
 
-  if (status === 400 || status === 404 || status === 405 || status === 409) {
+  if (status === 400 || status === 404 || status === 409) {
     return status;
   }
 
@@ -253,20 +236,5 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
   const hostname = options.hostname ?? '127.0.0.1';
   const port = options.port ?? 4096;
   const { app } = createHttpApp(options);
-
-  const server = createAdaptorServer({
-    fetch: app.fetch,
-    hostname,
-    port,
-  }) as unknown as http.Server;
-
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, hostname, () => {
-      server.off('error', reject);
-      resolve();
-    });
-  });
-
-  return server;
+  return startNodeFetchServer(app.fetch, hostname, port);
 }

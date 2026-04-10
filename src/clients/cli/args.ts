@@ -40,12 +40,148 @@ function parseMountSpec(rawValue: string): CliMount {
 
   const label = rawValue.slice(0, separator).trim();
   const source = rawValue.slice(separator + 1).trim();
-
   if (!label || !source) {
     throw new Error('--mount requires label=source');
   }
 
   return { label, source };
+}
+
+function readFlagValue(argv: string[], index: number, flag: string): { value: string; nextIndex: number } | undefined {
+  const current = argv[index];
+  if (current === flag) {
+    const value = argv[index + 1];
+    if (!value) {
+      throw new Error(`${flag} requires a value`);
+    }
+
+    return { value, nextIndex: index + 1 };
+  }
+
+  const prefix = `${flag}=`;
+  if (current.startsWith(prefix)) {
+    return { value: current.slice(prefix.length), nextIndex: index };
+  }
+
+  return undefined;
+}
+
+function parseServeArgs(argv: string[]): CliCommand {
+  let hostname = '127.0.0.1';
+  let port = 4096;
+  const mounts: CliMount[] = [];
+  let session: string | undefined;
+
+  for (let index = 1; index < argv.length; index += 1) {
+    const current = argv[index];
+    const hostnameOption = readFlagValue(argv, index, '--hostname');
+    if (hostnameOption) {
+      hostname = hostnameOption.value;
+      index = hostnameOption.nextIndex;
+      continue;
+    }
+
+    const portOption = readFlagValue(argv, index, '--port');
+    if (portOption) {
+      port = parseIntPort(portOption.value);
+      index = portOption.nextIndex;
+      continue;
+    }
+
+    const mountOption = readFlagValue(argv, index, '--mount');
+    if (mountOption) {
+      mounts.push(parseMountSpec(mountOption.value));
+      index = mountOption.nextIndex;
+      continue;
+    }
+
+    const sessionOption = readFlagValue(argv, index, '--session');
+    if (sessionOption) {
+      session = sessionOption.value;
+      index = sessionOption.nextIndex;
+      continue;
+    }
+
+    throw new Error(`Unknown serve argument: ${current}`);
+  }
+
+  return { type: 'serve', hostname, port, mounts, session };
+}
+
+function parseFilespaceServeArgs(argv: string[]): CliCommand {
+  let hostname = '127.0.0.1';
+  let port = 4096;
+  let name = 'filespace';
+  let root = process.cwd();
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const current = argv[index];
+    const hostnameOption = readFlagValue(argv, index, '--hostname');
+    if (hostnameOption) {
+      hostname = hostnameOption.value;
+      index = hostnameOption.nextIndex;
+      continue;
+    }
+
+    const portOption = readFlagValue(argv, index, '--port');
+    if (portOption) {
+      port = parseIntPort(portOption.value);
+      index = portOption.nextIndex;
+      continue;
+    }
+
+    const nameOption = readFlagValue(argv, index, '--name');
+    if (nameOption) {
+      name = nameOption.value;
+      index = nameOption.nextIndex;
+      continue;
+    }
+
+    const rootOption = readFlagValue(argv, index, '--root');
+    if (rootOption) {
+      root = rootOption.value;
+      index = rootOption.nextIndex;
+      continue;
+    }
+
+    throw new Error(`Unknown filespace serve argument: ${current}`);
+  }
+
+  return { type: 'filespace-serve', hostname, port, name, root };
+}
+
+function parseSessionServeArgs(argv: string[]): CliCommand {
+  let hostname = '127.0.0.1';
+  let port = 4097;
+  let root = process.cwd();
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const current = argv[index];
+    const hostnameOption = readFlagValue(argv, index, '--hostname');
+    if (hostnameOption) {
+      hostname = hostnameOption.value;
+      index = hostnameOption.nextIndex;
+      continue;
+    }
+
+    const portOption = readFlagValue(argv, index, '--port');
+    if (portOption) {
+      port = parseIntPort(portOption.value);
+      index = portOption.nextIndex;
+      continue;
+    }
+
+    const rootOption = readFlagValue(argv, index, '--root');
+    if (rootOption) {
+      root = rootOption.value;
+      index = rootOption.nextIndex;
+      continue;
+    }
+
+    throw new Error(`Unknown session serve argument: ${current}`);
+  }
+
+  return { type: 'session-serve', hostname, port, root };
 }
 
 export function parseCliArgs(argv: string[]): CliCommand {
@@ -54,216 +190,18 @@ export function parseCliArgs(argv: string[]): CliCommand {
   }
 
   if (argv[0] === 'serve') {
-    let hostname = '127.0.0.1';
-    let port = 4096;
-    const mounts: CliMount[] = [];
-    let session: string | undefined;
-
-    for (let index = 1; index < argv.length; index += 1) {
-      const current = argv[index];
-      if (current === '--hostname') {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error('--hostname requires a value');
-        }
-        hostname = value;
-        index += 1;
-        continue;
-      }
-
-      if (current.startsWith('--hostname=')) {
-        hostname = current.slice('--hostname='.length);
-        continue;
-      }
-
-      if (current === '--port') {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error('--port requires a value');
-        }
-        port = parseIntPort(value);
-        index += 1;
-        continue;
-      }
-
-      if (current.startsWith('--port=')) {
-        port = parseIntPort(current.slice('--port='.length));
-        continue;
-      }
-
-      if (current === '--mount') {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error('--mount requires a value');
-        }
-        mounts.push(parseMountSpec(value));
-        index += 1;
-        continue;
-      }
-
-      if (current.startsWith('--mount=')) {
-        mounts.push(parseMountSpec(current.slice('--mount='.length)));
-        continue;
-      }
-
-      if (current === '--session') {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error('--session requires a value');
-        }
-        session = value;
-        index += 1;
-        continue;
-      }
-
-      if (current.startsWith('--session=')) {
-        session = current.slice('--session='.length);
-        continue;
-      }
-
-      throw new Error(`Unknown serve argument: ${current}`);
-    }
-
-    return { type: 'serve', hostname, port, mounts, session };
+    return parseServeArgs(argv);
   }
 
-  if (argv[0] === 'filespace') {
-    if (argv[1] !== 'serve') {
-      throw new Error(`Unknown command: ${argv[0]} ${argv[1] ?? ''}`.trim());
-    }
-
-    let hostname = '127.0.0.1';
-    let port = 4096;
-    let name = 'filespace';
-    let root = process.cwd();
-
-    for (let index = 2; index < argv.length; index += 1) {
-      const current = argv[index];
-      if (current === '--hostname') {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error('--hostname requires a value');
-        }
-        hostname = value;
-        index += 1;
-        continue;
-      }
-
-      if (current.startsWith('--hostname=')) {
-        hostname = current.slice('--hostname='.length);
-        continue;
-      }
-
-      if (current === '--port') {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error('--port requires a value');
-        }
-        port = parseIntPort(value);
-        index += 1;
-        continue;
-      }
-
-      if (current.startsWith('--port=')) {
-        port = parseIntPort(current.slice('--port='.length));
-        continue;
-      }
-
-      if (current === '--name') {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error('--name requires a value');
-        }
-        name = value;
-        index += 1;
-        continue;
-      }
-
-      if (current.startsWith('--name=')) {
-        name = current.slice('--name='.length);
-        continue;
-      }
-
-      if (current === '--root') {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error('--root requires a value');
-        }
-        root = value;
-        index += 1;
-        continue;
-      }
-
-      if (current.startsWith('--root=')) {
-        root = current.slice('--root='.length);
-        continue;
-      }
-
-      throw new Error(`Unknown filespace serve argument: ${current}`);
-    }
-
-    return { type: 'filespace-serve', hostname, port, name, root };
+  if (argv[0] === 'filespace' && argv[1] === 'serve') {
+    return parseFilespaceServeArgs(argv);
   }
 
-  if (argv[0] === 'session') {
-    if (argv[1] === 'serve') {
-      let hostname = '127.0.0.1';
-      let port = 4097;
-      let root = process.cwd();
+  if (argv[0] === 'session' && argv[1] === 'serve') {
+    return parseSessionServeArgs(argv);
+  }
 
-      for (let index = 2; index < argv.length; index += 1) {
-        const current = argv[index];
-        if (current === '--hostname') {
-          const value = argv[index + 1];
-          if (!value) {
-            throw new Error('--hostname requires a value');
-          }
-          hostname = value;
-          index += 1;
-          continue;
-        }
-
-        if (current.startsWith('--hostname=')) {
-          hostname = current.slice('--hostname='.length);
-          continue;
-        }
-
-        if (current === '--port') {
-          const value = argv[index + 1];
-          if (!value) {
-            throw new Error('--port requires a value');
-          }
-          port = parseIntPort(value);
-          index += 1;
-          continue;
-        }
-
-        if (current.startsWith('--port=')) {
-          port = parseIntPort(current.slice('--port='.length));
-          continue;
-        }
-
-        if (current === '--root') {
-          const value = argv[index + 1];
-          if (!value) {
-            throw new Error('--root requires a value');
-          }
-          root = value;
-          index += 1;
-          continue;
-        }
-
-        if (current.startsWith('--root=')) {
-          root = current.slice('--root='.length);
-          continue;
-        }
-
-        throw new Error(`Unknown session serve argument: ${current}`);
-      }
-
-      return { type: 'session-serve', hostname, port, root };
-    }
-
+  if (argv[0] === 'filespace' || argv[0] === 'session') {
     throw new Error(`Unknown command: ${argv[0]} ${argv[1] ?? ''}`.trim());
   }
 

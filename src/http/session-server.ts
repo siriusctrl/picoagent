@@ -1,5 +1,4 @@
 import http from 'node:http';
-import { createAdaptorServer } from '@hono/node-server';
 import { Hono } from 'hono';
 import { AgentPresetId } from '../core/types.js';
 import {
@@ -10,28 +9,12 @@ import {
   type SessionServiceOptions,
 } from '../runtime/session-service.js';
 import type { RunRecord, SessionRecord } from '../runtime/store.js';
+import { startNodeFetchServer } from './node-server.js';
+import { projectSessionSummary } from './session-summary.js';
 
 export interface SessionServerOptions extends SessionServiceOptions {
   hostname?: string;
   port?: number;
-}
-
-function projectSessionSummary(session: SessionRecord) {
-  return {
-    id: session.id,
-    agent: session.agent,
-    cwd: session.cwd,
-    controlVersion: session.controlVersion,
-    controlConfig: {
-      provider: session.controlConfig.provider,
-      model: session.controlConfig.model,
-      maxTokens: session.controlConfig.maxTokens,
-      contextWindow: session.controlConfig.contextWindow,
-      baseURL: session.controlConfig.baseURL,
-    },
-    checkpointCount: session.checkpoints.length,
-    createdAt: session.createdAt,
-  };
 }
 
 function errorStatus(error: unknown): 400 | 404 | 409 | 500 {
@@ -166,20 +149,5 @@ export async function startSessionServer(options: SessionServerOptions = {}): Pr
   const hostname = options.hostname ?? '127.0.0.1';
   const port = options.port ?? 4097;
   const { app } = createSessionApp(options);
-
-  const server = createAdaptorServer({
-    fetch: app.fetch,
-    hostname,
-    port,
-  }) as unknown as http.Server;
-
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, hostname, () => {
-      server.off('error', reject);
-      resolve();
-    });
-  });
-
-  return server;
+  return startNodeFetchServer(app.fetch, hostname, port);
 }

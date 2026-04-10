@@ -1,11 +1,11 @@
 import http from 'node:http';
 import path from 'node:path';
-import { createAdaptorServer } from '@hono/node-server';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { MutableFilesystem } from '../core/filesystem.js';
 import { RootedFilesystem } from '../fs/rooted-fs.js';
 import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.js';
+import { startNodeFetchServer } from './node-server.js';
 
 export interface FilespaceInfo {
   name: string;
@@ -132,20 +132,5 @@ export async function startFilespaceServer(options: FilespaceServerOptions): Pro
   const hostname = options.hostname ?? '127.0.0.1';
   const port = options.port ?? 4096;
   const { app } = createFilespaceApp(options);
-
-  const server = createAdaptorServer({
-    fetch: app.fetch,
-    hostname,
-    port,
-  }) as unknown as http.Server;
-
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, hostname, () => {
-      server.off('error', reject);
-      resolve();
-    });
-  });
-
-  return server;
+  return startNodeFetchServer(app.fetch, hostname, port);
 }

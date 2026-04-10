@@ -9,10 +9,6 @@ import type {
 } from './store.js';
 
 async function parseJsonResponse<T>(response: Response): Promise<T> {
-  if (response.status === 404) {
-    return undefined as T;
-  }
-
   if (!response.ok) {
     let message = `Request failed with ${response.status}`;
     try {
@@ -28,6 +24,14 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+async function parseOptionalJsonResponse<T>(response: Response): Promise<T | undefined> {
+  if (response.status === 404) {
+    return undefined;
+  }
+
+  return parseJsonResponse<T>(response);
 }
 
 export class HttpSessionStore implements SessionStore {
@@ -48,7 +52,7 @@ export class HttpSessionStore implements SessionStore {
 
   async getSession(id: string): Promise<SessionRecord | undefined> {
     const response = await fetch(this.url(`/_store/sessions/${id}`));
-    return parseJsonResponse<SessionRecord | undefined>(response);
+    return parseOptionalJsonResponse<SessionRecord>(response);
   }
 
   async createRun(record: RunRecord): Promise<void> {
@@ -132,13 +136,13 @@ export class HttpSessionStore implements SessionStore {
 
   async getSessionSnapshot(sessionId: string): Promise<SessionSnapshot | undefined> {
     const response = await fetch(this.url(`/sessions/${sessionId}`));
-    return parseJsonResponse<SessionSnapshot | undefined>(response);
+    return parseOptionalJsonResponse<SessionSnapshot>(response);
   }
 
   async listSessionResources(sessionId: string, resourcePath?: string): Promise<string[] | undefined> {
     const query = resourcePath ? `?path=${encodeURIComponent(resourcePath)}` : '';
     const response = await fetch(this.url(`/sessions/${sessionId}/resources${query}`));
-    const payload = await parseJsonResponse<{ entries: string[] } | undefined>(response);
+    const payload = await parseOptionalJsonResponse<{ entries: string[] }>(response);
     return payload?.entries;
   }
 
@@ -159,7 +163,7 @@ export class HttpSessionStore implements SessionStore {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(keepLastMessages === undefined ? {} : { keepLastMessages }),
     });
-    const payload = await parseJsonResponse<{ checkpoint: SessionCompactResult } | undefined>(response);
+    const payload = await parseOptionalJsonResponse<{ checkpoint: SessionCompactResult }>(response);
     return payload?.checkpoint;
   }
 }
