@@ -94,3 +94,17 @@ Keep this file coarse-grained. Do not try to mirror every subdirectory here. For
 - Keep implementations small and legible.
 - Optimize for code that future agents can read in one pass.
 - Hold the architectural bar requested by the user; do not quietly retreat to a weaker design for convenience.
+- When a large refactor can be split into clear, low-conflict chunks, prefer using multiple agents.
+- Keep one main agent responsible for decomposition, integration, verification, and final quality decisions.
+
+## Agent Strategy Defaults
+
+Use these as workflow defaults for large refactors, not as a reason to introduce multi-agent runtime architecture into the product.
+
+- Prefer forking subagents only when ownership can be split cleanly by module, boundary, or file set.
+- Do not delegate the immediate critical-path blocker if the main agent needs that answer before it can proceed.
+- Give each subagent an explicit, bounded write scope and a concrete outcome to return.
+- Avoid parallel agent work when tasks are tightly coupled or likely to cause overlapping edits.
+- For explicit, bounded coding tasks, prefer Codex subagents running `gpt-5.3-codex-spark`.
+- For architectural judgment, tricky debugging, broad reasoning, or ambiguous review, prefer Codex subagents running `gpt-5.4` with `high` reasoning.
+- Keep the main agent responsible for architecture decisions, merge-quality judgment, end-to-end verification, and final integration.
