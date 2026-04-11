@@ -18,7 +18,6 @@ import {
   getSessionRoute,
   listSessionResourcesRoute,
   readSessionResourceRoute,
-  setSessionAgentRoute,
 } from './openapi.ts';
 import { type LocalServerHandle, startBunFetchServer } from './bun-server.ts';
 import { projectSessionSummary } from './session-summary.ts';
@@ -152,7 +151,7 @@ export async function createHttpApp(options: HttpAppOptions = {}) {
 
   const appWithStandaloneRun = appWithSpec.openapi(createStandaloneRunRoute, async (c) => {
     const body = c.req.valid('json');
-    const run = await service.createStandaloneRun(body.prompt, body.agent ?? 'ask');
+    const run = await service.createStandaloneRun(body.prompt);
     return c.json({ runId: run.id, status: run.status }, 202);
   });
 
@@ -171,8 +170,8 @@ export async function createHttpApp(options: HttpAppOptions = {}) {
   });
 
   const appWithCreateSession = appWithRunEvents.openapi(createSessionRoute, async (c) => {
-    const body = c.req.valid('json');
-    const session = await service.createSession(body.agent ?? 'ask');
+    c.req.valid('json');
+    const session = await service.createSession();
     return c.json(projectSessionSummary(session), 201);
   });
 
@@ -184,7 +183,7 @@ export async function createHttpApp(options: HttpAppOptions = {}) {
   const appWithCreateSessionRun = appWithGetSession.openapi(createSessionRunRoute, async (c) => {
     const { sessionId } = c.req.valid('param');
     const body = c.req.valid('json');
-    const run = await service.createSessionRun(sessionId, body.prompt, body.agent);
+    const run = await service.createSessionRun(sessionId, body.prompt);
     return c.json({ runId: run.id, status: run.status, sessionId: run.sessionId }, 202);
   });
 
@@ -211,13 +210,7 @@ export async function createHttpApp(options: HttpAppOptions = {}) {
     });
   });
 
-  const appWithSetAgent = appWithReadResource.openapi(setSessionAgentRoute, async (c) => {
-    const { sessionId } = c.req.valid('param');
-    const body = c.req.valid('json');
-    return c.json(await service.setSessionAgent(sessionId, body.agent), 200);
-  });
-
-  const finalApp = appWithSetAgent.openapi(compactSessionRoute, async (c) => {
+  const finalApp = appWithReadResource.openapi(compactSessionRoute, async (c) => {
     const { sessionId } = c.req.valid('param');
     const body = c.req.valid('json');
     return c.json(await service.compactSession(sessionId, body.keepLastMessages), 200);

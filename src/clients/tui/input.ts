@@ -12,7 +12,6 @@ export type TerminalAction =
   | { type: 'history_page_down' }
   | { type: 'history_home' }
   | { type: 'history_end' }
-  | { type: 'toggle_agent' }
   | { type: 'cursor_left' }
   | { type: 'cursor_right' }
   | { type: 'cursor_home' }
@@ -78,12 +77,6 @@ export function parseTerminalInput(data: string): ParsedTerminalInput {
 
     if (current === '\n') {
       actions.push({ type: 'submit' });
-      index += 1;
-      continue;
-    }
-
-    if (current === '\t') {
-      actions.push({ type: 'toggle_agent' });
       index += 1;
       continue;
     }

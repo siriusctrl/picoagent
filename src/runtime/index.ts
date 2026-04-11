@@ -21,16 +21,6 @@ export function createRuntimeContext(controlDir = process.cwd()): RuntimeContext
       patchTool,
       cmdTool,
     ],
-    agentTools: {
-      ask: ['glob', 'grep', 'read'],
-      exec: [
-        'glob',
-        'grep',
-        'read',
-        'patch',
-        'cmd',
-      ],
-    },
   });
 
   return {

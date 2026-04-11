@@ -1,5 +1,4 @@
-import { PicoConfig } from '../config/config.ts';
-import { AgentPresetId, Message } from '../core/types.ts';
+import { Message } from '../core/types.ts';
 
 export type RunStatus = 'running' | 'completed' | 'failed';
 
@@ -10,7 +9,6 @@ export type RunEvent =
       timestamp: string;
       runId: string;
       sessionId?: string;
-      agent: AgentPresetId;
       prompt: string;
     }
   | {
@@ -77,7 +75,6 @@ export type EmittedRunEvent = PendingRunEvent extends infer Event
 export interface RunRecord {
   id: string;
   sessionId?: string;
-  agent: AgentPresetId;
   prompt: string;
   status: RunStatus;
   output: string;
@@ -92,10 +89,6 @@ export interface SessionRecord {
   id: string;
   cwd: string;
   roots: string[];
-  agent: AgentPresetId;
-  controlVersion: string;
-  controlConfig: PicoConfig;
-  systemPrompts: Record<AgentPresetId, string>;
   createdAt: string;
   activeRunId?: string;
   activeCheckpointId?: string;
@@ -107,7 +100,6 @@ export interface SessionRecord {
 export interface RunSnapshot {
   id: string;
   sessionId?: string;
-  agent: AgentPresetId;
   status: RunStatus;
   prompt: string;
   output: string;
@@ -120,9 +112,6 @@ export interface RunSnapshot {
 export interface SessionSnapshot {
   id: string;
   cwd: string;
-  agent: AgentPresetId;
-  controlVersion: string;
-  controlConfig: Pick<PicoConfig, 'provider' | 'model' | 'maxTokens' | 'contextWindow' | 'baseURL'>;
   createdAt: string;
   activeRunId?: string;
   activeCheckpointId?: string;
@@ -163,15 +152,6 @@ export interface SessionStore {
   createRun(record: RunRecord): Promise<void>;
   updateRun(runId: string, patch: Partial<Omit<RunRecord, 'id' | 'events'>>): Promise<void>;
   appendRunEvent(runId: string, event: PendingRunEvent): Promise<void>;
-  setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void>;
-  refreshSessionControl(
-    sessionId: string,
-    control: {
-      controlVersion: string;
-      controlConfig: PicoConfig;
-      systemPrompts: Record<AgentPresetId, string>;
-    },
-  ): Promise<void>;
   attachRunToSession(sessionId: string, runId: string): Promise<void>;
   finishSessionRun(sessionId: string, runId: string, messages: Message[]): Promise<void>;
   clearSessionActiveRun(sessionId: string, runId: string): Promise<void>;
@@ -184,15 +164,6 @@ export interface SessionStore {
 export interface RuntimeStore {
   createSession(record: SessionRecord): Promise<SessionRecord>;
   getSession(id: string): SessionRecord | undefined;
-  setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void>;
-  refreshSessionControl(
-    sessionId: string,
-    control: {
-      controlVersion: string;
-      controlConfig: PicoConfig;
-      systemPrompts: Record<AgentPresetId, string>;
-    },
-  ): Promise<void>;
   attachRunToSession(sessionId: string, runId: string): Promise<void>;
   finishSessionRun(sessionId: string, runId: string, messages: Message[]): Promise<void>;
   clearSessionActiveRun(sessionId: string, runId: string): Promise<void>;

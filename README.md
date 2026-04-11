@@ -9,7 +9,7 @@ Simple, controllable agent harness with one HTTP API.
 The repository is Bun-first for local development, testing, and CI.
 The default local runtime is Bun-native end to end: HTTP serving, filesystem access, hashing, globbing, process execution, and tests all run through Bun APIs unless a boundary absolutely requires something else.
 Source files use native `.ts` and `.tsx` import specifiers, and the TypeScript build rewrites them to `.js` in `dist/`.
-Those Bun-specific choices stay behind the existing runtime boundaries so `session`, `runtime`, and `resource` semantics do not depend on one transport or one host API surface.
+Those Bun-specific choices stay behind the existing runtime boundaries so `session`, `runtime`, `filesystem`, and `execution backend` semantics do not depend on one transport or one host API surface.
 
 The core design goal is to keep four concerns explicit and separate:
 
@@ -126,26 +126,23 @@ The built-in `echo` provider streams back `received: <your prompt>` and does not
 
 The important split is:
 
-- `session` manages context
-- `runtime` assembles prompts, decides when to compact, and executes runs
+- `session` stores context
+- `runtime` reads control files, assembles prompts, and executes runs
 - `filesystem` provides workspace and other file-backed inputs
 - `execution backend` runs commands and other executable work
 
 HTTP is the main surface that ties those pieces together without collapsing them into one module.
 For model-side history lookup, a session also exposes a read-only file-view built from summaries, checkpoints, and past runs.
 
-`picoagent` exposes two built-in agent presets:
+The runtime exposes one tool surface:
 
-- `ask`
-  - `glob`
-  - `grep`
-  - `read`
-- `exec`
-  - everything in `ask`
-  - `patch`
-  - `cmd`
+- `glob`
+- `grep`
+- `read`
+- `patch`
+- `cmd`
 
-Agent presets do not create separate runtimes. They only choose which tools a run equips.
+The model is controlled through workspace and host control files, not through multiple runtime agent presets.
 
 ### Workspace
 
@@ -159,25 +156,21 @@ It contains both ordinary files and control files such as:
 - `SOUL.md`
 - `.pico/memory/`
 - `skills/`
-- `agents/`
 
 ### Session
 
-A session is a persistent context container.
+A session is a persistent context log.
 
 In the current implementation, a session is created against one workspace root. That binding is an implementation choice for the local harness, not the main semantic point of the abstraction.
 
 Each session stores:
 
-- a default agent preset
 - conversation history
-- cached control state that was resolved from workspace and host control files for the latest run
 - optional checkpoints created by compaction
+- ordered run ids and active-run state for projection purposes
 
-The session is not responsible for assembling the final prompt.
-Instead, the runtime reads session state, reloads control inputs when needed, and assembles the prompt for one run.
-
-Before a session run starts, the runtime checks whether the workspace changed. If it did, the cached control state is refreshed automatically.
+The session does not assemble prompts and it does not carry runtime policy.
+The runtime keeps a control snapshot cache, checks whether the relevant control files changed, and only rebuilds the prompt inputs when they do.
 
 ### Session History
 
@@ -198,12 +191,20 @@ The model can browse session history through the session file-view with:
 That file-view is read-only. It is a projection of session state for model-side inspection, not a second writable workspace.
 Raw event logs and compaction stay on the session or HTTP side, not the model tool surface.
 Under Bun, `glob` matching follows Bun's glob syntax rather than a custom reduced parser.
-For the executable workspace target, `grep` prefers `rg` when available and falls back to the built-in file-view search when it is not.
+For a workspace namespace with `cmd` enabled, `grep` prefers `rg` when available and falls back to the built-in file-view search when it is not.
 
-File-view tools now address mounted surfaces through namespace paths such as:
+File-view tools address mounted surfaces through paths such as:
 
 - `/workspace/src/http/server.ts`
 - `/session/summary.md`
+
+Mounted file-views may also carry a small command capability flag:
+
+- `supportsCmd`
+  - whether `cmd` is enabled for that mounted view
+
+`cmd` always requires an explicit namespace-rooted `cwd`.
+The runtime appends a short file-view summary to the system prompt so the model sees the available surfaces and `cmd` policy directly.
 
 ## HTTP API
 
@@ -224,7 +225,6 @@ Current endpoints:
 - `GET /sessions/:id`
 - `GET /sessions/:id/resources`
 - `GET /sessions/:id/resources/<resource_path>`
-- `POST /sessions/:id/agent`
 - `POST /sessions/:id/runs`
 - `POST /sessions/:id/compact`
 
@@ -233,7 +233,7 @@ Create a session:
 ```bash
 curl -X POST http://127.0.0.1:4096/sessions \
   -H 'content-type: application/json' \
-  -d '{"agent":"ask"}'
+  -d '{}'
 ```
 
 For an explicitly isolated flow, start a session service first, create the session there, and then bind the runtime to it:
@@ -326,7 +326,7 @@ bun run build
 
 ```text
 src/
-  runtime/    runtime context assembly, control snapshots, and runtime engine orchestration
+  runtime/    runtime context assembly and runtime engine orchestration
   core/       loop, provider contract, tool registry, shared types
   http/       async HTTP server for runs, sessions, and events
   tools/      LLM-facing glob, grep, read, patch, and cmd tools

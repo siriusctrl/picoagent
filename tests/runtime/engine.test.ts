@@ -51,7 +51,7 @@ test('runtime engine rejects a second concurrent session run after control refre
 
   (engine as unknown as { startRun: (run: unknown) => void }).startRun = () => {};
 
-  const session = await engine.createSession('ask');
+  const session = await engine.createSession();
   const results = await Promise.allSettled([
     engine.createSessionRun(session, 'first concurrent turn'),
     engine.createSessionRun(session, 'second concurrent turn'),
@@ -160,7 +160,7 @@ test('fileView supports session namespace read', async () => {
     runtimeContext: createRuntimeContext(process.cwd()),
   });
 
-  const session = await engine.createSession('ask');
+  const session = await engine.createSession();
 
   const runtime = engine as unknown as {
     fileView: (
@@ -292,7 +292,7 @@ test('fileView preserves extra namespace mounts when a session namespace is acti
     runtimeContext: createRuntimeContext(process.cwd()),
   });
 
-  const session = await engine.createSession('ask');
+  const session = await engine.createSession();
 
   const runtime = engine as unknown as {
     fileView: (
@@ -312,4 +312,64 @@ test('fileView preserves extra namespace mounts when a session namespace is acti
   );
 
   expect(await methods.read('/remote@build/docs/readme.md')).toBe('remote mount data');
+});
+
+test('fileView cmd requires an explicit namespace cwd', async () => {
+  const filesystem: MutableFilesystem = {
+    async readTextFile() {
+      return '';
+    },
+    async writeTextFile() {},
+    async deleteTextFile() {},
+    async listFiles() {
+      return [];
+    },
+    async searchText() {
+      return [];
+    },
+  };
+
+  const store = new InMemoryRuntimeStore();
+  const engine = new RuntimeEngine({
+    cwd: '/workspace-root',
+    filesystem,
+    runStore: store,
+    sessionStore: new StoreBackedSessionStore(store),
+    mounts: [
+      {
+        name: 'sandbox',
+        filesystem,
+        root: '/sandbox-root',
+        writable: true,
+        supportsCmd: true,
+      },
+    ],
+    executionBackend: {
+      async run() {
+        return {
+          terminalId: 'term-1',
+          output: '',
+          truncated: false,
+          exitCode: 0,
+          signal: null,
+        };
+      },
+    },
+    runtimeContext: createRuntimeContext(process.cwd()),
+  });
+
+  const runtime = engine as unknown as {
+    fileView: (
+      runId: string,
+      cwd: string,
+      roots: string[],
+      signal: AbortSignal,
+      sessionId?: string,
+    ) => Pick<FileViewAccess, 'cmd'>;
+  };
+  const methods = runtime.fileView('run-5', '/workspace-root', ['/workspace-root'], new AbortController().signal);
+
+  await expect(methods.cmd({ command: 'bash', args: ['-lc', 'pwd'] })).rejects.toThrow(
+    /cmd requires an explicit cwd namespace path/,
+  );
 });

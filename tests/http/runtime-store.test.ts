@@ -10,19 +10,6 @@ function requireValue<T>(value: T | undefined, message: string): T {
   return value;
 }
 
-const controlConfig = {
-  provider: 'echo' as const,
-  model: 'echo',
-  maxTokens: 4096,
-  contextWindow: 200000,
-  baseURL: undefined,
-};
-
-const systemPrompts = {
-  ask: 'ask prompt',
-  exec: 'exec prompt',
-};
-
 test('runtime store projects ordered session and run snapshots', async () => {
   const store = new InMemoryRuntimeStore();
 
@@ -30,10 +17,6 @@ test('runtime store projects ordered session and run snapshots', async () => {
     id: 'session-1',
     cwd: '/workspace',
     roots: ['/workspace'],
-    agent: 'ask',
-    controlVersion: 'v1',
-    controlConfig,
-    systemPrompts,
     createdAt: '2025-01-01T00:00:00.000Z',
     runIds: [],
     messages: [],
@@ -43,7 +26,6 @@ test('runtime store projects ordered session and run snapshots', async () => {
   await store.createRun({
     id: 'run-1',
     sessionId: 'session-1',
-    agent: 'ask',
     prompt: 'first',
     status: 'completed',
     output: 'done first',
@@ -55,7 +37,6 @@ test('runtime store projects ordered session and run snapshots', async () => {
   await store.createRun({
     id: 'run-2',
     sessionId: 'session-1',
-    agent: 'exec',
     prompt: 'second',
     status: 'running',
     output: '',
@@ -69,24 +50,17 @@ test('runtime store projects ordered session and run snapshots', async () => {
 
   const session = requireValue(store.getSessionSnapshot('session-1'), 'session snapshot should exist');
   expect(session.activeRunId).toBe('run-2');
-  expect(session.controlVersion).toBe('v1');
-  expect(session.controlConfig.provider).toBe('echo');
   expect(session.checkpointCount).toBe(0);
-  expect(
-    session.runs.map((run) => [run.id, run.agent, run.status]),
-  ).toEqual(
-    [
-      ['run-1', 'ask', 'completed'],
-      ['run-2', 'exec', 'running'],
-    ],
-  );
+  expect(session.runs.map((run) => [run.id, run.status])).toEqual([
+    ['run-1', 'completed'],
+    ['run-2', 'running'],
+  ]);
 });
 
 test('runtime store replays historical run events before streaming new ones', async () => {
   const store = new InMemoryRuntimeStore();
   await store.createRun({
     id: 'run-1',
-    agent: 'ask',
     prompt: 'hello',
     status: 'running',
     output: '',
@@ -98,7 +72,6 @@ test('runtime store replays historical run events before streaming new ones', as
     type: 'run_started',
     timestamp: '2025-01-01T00:00:00.000Z',
     runId: 'run-1',
-    agent: 'ask',
     prompt: 'hello',
   });
 
@@ -133,10 +106,6 @@ test('runtime store clears active session runs and persists conversation on comp
     id: 'session-1',
     cwd: '/workspace',
     roots: ['/workspace'],
-    agent: 'exec',
-    controlVersion: 'v1',
-    controlConfig,
-    systemPrompts,
     createdAt: '2025-01-01T00:00:00.000Z',
     runIds: [],
     messages: [],
@@ -161,10 +130,6 @@ test('runtime store compacts session messages into checkpoints and exposes sessi
     id: 'session-1',
     cwd: '/workspace',
     roots: ['/workspace'],
-    agent: 'exec',
-    controlVersion: 'v1',
-    controlConfig,
-    systemPrompts,
     createdAt: '2025-01-01T00:00:00.000Z',
     runIds: ['run-1'],
     messages: [
@@ -179,7 +144,6 @@ test('runtime store compacts session messages into checkpoints and exposes sessi
   await store.createRun({
     id: 'run-1',
     sessionId: 'session-1',
-    agent: 'exec',
     prompt: 'second question',
     status: 'completed',
     output: 'second answer',
@@ -215,10 +179,6 @@ test('file runtime store reloads sessions, runs, checkpoints, and event logs fro
         id: 'session-1',
         cwd: '/workspace',
         roots: ['/workspace'],
-        agent: 'exec',
-        controlVersion: 'v1',
-        controlConfig,
-        systemPrompts,
         createdAt: '2025-01-01T00:00:00.000Z',
         runIds: [],
         messages: [],
@@ -228,7 +188,6 @@ test('file runtime store reloads sessions, runs, checkpoints, and event logs fro
       await store.createRun({
         id: 'run-1',
         sessionId: 'session-1',
-        agent: 'exec',
         prompt: 'persist me',
         status: 'running',
         output: '',
@@ -241,7 +200,6 @@ test('file runtime store reloads sessions, runs, checkpoints, and event logs fro
         timestamp: '2025-01-01T00:00:01.000Z',
         runId: 'run-1',
         sessionId: 'session-1',
-        agent: 'exec',
         prompt: 'persist me',
       });
       await store.finishSessionRun('session-1', 'run-1', [

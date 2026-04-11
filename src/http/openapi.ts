@@ -9,5 +9,4 @@ export {
   getSessionRoute,
   listSessionResourcesRoute,
   readSessionResourceRoute,
-  setSessionAgentRoute,
 } from './openapi-routes.ts';

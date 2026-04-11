@@ -28,7 +28,6 @@ const mockContext: ToolContext = {
   cwd: process.cwd(),
   roots: [process.cwd()],
   controlRoot: process.cwd(),
-  agent: 'ask',
   signal: new AbortController().signal,
   fileView: {
     glob: async () => [],

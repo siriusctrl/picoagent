@@ -28,14 +28,14 @@ Read first:
 Scope:
 - assemble the runtime context
 - define the global tool registry
-- build session control snapshots from workspace control files
+- load control files from the workspace and host defaults
 - run the runtime engine and runtime service
 - own runtime store interfaces and implementations
 
 Rules:
 - keep business logic in the runtime engine or runtime service, not in HTTP
-- prefer changing registry assembly over adding agent-specific special cases elsewhere
-- keep session control snapshot behavior explicit and file-driven
+- keep the registry general instead of introducing preset-specific branches
+- keep control loading explicit and file-driven
 
 Read first:
 - `docs/architecture.md`

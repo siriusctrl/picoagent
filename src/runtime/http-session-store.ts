@@ -1,4 +1,4 @@
-import type { AgentPresetId, Message } from '../core/types.ts';
+import type { Message } from '../core/types.ts';
 import type {
   PendingRunEvent,
   RunRecord,
@@ -78,31 +78,6 @@ export class HttpSessionStore implements SessionStore {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(event),
-    });
-    await parseJsonResponse<{ ok: true }>(response);
-  }
-
-  async setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void> {
-    const response = await fetch(this.url(`/sessions/${sessionId}/agent`), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ agent }),
-    });
-    await parseJsonResponse<SessionSnapshot>(response);
-  }
-
-  async refreshSessionControl(
-    sessionId: string,
-    control: {
-      controlVersion: SessionRecord['controlVersion'];
-      controlConfig: SessionRecord['controlConfig'];
-      systemPrompts: SessionRecord['systemPrompts'];
-    },
-  ): Promise<void> {
-    const response = await fetch(this.url(`/_store/sessions/${sessionId}/control`), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(control),
     });
     await parseJsonResponse<{ ok: true }>(response);
   }

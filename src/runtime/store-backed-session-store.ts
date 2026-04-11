@@ -1,4 +1,4 @@
-import type { AgentPresetId, Message } from '../core/types.ts';
+import type { Message } from '../core/types.ts';
 import type {
   PendingRunEvent,
   RunRecord,
@@ -30,21 +30,6 @@ export class StoreBackedSessionStore implements SessionStore {
 
   async appendRunEvent(runId: string, event: PendingRunEvent): Promise<void> {
     await this.store.appendRunEvent(runId, event);
-  }
-
-  async setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void> {
-    await this.store.setSessionAgent(sessionId, agent);
-  }
-
-  async refreshSessionControl(
-    sessionId: string,
-    control: {
-      controlVersion: string;
-      controlConfig: SessionRecord['controlConfig'];
-      systemPrompts: SessionRecord['systemPrompts'];
-    },
-  ): Promise<void> {
-    await this.store.refreshSessionControl(sessionId, control);
   }
 
   async attachRunToSession(sessionId: string, runId: string): Promise<void> {

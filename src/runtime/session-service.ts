@@ -1,9 +1,4 @@
-import type { MutableFilesystem } from '../core/filesystem.ts';
-import type { AgentPresetId } from '../core/types.ts';
 import { joinPath } from '../fs/path.ts';
-import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.ts';
-import { buildSessionControlSnapshot } from './control-snapshot.ts';
-import { createRuntimeContext } from './index.ts';
 import { FileRuntimeStore, InMemoryRuntimeStore } from './runtime-store.ts';
 import { StoreBackedSessionStore } from './store-backed-session-store.ts';
 import type { PendingRunEvent, RunRecord, RuntimeStore, SessionRecord, SessionSnapshot } from './store.ts';
@@ -26,7 +21,6 @@ export class SessionValidationError extends Error {
 
 export interface SessionServiceOptions {
   cwd?: string;
-  filesystem?: MutableFilesystem;
   runtimeRoot?: string;
   persistentRuntime?: boolean;
 }
@@ -35,13 +29,9 @@ export class SessionService {
   readonly store: RuntimeStore;
   private readonly sessionStore: StoreBackedSessionStore;
   private readonly cwd: string;
-  private readonly filesystem: MutableFilesystem;
-  private readonly runtimeContext: ReturnType<typeof createRuntimeContext>;
 
   private constructor(options: SessionServiceOptions, store: RuntimeStore) {
     this.cwd = options.cwd ?? process.cwd();
-    this.filesystem = options.filesystem ?? new LocalWorkspaceFileSystem();
-    this.runtimeContext = createRuntimeContext(this.cwd);
     this.store = store;
     this.sessionStore = new StoreBackedSessionStore(this.store);
   }
@@ -57,21 +47,11 @@ export class SessionService {
     return new SessionService(options, store);
   }
 
-  async createSession(agent: AgentPresetId = 'ask'): Promise<SessionRecord> {
-    const control = await buildSessionControlSnapshot(
-      this.cwd,
-      this.runtimeContext.registry,
-      this.filesystem,
-    );
-
+  async createSession(): Promise<SessionRecord> {
     return this.sessionStore.createSession({
       id: crypto.randomUUID(),
       cwd: this.cwd,
       roots: [this.cwd],
-      agent,
-      controlVersion: control.controlVersion,
-      controlConfig: control.config,
-      systemPrompts: control.systemPrompts,
       createdAt: nowIso(),
       runIds: [],
       messages: [],
@@ -111,28 +91,6 @@ export class SessionService {
     }
 
     return snapshot;
-  }
-
-  async setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<SessionSnapshot> {
-    const session = await this.getSession(sessionId);
-    if (session.activeRunId) {
-      throw new SessionConflictError(`Session ${sessionId} already has an active run`);
-    }
-
-    await this.sessionStore.setSessionAgent(sessionId, agent);
-    return this.getSessionSnapshot(sessionId);
-  }
-
-  async refreshSessionControl(
-    sessionId: string,
-    control: {
-      controlVersion: SessionRecord['controlVersion'];
-      controlConfig: SessionRecord['controlConfig'];
-      systemPrompts: SessionRecord['systemPrompts'];
-    },
-  ): Promise<void> {
-    await this.getSession(sessionId);
-    await this.sessionStore.refreshSessionControl(sessionId, control);
   }
 
   async attachRunToSession(sessionId: string, runId: string): Promise<void> {

@@ -11,7 +11,7 @@ Read these when the task matches:
 
 - `docs/runtime-model.md`
   - session shape
-  - agent presets
+  - control-file loading
   - tool access model
 - `docs/design-choices.md`
   - durable architecture decisions

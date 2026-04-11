@@ -137,7 +137,6 @@ async function readEvents(response: Response, until: (events: RunEvent[]) => boo
 async function waitForRun(client: HttpClient, runId: string): Promise<{
   id: string;
   sessionId?: string;
-  agent: string;
   status: RunStatus;
   prompt: string;
   output: string;
@@ -149,7 +148,6 @@ async function waitForRun(client: HttpClient, runId: string): Promise<{
     const payload = (await response.json()) as {
       id: string;
       sessionId?: string;
-      agent: string;
       status: RunStatus;
       prompt: string;
       output: string;
@@ -183,7 +181,6 @@ test('POST /runs creates an async run and GET /runs/:id returns the final snapsh
   const run = await waitForRun(client, created.runId);
   expect(run.id).toBe(created.runId);
   expect(run.status).toBe('completed');
-  expect(run.agent).toBe('ask');
   expect(run.prompt).toBe('hello');
   expect(run.output).toBe('received: hello');
 });
@@ -267,18 +264,17 @@ test('sessions keep ordered run history and expose the related run ids', async (
   const createSessionResponse = await client.request('/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: 'ask' }),
+    body: JSON.stringify({}),
   });
   expect(createSessionResponse.status).toBe(201);
 
   const session = (await createSessionResponse.json()) as {
     id: string;
-    agent: string;
-    controlVersion: string;
-    controlConfig: { provider: string };
+    cwd: string;
+    checkpointCount: number;
   };
-  expect(session.agent).toBe('ask');
-  expect(session.controlConfig.provider).toBe('echo');
+  expect(session.cwd).toBe(process.cwd());
+  expect(session.checkpointCount).toBe(0);
 
   const firstRunResponse = await client.request(`/sessions/${session.id}/runs`, {
     method: 'POST',
@@ -306,100 +302,14 @@ test('sessions keep ordered run history and expose the related run ids', async (
 
   const snapshot = (await sessionResponse.json()) as {
     id: string;
-    agent: string;
-    controlVersion: string;
-    controlConfig: { provider: string; model: string };
-    runs: Array<{ id: string; agent: string; status: RunStatus; prompt: string; output: string }>;
+    cwd: string;
+    runs: Array<{ id: string; status: RunStatus; prompt: string; output: string }>;
   };
 
   expect(snapshot.id).toBe(session.id);
-  expect(snapshot.agent).toBe('ask');
-  expect(snapshot.controlVersion).toMatch(/^[0-9a-f]{64}$/);
-  expect(snapshot.controlConfig.provider).toBe('echo');
+  expect(snapshot.cwd).toBe(process.cwd());
   expect(snapshot.runs.map((run) => run.id)).toEqual([firstRun.runId, secondRun.runId]);
   expect(snapshot.runs.map((run) => run.prompt)).toEqual(['first turn', 'second turn']);
-});
-
-test('sessions keep a default agent and allow it to be updated over HTTP', async () => {
-  const { client } = await startApp();
-
-  const createSessionResponse = await client.request('/sessions', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: 'ask' }),
-  });
-  const session = (await createSessionResponse.json()) as { id: string };
-
-  const agentResponse = await client.request(`/sessions/${session.id}/agent`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: 'exec' }),
-  });
-  expect(agentResponse.status).toBe(200);
-
-  const updated = (await agentResponse.json()) as { id: string; agent: string };
-  expect(updated.id).toBe(session.id);
-  expect(updated.agent).toBe('exec');
-
-  const runResponse = await client.request(`/sessions/${session.id}/runs`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ prompt: 'uses default agent' }),
-  });
-  const run = (await runResponse.json()) as { runId: string };
-  const snapshot = await waitForRun(client, run.runId);
-  expect(snapshot.agent).toBe('exec');
-});
-
-test('POST /sessions/:id/agent rejects missing agent values', async () => {
-  const { client } = await startApp();
-
-  const createSessionResponse = await client.request('/sessions', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: 'exec' }),
-  });
-  const session = (await createSessionResponse.json()) as { id: string };
-
-  const agentResponse = await client.request(`/sessions/${session.id}/agent`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({}),
-  });
-  expect(agentResponse.status).toBe(400);
-
-  const errorPayload = (await agentResponse.json()) as { error: string };
-  expect(errorPayload.error).toBe('agent is required');
-
-  const sessionResponse = await client.request(`/sessions/${session.id}`);
-  const snapshot = (await sessionResponse.json()) as { agent: string };
-  expect(snapshot.agent).toBe('exec');
-});
-
-test('session runs inherit the session default agent unless the request overrides it', async () => {
-  const { client } = await startApp();
-
-  const createSessionResponse = await client.request('/sessions', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: 'ask' }),
-  });
-  const session = (await createSessionResponse.json()) as { id: string };
-
-  const runResponse = await client.request(`/sessions/${session.id}/runs`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ prompt: 'override just this run', agent: 'exec' }),
-  });
-  expect(runResponse.status).toBe(202);
-
-  const run = (await runResponse.json()) as { runId: string };
-  const snapshot = await waitForRun(client, run.runId);
-  expect(snapshot.agent).toBe('exec');
-
-  const sessionResponse = await client.request(`/sessions/${session.id}`);
-  const updatedSession = (await sessionResponse.json()) as { agent: string };
-  expect(updatedSession.agent).toBe('ask');
 });
 
 test('GET /openapi documents the async run and event endpoints', async () => {
@@ -417,7 +327,6 @@ test('GET /openapi documents the async run and event endpoints', async () => {
   expect(document.paths).toHaveProperty('/sessions/{sessionId}/runs');
   expect(document.paths).toHaveProperty('/sessions/{sessionId}/resources');
   expect(document.paths).toHaveProperty('/sessions/{sessionId}/resources/{resourcePath}');
-  expect(document.paths).toHaveProperty('/sessions/{sessionId}/agent');
   expect(document.paths).toHaveProperty('/sessions/{sessionId}/compact');
 });
 
@@ -435,7 +344,7 @@ test('POST endpoints return 400 for malformed JSON bodies', async () => {
   expect(payload.error).toBe('Malformed JSON in request body');
 });
 
-test('session runs automatically refresh control inputs when the workspace changes', async () => {
+test('session runs rebuild cached control inputs when relevant files change', async () => {
   const root = await makeTempDir('picoagent-http-workspace-');
 
   try {
@@ -447,16 +356,10 @@ test('session runs automatically refresh control inputs when the workspace chang
     const createSessionResponse = await client.request('/sessions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ agent: 'ask' }),
+      body: JSON.stringify({}),
     });
     expect(createSessionResponse.status).toBe(201);
-
-    const session = (await createSessionResponse.json()) as {
-      id: string;
-      controlVersion: string;
-      controlConfig: { provider: string };
-    };
-    expect(session.controlConfig.provider).toBe('echo');
+    const session = (await createSessionResponse.json()) as { id: string };
 
     await writeTextFile(joinPath(root, '.pico', 'config.jsonc'), '{ "provider": "wat", "model": "echo" }\n');
 
@@ -469,15 +372,6 @@ test('session runs automatically refresh control inputs when the workspace chang
 
     const errorPayload = (await runResponse.json()) as { error: string };
     expect(errorPayload.error).toMatch(/invalid provider \"wat\"/);
-
-    const sessionResponse = await client.request(`/sessions/${session.id}`);
-    expect(sessionResponse.status).toBe(200);
-    const snapshot = (await sessionResponse.json()) as {
-      controlVersion: string;
-      controlConfig: { provider: string };
-    };
-    expect(snapshot.controlVersion).toBe(session.controlVersion);
-    expect(snapshot.controlConfig.provider).toBe('echo');
   } finally {
     await removeDir(root);
   }
@@ -489,7 +383,7 @@ test('sessions compact into checkpoints and expose the compacted snapshot over H
   const createSessionResponse = await client.request('/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: 'ask' }),
+    body: JSON.stringify({}),
   });
   expect(createSessionResponse.status).toBe(201);
 
@@ -547,7 +441,7 @@ test('session history resources are available over HTTP', async () => {
   const createSessionResponse = await client.request('/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: 'exec' }),
+    body: JSON.stringify({}),
   });
   const session = (await createSessionResponse.json()) as { id: string };
 
@@ -598,7 +492,7 @@ test('sessions and runs survive a server restart through the file runtime store'
     const createSessionResponse = await firstClient.request('/sessions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ agent: 'ask' }),
+      body: JSON.stringify({}),
     });
     const session = (await createSessionResponse.json()) as { id: string };
 

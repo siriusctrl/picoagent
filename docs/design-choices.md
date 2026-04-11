@@ -21,7 +21,7 @@ Other docs should:
 The current top-level split is:
 
 - `session` owns persistent context
-- `runtime` assembles prompts, decides when to compact, and executes runs
+- `runtime` reads control files, assembles prompts, decides when to compact, and executes runs
 - `filesystem` provides file-backed inputs
 - `execution backend` provides command execution
 
@@ -88,22 +88,43 @@ Reason:
 Rejected direction:
 - adding special URI syntax or backend-aware parsing rules for namespace labels
 
+## Namespace Capabilities And `cmd`
+
+Namespace mounts carry simple capabilities instead of baking runtime policy into the mount label itself.
+
+Current shape:
+- `supportsCmd` declares whether `cmd` is allowed for that namespace
+- the mount name stays a readable namespace label, not the source of truth for command policy
+- `cmd` requires an explicit namespace-rooted `cwd` instead of silently choosing one
+
+Reason:
+- `cmd` policy stays explicit and tied to the current tool surface
+- a writable namespace and a `cmd`-enabled namespace are related but not forced to be the same thing
+- the model should not rely on hidden runtime defaults for where commands execute
+
+Rejected direction:
+- overloading the namespace label itself to mean both identity and command policy
+- silently defaulting `cmd` to some preferred namespace when multiple mounted surfaces exist
+
 ## Control Inputs
 
-Control inputs come from workspace and host files, but they are not exposed as a separate mounted `/control` filesystem.
+Control inputs come from workspace and host files, but they are not exposed as a separate mounted `/control` filesystem and they are not cached inside session state.
 
 Current shape:
 - control files live in the workspace
 - host defaults are also read during control loading
-- the runtime assembles the effective control surface into the prompt
+- the runtime keeps a workspace-scoped control snapshot cache
+- before each run it checks the relevant control files and rebuilds only when the control version changes
 
 Reason:
 - there should not be two visible truths for the same control files
 - control is primarily runtime prompt input, not a tool-facing writable surface
 - agents can still edit control files through the workspace when needed
+- session storage stays pure context instead of becoming a second prompt-policy container
 
 Rejected direction:
 - exposing a separate `/control` mount alongside `/workspace`
+- storing cached control snapshots on the session as the source of run behavior
 
 ## Session History Surface
 
@@ -133,22 +154,22 @@ Reason:
 Rejected direction:
 - destructive history rewriting as the primary compaction model
 
-## Agent Presets
+## One Runtime Tool Surface
 
-Agent presets are curated tool subsets, not separate runtimes.
+The runtime exposes one general tool surface instead of multiple built-in agent presets.
 
 Current shape:
-- `ask` equips read-only exploration tools
-- `exec` adds mutation and command execution tools
-- both run through the same runtime engine, tool registry, and HTTP surface
+- the registry contains one stable set of tools
+- control files shape prompting, not which preset name is active
+- sessions do not carry a default agent field
 
 Reason:
-- tool semantics stay general
-- agent behavior stays configurable at the registry boundary
-- the system avoids forking into multiple runtime models for different presets
+- the harness stays smaller and easier to reason about
+- runtime policy has one source of truth
+- session remains a context store instead of a policy container
 
 Rejected direction:
-- separate runtime stacks or transport paths per agent preset
+- carrying built-in `ask` and `exec` presets through API, session state, and prompt assembly
 
 ## Runtime Surface
 

@@ -3,19 +3,6 @@ import { InMemoryRuntimeStore } from '../../src/runtime/runtime-store.ts';
 import { SessionFilesystem } from '../../src/runtime/session-filesystem.ts';
 import { StoreBackedSessionStore } from '../../src/runtime/store-backed-session-store.ts';
 
-const controlConfig = {
-  provider: 'echo' as const,
-  model: 'echo',
-  maxTokens: 4096,
-  contextWindow: 200000,
-  baseURL: undefined,
-};
-
-const systemPrompts = {
-  ask: 'ask prompt',
-  exec: 'exec prompt',
-};
-
 test('session filesystem projects summary, checkpoints, and runs as a read-only filesystem', async () => {
   const store = new InMemoryRuntimeStore();
 
@@ -23,10 +10,6 @@ test('session filesystem projects summary, checkpoints, and runs as a read-only 
     id: 'session-1',
     cwd: '/workspace',
     roots: ['/workspace'],
-    agent: 'exec',
-    controlVersion: 'v1',
-    controlConfig,
-    systemPrompts,
     createdAt: '2025-01-01T00:00:00.000Z',
     runIds: ['run-1'],
     messages: [
@@ -41,7 +24,6 @@ test('session filesystem projects summary, checkpoints, and runs as a read-only 
   await store.createRun({
     id: 'run-1',
     sessionId: 'session-1',
-    agent: 'exec',
     prompt: 'second question',
     status: 'completed',
     output: 'second answer',

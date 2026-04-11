@@ -12,11 +12,7 @@ test('buildSystemPrompt formats a preloaded control surface', () => {
       skills: [
         { path: 'defaults/skills/readme.md', frontmatter: { name: 'readme', description: 'read docs' } },
       ],
-      agentsDocs: [
-        { path: 'defaults/agents/exec.md', frontmatter: { name: 'exec', description: 'run changes' } },
-      ],
     },
-    'ask',
     [grepTool],
   );
 
@@ -27,6 +23,4 @@ test('buildSystemPrompt formats a preloaded control surface', () => {
   expect(prompt).toMatch(/workspace memory/);
   expect(prompt).toMatch(/Available Skills/);
   expect(prompt).toMatch(/readme: read docs/);
-  expect(prompt).toMatch(/Available Agents/);
-  expect(prompt).toMatch(/exec: run changes/);
 });

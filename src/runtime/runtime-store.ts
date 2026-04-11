@@ -1,5 +1,4 @@
-import type { PicoConfig } from '../config/config.ts';
-import type { AgentPresetId, Message } from '../core/types.ts';
+import type { Message } from '../core/types.ts';
 import { dirnamePath, joinPath, relativePath } from '../fs/path.ts';
 import type {
   PendingRunEvent,
@@ -35,33 +34,6 @@ export class InMemoryRuntimeStore implements RuntimeStore {
 
   getSession(id: string): SessionRecord | undefined {
     return this.sessions.get(id);
-  }
-
-  async setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      return;
-    }
-
-    session.agent = agent;
-  }
-
-  async refreshSessionControl(
-    sessionId: string,
-    control: {
-      controlVersion: string;
-      controlConfig: PicoConfig;
-      systemPrompts: Record<AgentPresetId, string>;
-    },
-  ): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      return;
-    }
-
-    session.controlVersion = control.controlVersion;
-    session.controlConfig = control.controlConfig;
-    session.systemPrompts = control.systemPrompts;
   }
 
   async attachRunToSession(sessionId: string, runId: string): Promise<void> {
@@ -244,29 +216,6 @@ export class FileRuntimeStore extends InMemoryRuntimeStore {
     return session;
   }
 
-  override async setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<void> {
-    await super.setSessionAgent(sessionId, agent);
-    const session = this.getSession(sessionId);
-    if (session) {
-      await this.enqueueWrite(() => this.persistSession(session));
-    }
-  }
-
-  override async refreshSessionControl(
-    sessionId: string,
-    control: {
-      controlVersion: string;
-      controlConfig: PicoConfig;
-      systemPrompts: Record<AgentPresetId, string>;
-    },
-  ): Promise<void> {
-    await super.refreshSessionControl(sessionId, control);
-    const session = this.getSession(sessionId);
-    if (session) {
-      await this.enqueueWrite(() => this.persistSession(session));
-    }
-  }
-
   override async attachRunToSession(sessionId: string, runId: string): Promise<void> {
     await super.attachRunToSession(sessionId, runId);
     const session = this.getSession(sessionId);
@@ -433,7 +382,6 @@ export class FileRuntimeStore extends InMemoryRuntimeStore {
     const persisted: PersistedRunRecord = {
       id: run.id,
       sessionId: run.sessionId,
-      agent: run.agent,
       prompt: run.prompt,
       status: run.status,
       output: run.output,

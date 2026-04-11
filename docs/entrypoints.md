@@ -1,15 +1,12 @@
 # Entrypoints
 
-The entrypoints exist to expose the harness boundaries, not to redefine them.
+Entrypoints should expose the harness boundaries, not redefine them.
 
-For durable design decisions behind those boundaries, read `docs/design-choices.md`.
+In practice:
 
-In practice that means:
-
-- sessions stay the context boundary
-- runs stay the execution boundary
-- filesystem-backed views stay readable through explicit HTTP or tool surfaces
-- sessions expose event streams to clients and a read-only file-view to tools
+- `session` stays the context boundary
+- `run` stays the execution boundary
+- file-backed surfaces stay visible through explicit HTTP or tool-facing file-view paths
 
 ## HTTP Server
 
@@ -17,12 +14,11 @@ Primary entry file: `src/http/server.ts`
 
 Behavior:
 
-- serves a minimal local Hono HTTP API hosted by Bun
-- exposes an async `createHttpApp()` for in-process clients and tests
-- reuses the shared runtime context assembly and core loop
-- exposes async-first run, session, and event resources
-- keeps streaming and non-streaming reads behind the same `/events/:runId` endpoint
-- generates `/openapi` from the route schemas
+- serves the local Hono HTTP API hosted by Bun
+- exposes async run, session, and event resources
+- reuses the shared runtime context and core loop
+- supports in-process app creation for tests and thin local clients
+- generates `/openapi` from route schemas
 
 Current endpoints:
 
@@ -34,28 +30,17 @@ Current endpoints:
 - `GET /sessions/:id`
 - `GET /sessions/:id/resources`
 - `GET /sessions/:id/resources/<resource_path>`
-- `POST /sessions/:id/agent`
 - `POST /sessions/:id/runs`
 - `POST /sessions/:id/compact`
 
 HTTP resource model:
 
 - `session` is the context container
-- `session` binds one workspace root
-- `session` carries a default agent preset
-- `session` caches a control snapshot derived from workspace control files
-- `session` may also carry a checkpointed summary of older history
 - `run` is one execution
-- session runs inherit the session default agent unless the request overrides it
-- session runs refresh the cached control snapshot automatically if the workspace changed
 - `events` are the ordered records for one run
-- session history stays readable to clients through HTTP resource routes
-- the model reads session history through a read-only session file-view, not through raw event logs
-- compaction creates a checkpoint plus recent tail without deleting run or event history
-- set `Accept: text/event-stream` on `GET /events/:runId` for streaming
-- omit that header to read the same event log as JSON
-
-This is the main product entrypoint.
+- session history stays readable through session resource routes
+- the model reads session history through the read-only `/session/...` file-view
+- `GET /events/:runId` can return JSON or SSE depending on `Accept`
 
 ## Local TUI
 
@@ -66,9 +51,8 @@ Behavior:
 - starts a local Ink UI
 - starts a local HTTP-backed session rooted at the current working directory
 - renders streamed assistant output and tool activity
-- lets the user switch between the built-in agent presets
 
-This client is for local development and debugging. It should stay thin.
+This client is for local debugging only. It should stay thin.
 
 ## CLI
 
@@ -76,37 +60,33 @@ Secondary entry file: `src/clients/cli/main.ts`
 
 Behavior:
 
-- exposes a minimum command surface
-- `pico serve` starts the HTTP server in the foreground
-- `pico serve --mount <label=source> ...` resolves extra namespace mounts before starting the runtime
-- `pico serve --session <url>` binds the runtime to an already running external session service
+- `pico serve` starts the runtime HTTP server
+- `pico serve --mount <label=source> ...` adds extra file-view mounts before startup
+- `pico serve --session <url>` binds the runtime to an external session service
 - `pico session serve` starts the session service in the foreground
-- `pico filespace serve` starts a filespace-facing entrypoint with `--hostname`, `--port`, `--name`, and `--root`
+- `pico filespace serve` starts a rooted filespace HTTP service
 
 Current status:
 
 - `--mount` accepts local directory sources or remote filespace URLs
-- extra mount labels are runtime-facing namespace labels and must not reuse reserved names like `workspace` or `session`
-- `--session` keeps session storage external while preserving the normal runtime-facing `POST /sessions` flow for clients
+- mount labels must not reuse reserved names like `workspace` or `session`
+- `--session` keeps session storage external while preserving the normal runtime-facing `POST /sessions` flow
 - `session serve` exposes session creation, snapshots, compaction, and session resource reads without exposing run execution
-- `filespace serve` starts a rooted filespace HTTP service and prints a mountable endpoint
-- runtime startup resolves mount labels into filesystem-backed namespace mounts before HTTP begins serving agent runs
+- `filespace serve` prints a mountable endpoint for rooted file access
 
-This client is also thin. It should prefer reusing the existing runtime paths over inventing a second agent architecture.
+## Shared Runtime Path
 
-## Shared Runtime Context
-
-All entrypoints rely on the same runtime context path:
+All entrypoints rely on the same runtime path:
 
 1. resolve the workspace root
-2. assemble the global tool registry
-3. build or refresh the session control snapshot when a session needs it
-4. open the local runtime/session backends that persist or project state
-5. create the provider for the current control snapshot
-6. create transport-specific run and session state only where needed
+2. assemble the general tool registry
+3. load control files for the run
+4. open runtime and session stores
+5. create the provider
+6. create transport-specific state only where needed
 
 The boundary is:
 
-- runtime context assembly defines the agent shape
-- HTTP defines protocol details and the reusable Hono app surface
+- runtime context assembly defines the runtime behavior
+- HTTP defines protocol details
 - clients stay replaceable

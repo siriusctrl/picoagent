@@ -12,7 +12,6 @@ const context: ToolContext = {
   cwd: '/workspace',
   roots: ['/workspace'],
   controlRoot: '/workspace',
-  agent: 'exec',
   signal: new AbortController().signal,
   fileView: {
     glob: async (pattern) =>
@@ -108,8 +107,8 @@ test('patch applies multi-file changes through the file-view', async () => {
   expect(result.locations).toHaveLength(2);
 });
 
-test('cmd executes against an executable target', async () => {
-  const result = await cmdTool.execute({ command: 'npm test' }, context);
+test('cmd executes against a cmd-enabled namespace', async () => {
+  const result = await cmdTool.execute({ command: 'npm test', cwd: '/workspace' }, context);
   expect(result.content).toMatch(/bash -lc npm test/);
   expect(result.display?.[0]?.type).toBe('terminal');
 });

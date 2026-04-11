@@ -2,7 +2,8 @@ import { afterEach, expect, test } from 'bun:test';
 import type { Filesystem, ReadTextFileOptions, SearchMatch } from '../../src/core/filesystem.ts';
 import { joinPath } from '../../src/fs/path.ts';
 import { createRuntimeContext } from '../../src/runtime/index.ts';
-import { buildSessionControlSnapshot } from '../../src/runtime/control-snapshot.ts';
+import { buildSessionControlSnapshot, computeControlVersion } from '../../src/runtime/control-snapshot.ts';
+import { LocalWorkspaceFileSystem } from '../../src/fs/workspace-fs.ts';
 import { ensureDir, makeTempDir, removeDir, writeTextFile } from '../helpers/fs.ts';
 
 class WorkspaceOnlyFilesystem implements Filesystem {
@@ -77,10 +78,31 @@ test('control snapshots keep host defaults and user memory when a workspace file
     );
 
     expect(snapshot.config.model).toBe('host-echo');
-    expect(snapshot.systemPrompts.ask).toMatch(/Remember host preferences\./);
-    expect(snapshot.systemPrompts.ask).toMatch(/reviewer: Code review/);
-    expect(snapshot.systemPrompts.ask).toMatch(/Workspace agent instructions\./);
+    expect(snapshot.systemPrompt).toMatch(/Remember host preferences\./);
+    expect(snapshot.systemPrompt).toMatch(/Available Tools/);
+    expect(snapshot.systemPrompt).toMatch(/Workspace agent instructions\./);
   } finally {
     process.env.HOME = originalHome;
   }
+});
+
+test('control version changes when a new control file appears after the initial snapshot', async () => {
+  const workspaceRoot = await makeTempDir('picoagent-control-workspace-');
+  tempDirs.add(workspaceRoot);
+
+  await ensureDir(joinPath(workspaceRoot, '.pico'));
+  await writeTextFile(joinPath(workspaceRoot, '.pico', 'config.jsonc'), '{ "provider": "echo", "model": "echo" }\n');
+
+  const registry = createRuntimeContext(workspaceRoot).registry;
+  const filesystem = new LocalWorkspaceFileSystem();
+
+  const initialSnapshot = await buildSessionControlSnapshot(workspaceRoot, registry, filesystem);
+
+  await writeTextFile(joinPath(workspaceRoot, 'AGENTS.md'), 'New workspace instructions.');
+
+  const nextVersion = await computeControlVersion(workspaceRoot, filesystem);
+  const nextSnapshot = await buildSessionControlSnapshot(workspaceRoot, registry, filesystem, nextVersion);
+
+  expect(nextVersion).not.toBe(initialSnapshot.controlVersion);
+  expect(nextSnapshot.systemPrompt).toMatch(/New workspace instructions\./);
 });

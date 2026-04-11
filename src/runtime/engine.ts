@@ -3,11 +3,12 @@ import type { ExecutionBackend } from '../core/execution.ts';
 import type { MutableFilesystem } from '../core/filesystem.ts';
 import { FileViewAccess } from '../core/file-view.ts';
 import { runAgentLoop } from '../core/loop.ts';
-import { AgentPresetId, AssistantMessage, Message } from '../core/types.ts';
+import { AssistantMessage, Message } from '../core/types.ts';
 import { Namespace, type NamespaceMount } from '../fs/namespace.ts';
 import { createProvider } from '../providers/index.ts';
 import { createRuntimeFileViewAccess } from './file-view-access.ts';
 import { RuntimeContext } from './index.ts';
+import { buildNamespacePromptSection } from './namespace-prompt.ts';
 import type {
   EmittedRunEvent,
   RunRecord,
@@ -48,6 +49,8 @@ export interface RuntimeEngineOptions {
 
 export class RuntimeEngine {
   private readonly namespace: Namespace;
+  private readonly pendingSessionRuns = new Set<string>();
+  private readonly controlSnapshots = new Map<string, SessionControlSnapshot>();
 
   constructor(private readonly options: RuntimeEngineOptions) {
     this.namespace = new Namespace([
@@ -56,22 +59,17 @@ export class RuntimeEngine {
         filesystem: options.filesystem,
         root: '.',
         writable: true,
-        executable: true,
+        supportsCmd: true,
       },
       ...(options.mounts ?? []),
     ]);
   }
 
-  async createSession(agent: AgentPresetId = 'ask'): Promise<SessionRecord> {
-    const control = await this.buildControlSnapshot(this.options.cwd);
+  async createSession(): Promise<SessionRecord> {
     const session: SessionRecord = {
       id: crypto.randomUUID(),
       cwd: this.options.cwd,
       roots: [this.options.cwd],
-      agent,
-      controlVersion: control.controlVersion,
-      controlConfig: control.config,
-      systemPrompts: control.systemPrompts,
       createdAt: nowIso(),
       runIds: [],
       messages: [],
@@ -80,32 +78,37 @@ export class RuntimeEngine {
     return this.options.sessionStore.createSession(session);
   }
 
-  async createStandaloneRun(prompt: string, agent: AgentPresetId): Promise<RunSnapshot> {
-    const control = await this.buildControlSnapshot(this.options.cwd);
-    const run = await this.createRun(prompt, agent);
+  async createStandaloneRun(prompt: string): Promise<RunSnapshot> {
+    const control = await this.getControlSnapshot(this.options.cwd);
+    const run = await this.createRun(prompt);
     this.startRun(run, control);
     return this.requireRunSnapshot(run.id);
   }
 
-  async createSessionRun(session: SessionRecord, prompt: string, agent?: AgentPresetId): Promise<RunSnapshot> {
-    if (session.activeRunId) {
+  async createSessionRun(session: SessionRecord, prompt: string): Promise<RunSnapshot> {
+    if (session.activeRunId || this.pendingSessionRuns.has(session.id)) {
       throw new RuntimeConflictError(`Session ${session.id} already has an active run`);
     }
 
-    const control = await this.ensureSessionControlSnapshot(session);
-    const latestSession = await this.options.sessionStore.getSession(session.id);
-    if (!latestSession) {
-      throw new Error(`Session ${session.id} not found`);
-    }
+    this.pendingSessionRuns.add(session.id);
+    try {
+      const latestSession = await this.options.sessionStore.getSession(session.id);
+      if (!latestSession) {
+        throw new Error(`Session ${session.id} not found`);
+      }
 
-    if (latestSession.activeRunId) {
-      throw new RuntimeConflictError(`Session ${session.id} already has an active run`);
-    }
+      if (latestSession.activeRunId) {
+        throw new RuntimeConflictError(`Session ${session.id} already has an active run`);
+      }
 
-    const run = await this.createRun(prompt, agent ?? latestSession.agent, latestSession.id);
-    await this.options.sessionStore.attachRunToSession(latestSession.id, run.id);
-    this.startRun(run, control, latestSession);
-    return this.requireRunSnapshot(run.id);
+      const control = await this.getControlSnapshot(latestSession.cwd);
+      const run = await this.createRun(prompt, latestSession.id);
+      await this.options.sessionStore.attachRunToSession(latestSession.id, run.id);
+      this.startRun(run, control, latestSession);
+      return this.requireRunSnapshot(run.id);
+    } finally {
+      this.pendingSessionRuns.delete(session.id);
+    }
   }
 
   private requireRunSnapshot(runId: string): RunSnapshot {
@@ -117,11 +120,10 @@ export class RuntimeEngine {
     return snapshot;
   }
 
-  private async createRun(prompt: string, agent: AgentPresetId, sessionId?: string): Promise<RunRecord> {
+  private async createRun(prompt: string, sessionId?: string): Promise<RunRecord> {
     const run = await this.options.runStore.createRun({
       id: crypto.randomUUID(),
       sessionId,
-      agent,
       prompt,
       status: 'running',
       output: '',
@@ -136,38 +138,49 @@ export class RuntimeEngine {
   }
 
   private async buildControlSnapshot(workspaceRoot: string, controlVersion?: string): Promise<SessionControlSnapshot> {
-    return buildSessionControlSnapshot(
+    const snapshot = await buildSessionControlSnapshot(
       workspaceRoot,
       this.options.runtimeContext.registry,
       this.namespace.mount('workspace').filesystem,
       controlVersion,
     );
+    this.controlSnapshots.set(workspaceRoot, snapshot);
+    return snapshot;
   }
 
-  private async ensureSessionControlSnapshot(session: SessionRecord): Promise<SessionControlSnapshot> {
-    const latestVersion = await computeControlVersion(session.cwd, this.namespace.mount('workspace').filesystem);
-    if (latestVersion === session.controlVersion) {
-      return {
-        workspaceRoot: session.cwd,
-        controlVersion: session.controlVersion,
-        config: session.controlConfig,
-        systemPrompts: session.systemPrompts,
-      };
+  private async getControlSnapshot(workspaceRoot: string): Promise<SessionControlSnapshot> {
+    const cached = this.controlSnapshots.get(workspaceRoot);
+    if (!cached) {
+      return this.buildControlSnapshot(workspaceRoot);
     }
 
-    const refreshed = await this.buildControlSnapshot(session.cwd, latestVersion);
-    await this.options.sessionStore.refreshSessionControl(session.id, {
-      controlVersion: refreshed.controlVersion,
-      controlConfig: refreshed.config,
-      systemPrompts: refreshed.systemPrompts,
-    });
-    return refreshed;
+    const latestVersion = await computeControlVersion(
+      workspaceRoot,
+      this.namespace.mount('workspace').filesystem,
+    );
+    if (latestVersion === cached.controlVersion) {
+      return cached;
+    }
+
+    return this.buildControlSnapshot(workspaceRoot, latestVersion);
   }
 
   private startRun(run: RunRecord, control: SessionControlSnapshot, session?: SessionRecord): void {
     void this.executeRun(run, control, session).catch(() => {
       // Run failures are captured in the run state and emitted as events.
     });
+  }
+
+  private runtimePromptSection(session?: SessionRecord): string {
+    const mounts: Array<Pick<NamespaceMount, 'name' | 'writable' | 'supportsCmd'>> = [
+      ...this.namespace.listMounts(),
+      ...(session ? [{
+        name: 'session',
+        writable: false,
+        supportsCmd: false,
+      }] : []),
+    ];
+    return buildNamespacePromptSection(mounts);
   }
 
   private async emit(runId: string, event: EmittedRunEvent): Promise<void> {
@@ -213,7 +226,6 @@ export class RuntimeEngine {
       type: 'run_started',
       runId: run.id,
       sessionId: run.sessionId,
-      agent: run.agent,
       prompt: run.prompt,
     });
 
@@ -221,8 +233,8 @@ export class RuntimeEngine {
       ? [...session.messages, { role: 'user', content: run.prompt }]
       : [{ role: 'user', content: run.prompt }];
 
-    const tools = this.options.runtimeContext.registry.forAgent(run.agent);
-    const systemPrompt = control.systemPrompts[run.agent];
+    const tools = this.options.runtimeContext.registry.all();
+    const systemPrompt = `${control.systemPrompt}\n\n${this.runtimePromptSection(session)}`;
     const provider = createProvider(control.config);
 
     try {
@@ -236,7 +248,6 @@ export class RuntimeEngine {
           cwd: session?.cwd ?? this.options.cwd,
           roots: session?.roots ?? [this.options.cwd],
           controlRoot: control.workspaceRoot,
-          agent: run.agent,
           signal: controller.signal,
           fileView: this.fileView(run.id, session?.cwd ?? this.options.cwd, session?.roots ?? [this.options.cwd], controller.signal, session?.id),
         },

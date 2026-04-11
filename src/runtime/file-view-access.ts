@@ -104,6 +104,7 @@ class RuntimeFileView {
         name: 'session',
         filesystem: new SessionFilesystem(this.options.sessionStore, sessionId),
         root: '.',
+        supportsCmd: false,
       },
     ]);
   }
@@ -147,6 +148,14 @@ class RuntimeFileView {
     }
 
     return pathValue;
+  }
+
+  private resolveCommandPath(namespace: Namespace, mountName: string, relativePath: string): string {
+    if (mountName === 'workspace') {
+      return resolveSessionPath(relativePath, this.options.cwd, this.options.roots);
+    }
+
+    return namespace.resolvePath(mountName, relativePath);
   }
 
   private async glob(pattern: NamespaceLikePath, limit = 200): Promise<string[]> {
@@ -317,15 +326,19 @@ class RuntimeFileView {
   }
 
   private cmd(request: { command: string; args?: string[]; cwd?: NamespaceLikePath; outputByteLimit?: number }) {
-    const commandPath = request.cwd ?? '/workspace';
-    const resolved = this.resolveNamespacePath(commandPath);
+    if (!request.cwd) {
+      throw this.options.validationError('cmd requires an explicit cwd namespace path');
+    }
+
     const namespace = this.getActiveNamespace(this.options.sessionId);
+    const commandPath = request.cwd;
+    const resolved = this.resolveNamespacePath(commandPath);
     const targetMount = namespace.mount(resolved.mountName);
-    if (targetMount.executable === false) {
+    if (!targetMount.supportsCmd) {
       throw this.options.validationError('cmd is not enabled for this namespace');
     }
 
-    const commandCwd = this.resolveFilePath(resolved.mountName, resolved.relativePath);
+    const commandCwd = this.resolveCommandPath(namespace, resolved.mountName, resolved.relativePath);
     return this.options.executionBackend.run({
       runId: this.options.runId,
       command: request.command,

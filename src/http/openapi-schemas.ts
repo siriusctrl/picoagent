@@ -1,12 +1,6 @@
 import { z } from '@hono/zod-openapi';
 
-const agentError = (issue: { input: unknown }) =>
-  issue.input === undefined ? 'agent is required' : `Unsupported agent: ${String(issue.input)}`;
-
 const nonNegativeIntegerMessage = 'keepLastMessages must be a non-negative integer';
-
-export const AgentSchema = z.enum(['ask', 'exec'], { error: agentError });
-export const OptionalAgentSchema = AgentSchema.optional();
 
 const PromptSchema = z.string({ error: 'prompt is required' }).trim().min(1, 'prompt is required');
 
@@ -27,7 +21,6 @@ export const ControlConfigSchema = z.object({
 export const RunSnapshotSchema = z.object({
   id: z.string(),
   sessionId: z.string().optional(),
-  agent: AgentSchema,
   status: RunStatusSchema,
   prompt: z.string(),
   output: z.string(),
@@ -39,10 +32,7 @@ export const RunSnapshotSchema = z.object({
 
 export const SessionSummarySchema = z.object({
   id: z.string(),
-  agent: AgentSchema,
   cwd: z.string(),
-  controlVersion: z.string(),
-  controlConfig: ControlConfigSchema,
   checkpointCount: z.number(),
   createdAt: z.string(),
 });
@@ -50,9 +40,6 @@ export const SessionSummarySchema = z.object({
 export const SessionSnapshotSchema = z.object({
   id: z.string(),
   cwd: z.string(),
-  agent: AgentSchema,
-  controlVersion: z.string(),
-  controlConfig: ControlConfigSchema,
   createdAt: z.string(),
   activeRunId: z.string().optional(),
   activeCheckpointId: z.string().optional(),
@@ -68,16 +55,9 @@ export const RunEventsSchema = z.object({
 
 export const CreateRunRequestSchema = z.object({
   prompt: PromptSchema,
-  agent: OptionalAgentSchema,
 });
 
-export const CreateSessionRequestSchema = z.object({
-  agent: OptionalAgentSchema,
-});
-
-export const SetSessionAgentRequestSchema = z.object({
-  agent: AgentSchema,
-});
+export const CreateSessionRequestSchema = z.object({});
 
 export const CompactSessionRequestSchema = z.object({
   keepLastMessages: z

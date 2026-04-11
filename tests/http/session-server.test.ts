@@ -46,7 +46,7 @@ test('session server returns 400 for malformed JSON on optional-body routes', as
   const validCreateResponse = await fetch(`${baseUrl}/sessions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: 'ask' }),
+    body: JSON.stringify({}),
   });
   expect(validCreateResponse.status).toBe(201);
   const session = (await validCreateResponse.json()) as { id: string };
@@ -60,7 +60,7 @@ test('session server returns 400 for malformed JSON on optional-body routes', as
   expect(await compactResponse.json()).toEqual({ error: 'Malformed JSON in request body' });
 });
 
-test('session server returns 400 for malformed JSON on required-body routes', async () => {
+test('session server returns 400 for malformed JSON on required-body store routes', async () => {
   const sessionRoot = await makeTempDir('picoagent-session-server-');
   runtimeRoots.add(sessionRoot);
 
@@ -76,18 +76,9 @@ test('session server returns 400 for malformed JSON on required-body routes', as
   const createResponse = await fetch(`${baseUrl}/sessions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: 'ask' }),
+    body: JSON.stringify({}),
   });
   expect(createResponse.status).toBe(201);
-  const session = (await createResponse.json()) as { id: string };
-
-  const setAgentResponse = await fetch(`${baseUrl}/sessions/${session.id}/agent`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: '{"agent":',
-  });
-  expect(setAgentResponse.status).toBe(400);
-  expect(await setAgentResponse.json()).toEqual({ error: 'Malformed JSON in request body' });
 
   const storeResponse = await fetch(`${baseUrl}/_store/sessions`, {
     method: 'POST',
@@ -141,7 +132,7 @@ test('runtime creates sessions through the bound external session service', asyn
   const sessionCreateResponse = await fetch(`${runtimeBaseUrl}/sessions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ agent: 'ask' }),
+    body: JSON.stringify({}),
   });
   expect(sessionCreateResponse.status).toBe(201);
   const createdSession = (await sessionCreateResponse.json()) as { id: string };

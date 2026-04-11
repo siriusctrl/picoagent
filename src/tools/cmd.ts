@@ -8,13 +8,13 @@ const CmdParams = z.object({
   command: z.string().min(1).describe('Shell command to run with bash -lc.'),
   cwd: z
     .string()
-    .optional()
-    .describe('Optional namespace path working directory for the command, e.g. /workspace or /workspace/src.'),
+    .min(1)
+    .describe('Required namespace path working directory for the command, e.g. /workspace, /sandbox, or /workspace/src.'),
 });
 
 export const cmdTool: Tool<typeof CmdParams> = {
   name: 'cmd',
-  description: 'Run a shell command in the workspace namespace.',
+  description: 'Run a shell command in a namespace path that supports cmd.',
   kind: 'execute',
   parameters: CmdParams,
   title: (args) => `Cmd ${args.command}`,
@@ -34,7 +34,7 @@ export const cmdTool: Tool<typeof CmdParams> = {
     const result = await context.fileView.cmd({
       command: 'bash',
       args: ['-lc', args.command],
-      cwd: (args.cwd ?? '/workspace') as NamespaceLikePath,
+      cwd: args.cwd as NamespaceLikePath,
       outputByteLimit: 32000,
     });
 

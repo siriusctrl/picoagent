@@ -1,7 +1,6 @@
 import React, { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Box, render, Text, useApp, useStdin, useWindowSize } from 'ink';
 import { TuiController, UiEvent } from './controller.ts';
-import { AgentPresetId } from '../../core/types.ts';
 import { clampScrollOffset, getHistoryWindow, preserveScrollOffsetOnAppend } from './history.ts';
 import { estimateEntryHeight } from './layout.ts';
 import {
@@ -27,10 +26,6 @@ type Entry =
 const LABEL_WIDTH = 8;
 const MIN_HISTORY_ROWS = 6;
 const SHOW_INPUT_DEBUG = process.env.PICO_TUI_DEBUG_INPUT === '1';
-
-function nextAgent(agent: AgentPresetId): AgentPresetId {
-  return agent === 'ask' ? 'exec' : 'ask';
-}
 
 function toolOutputText(rawOutput: unknown, fallback?: string): string | undefined {
   if (rawOutput && typeof rawOutput === 'object' && 'output' in rawOutput && typeof rawOutput.output === 'string') {
@@ -134,7 +129,6 @@ function App() {
   const [controller, setController] = useState<InstanceType<typeof TuiController> | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [input, setInput] = useState({ value: '', cursor: 0 });
-  const [agent, setAgent] = useState<AgentPresetId>('ask');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('Starting HTTP session...');
   const [debugInput, setDebugInput] = useState<string>('');
@@ -155,9 +149,6 @@ function App() {
     switch (event.type) {
       case 'status':
         setStatus(event.text);
-        return;
-      case 'agent':
-        setAgent(event.agent);
         return;
       case 'assistant_delta':
         setEntries((current) => {
@@ -294,11 +285,11 @@ function App() {
     setInput(inputRef.current);
     busyRef.current = true;
     setBusy(true);
-    setStatus(`Running with ${agent} agent...`);
+    setStatus('Running...');
 
     try {
       await controller.sendPrompt(text);
-      setStatus(`Ready with ${agent} agent`);
+      setStatus('Ready');
     } catch (error: unknown) {
       handleEvent({
         type: 'error',
@@ -378,17 +369,6 @@ function App() {
 
     if (action.type === 'scroll_down') {
       setScrollOffset((current) => clampScrollOffset(historyHeights, viewportSize, current - action.amount));
-      return;
-    }
-
-    if (action.type === 'toggle_agent' && controller && !busyRef.current) {
-      const targetAgent = nextAgent(agent);
-      void controller.setAgent(targetAgent).catch((error: unknown) => {
-        handleEvent({
-          type: 'error',
-          text: error instanceof Error ? error.message : String(error),
-        });
-      });
       return;
     }
 
@@ -479,14 +459,14 @@ function App() {
     <Box flexDirection="column" paddingX={1}>
       <Box justifyContent="space-between">
         <Text color="cyanBright">picoagent</Text>
-        <Text color={agent === 'ask' ? 'yellowBright' : 'greenBright'}>{agent}</Text>
+        <Text color="gray">runtime</Text>
       </Box>
       <Box justifyContent="space-between">
         <Text color="gray">{status}</Text>
         <Text color="gray">{scrollMeta}</Text>
       </Box>
       {SHOW_INPUT_DEBUG ? <Text color="magentaBright">input {debugInput || '(none)'}</Text> : null}
-      <Text color="gray">Enter send, wheel or PgUp/PgDn/Home/End scroll, Up/Down prompt history, Tab agent, Ctrl+C quit</Text>
+      <Text color="gray">Enter send, wheel or PgUp/PgDn/Home/End scroll, Up/Down prompt history, Ctrl+C quit</Text>
       <Box marginTop={1}>
         <Text color="gray">{divider}</Text>
       </Box>

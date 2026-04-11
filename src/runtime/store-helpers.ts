@@ -12,7 +12,6 @@ export function projectRunSnapshot(run: RunRecord): RunSnapshot {
   return {
     id: run.id,
     sessionId: run.sessionId,
-    agent: run.agent,
     status: run.status,
     prompt: run.prompt,
     output: run.output,
@@ -30,15 +29,6 @@ export function projectSessionSnapshot(
   return {
     id: session.id,
     cwd: session.cwd,
-    agent: session.agent,
-    controlVersion: session.controlVersion,
-    controlConfig: {
-      provider: session.controlConfig.provider,
-      model: session.controlConfig.model,
-      maxTokens: session.controlConfig.maxTokens,
-      contextWindow: session.controlConfig.contextWindow,
-      baseURL: session.controlConfig.baseURL,
-    },
     createdAt: session.createdAt,
     activeRunId: session.activeRunId,
     activeCheckpointId: session.activeCheckpointId,
@@ -208,7 +198,6 @@ function formatRun(run: RunRecord): string {
   return [
     `# Run ${run.id}`,
     `sessionId: ${run.sessionId ?? 'none'}`,
-    `agent: ${run.agent}`,
     `status: ${run.status}`,
     `createdAt: ${run.createdAt}`,
     `startedAt: ${run.startedAt ?? 'n/a'}`,

@@ -40,7 +40,7 @@ test('loadRuntimeMounts resolves local directory sources into rooted mounts', as
   const mount = requireValue(mounts[0], 'expected local mount');
   expect(mount.name).toBe('local@docs');
   expect(mount.writable).toBeTruthy();
-  expect(mount.executable).toBeFalsy();
+  expect(mount.supportsCmd).toBeFalsy();
   expect(await mount.filesystem.readTextFile('local.txt')).toBe('local mount data');
 });
 
@@ -66,7 +66,7 @@ test('loadRuntimeMounts resolves remote filespace urls into http-backed mounts',
   const mount = requireValue(mounts[0], 'expected remote mount');
   expect(mount.name).toBe('remote@build');
   expect(mount.writable).toBeTruthy();
-  expect(mount.executable).toBeFalsy();
+  expect(mount.supportsCmd).toBeFalsy();
   expect(await mount.filesystem.readTextFile('remote.txt')).toBe('remote mount data');
 });
 

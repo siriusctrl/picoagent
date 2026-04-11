@@ -42,7 +42,7 @@ test('renderPrompt marks the cursor position for styled rendering', () => {
 
 test('parseTerminalInput maps keyboard editing and viewport keys to terminal actions', () => {
   expect(
-    parseTerminalInput('ab\x1b[A\x1b[B\x1b[C\x1b[D\x01\x05\x15\x0b\x1b[5~\x1b[6~\x1b[H\x1b[F\t\r').actions,
+    parseTerminalInput('ab\x1b[A\x1b[B\x1b[C\x1b[D\x01\x05\x15\x0b\x1b[5~\x1b[6~\x1b[H\x1b[F\r').actions,
   ).toEqual([
     { type: 'insert_text', text: 'ab' },
     { type: 'prompt_history_up' },
@@ -57,7 +57,6 @@ test('parseTerminalInput maps keyboard editing and viewport keys to terminal act
     { type: 'history_page_down' },
     { type: 'history_home' },
     { type: 'history_end' },
-    { type: 'toggle_agent' },
     { type: 'submit' },
   ]);
 });

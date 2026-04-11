@@ -38,8 +38,6 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 
-export type AgentPresetId = 'ask' | 'exec';
-
 export type ToolKind = 'read' | 'edit' | 'search' | 'execute' | 'other';
 
 export interface ToolLocation {
@@ -72,7 +70,6 @@ export interface ToolContext {
   cwd: string;
   roots: string[];
   controlRoot: string;
-  agent: AgentPresetId;
   signal: AbortSignal;
   fileView: FileViewAccess;
 }

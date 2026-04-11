@@ -1,7 +1,6 @@
 import { createRuntimeContext } from './index.ts';
 import type { ExecutionBackend } from '../core/execution.ts';
 import type { MutableFilesystem } from '../core/filesystem.ts';
-import type { AgentPresetId } from '../core/types.ts';
 import type { NamespaceMount } from '../fs/namespace.ts';
 import { joinPath } from '../fs/path.ts';
 import { LocalWorkspaceFileSystem } from '../fs/workspace-fs.ts';
@@ -61,8 +60,8 @@ export class RuntimeService {
     return new RuntimeService(options, store);
   }
 
-  async createSession(agent: AgentPresetId = 'ask'): Promise<SessionRecord> {
-    return this.engine.createSession(agent);
+  async createSession(): Promise<SessionRecord> {
+    return this.engine.createSession();
   }
 
   async getSession(id: string): Promise<SessionRecord> {
@@ -92,22 +91,12 @@ export class RuntimeService {
     return session;
   }
 
-  async createStandaloneRun(prompt: string, agent: AgentPresetId): Promise<RunSnapshot> {
-    return this.engine.createStandaloneRun(prompt, agent);
+  async createStandaloneRun(prompt: string): Promise<RunSnapshot> {
+    return this.engine.createStandaloneRun(prompt);
   }
 
-  async createSessionRun(sessionId: string, prompt: string, agent?: AgentPresetId): Promise<RunSnapshot> {
-    return this.engine.createSessionRun(await this.getSession(sessionId), prompt, agent);
-  }
-
-  async setSessionAgent(sessionId: string, agent: AgentPresetId): Promise<SessionSnapshot> {
-    const session = await this.getSession(sessionId);
-    if (session.activeRunId) {
-      throw new RuntimeConflictError(`Session ${sessionId} already has an active run`);
-    }
-
-    await this.sessionStore.setSessionAgent(sessionId, agent);
-    return this.getSessionSnapshot(sessionId);
+  async createSessionRun(sessionId: string, prompt: string): Promise<RunSnapshot> {
+    return this.engine.createSessionRun(await this.getSession(sessionId), prompt);
   }
 
   getRunEvents(runId: string): { runId: string; status: RunStatus; events: RunEvent[] } {

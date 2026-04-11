@@ -80,7 +80,7 @@ export async function loadRuntimeMounts(mounts: RuntimeMountSpec[], cwd: string)
         filesystem,
         root: '.',
         writable: info.writable,
-        executable: false,
+        supportsCmd: false,
       });
       continue;
     }
@@ -92,7 +92,7 @@ export async function loadRuntimeMounts(mounts: RuntimeMountSpec[], cwd: string)
       filesystem: new RootedFilesystem(new LocalWorkspaceFileSystem(), root),
       root: '.',
       writable: true,
-      executable: false,
+      supportsCmd: false,
     });
   }
 

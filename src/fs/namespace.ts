@@ -6,7 +6,7 @@ export interface NamespaceMount {
   filesystem: Filesystem;
   root: string;
   writable?: boolean;
-  executable?: boolean;
+  supportsCmd?: boolean;
 }
 
 function normalizeMountName(name: string): string {

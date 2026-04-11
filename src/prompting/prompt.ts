@@ -1,4 +1,4 @@
-import { AgentPresetId, Tool } from '../core/types.ts';
+import { Tool } from '../core/types.ts';
 import { DocMeta } from './frontmatter.ts';
 
 export interface ControlPromptSurface {
@@ -7,7 +7,6 @@ export interface ControlPromptSurface {
   agents: string | null;
   memories: string[];
   skills: DocMeta[];
-  agentsDocs: DocMeta[];
 }
 
 function buildSummary(title: string, docs: DocMeta[]): string | null {
@@ -22,31 +21,11 @@ function buildSummary(title: string, docs: DocMeta[]): string | null {
   return lines.length > 0 ? `## ${title}\n${lines.join('\n')}` : null;
 }
 
-function buildAgentContract(agent: AgentPresetId): string {
-  if (agent === 'ask') {
-    return [
-      '## Active Agent',
-      'You are running the ask agent preset.',
-      '- Inspect the workspace before answering.',
-      '- Use read and search tools to ground your answer.',
-      '- Do not claim to have changed files or run commands, because those tools are unavailable in this preset.',
-    ].join('\n');
-  }
-
-  return [
-    '## Active Agent',
-    'You are running the exec agent preset.',
-    '- Read first when the codebase is unclear.',
-    '- Make concrete edits and run commands when the user asks for action.',
-    '- Verify meaningful changes with the cheapest relevant command.',
-  ].join('\n');
-}
-
 function buildToolSummary(tools: Tool[]): string {
   return ['## Available Tools', ...tools.map((tool) => `- ${tool.name}: ${tool.description}`)].join('\n');
 }
 
-export function buildSystemPrompt(surface: ControlPromptSurface, agent: AgentPresetId, tools: Tool[]): string {
+export function buildSystemPrompt(surface: ControlPromptSurface, tools: Tool[]): string {
   const sections: string[] = [];
   sections.push(surface.soul ?? 'You are a pragmatic coding agent.');
 
@@ -65,12 +44,6 @@ export function buildSystemPrompt(surface: ControlPromptSurface, agent: AgentPre
     sections.push(skills);
   }
 
-  const agents = buildSummary('Available Agents', surface.agentsDocs);
-  if (agents) {
-    sections.push(agents);
-  }
-
-  sections.push(buildAgentContract(agent));
   sections.push(buildToolSummary(tools));
 
   return sections.join('\n\n');

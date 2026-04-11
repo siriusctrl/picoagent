@@ -2,8 +2,8 @@
 
 1. Keep `session`, `runtime`, `filesystem`, and `execution backend` boundaries explicit.
 2. Keep one general tool registry for the whole app.
-3. Let `ask` and `exec` equip tool subsets instead of changing the architecture.
-4. Let sessions carry a default agent preset while each run records the actual preset it used.
+3. Let control files shape runtime behavior instead of built-in agent presets.
+4. Keep sessions as context storage, not runtime policy containers.
 5. Keep provider SDKs and transport details out of `src/core`.
 6. Keep HTTP thin over the shared runtime.
 7. Validate external input at the boundary.

@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { AgentPresetId } from '../core/types.ts';
 import {
   SessionConflictError,
   SessionNotFoundError,
@@ -45,18 +44,6 @@ function errorStatus(error: unknown): 400 | 404 | 409 | 500 {
   return 500;
 }
 
-function parseAgent(value: unknown): AgentPresetId | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (value === 'ask' || value === 'exec') {
-    return value;
-  }
-
-  throw new SessionValidationError(`Unsupported agent: ${String(value)}`);
-}
-
 export async function createSessionApp(options: SessionServerOptions = {}) {
   const service = await SessionService.create(options);
   const app = new Hono();
@@ -66,8 +53,8 @@ export async function createSessionApp(options: SessionServerOptions = {}) {
   });
 
   app.post('/sessions', async (c) => {
-    const body = (await parseJsonRequest(c.req.raw, true)) as { agent?: unknown };
-    const session = await service.createSession(parseAgent(body.agent) ?? 'ask');
+    await parseJsonRequest(c.req.raw, true);
+    const session = await service.createSession();
     return c.json(projectSessionSummary(session), 201);
   });
 
@@ -94,15 +81,6 @@ export async function createSessionApp(options: SessionServerOptions = {}) {
         ? 'application/x-ndjson; charset=utf-8'
         : 'text/plain; charset=utf-8',
     });
-  });
-
-  app.post('/sessions/:sessionId/agent', async (c) => {
-    const body = (await parseJsonRequest(c.req.raw)) as { agent?: unknown };
-    const agent = parseAgent(body.agent);
-    if (!agent) {
-      throw new SessionValidationError('agent is required');
-    }
-    return c.json(await service.setSessionAgent(c.req.param('sessionId'), agent), 200);
   });
 
   app.post('/sessions/:sessionId/compact', async (c) => {
@@ -139,15 +117,6 @@ export async function createSessionApp(options: SessionServerOptions = {}) {
       await parseJsonRequest(c.req.raw) as Parameters<SessionService['appendRunEvent']>[1],
     );
     return c.json({ ok: true }, 201);
-  });
-
-  app.post('/_store/sessions/:sessionId/control', async (c) => {
-    await service.refreshSessionControl(c.req.param('sessionId'), await parseJsonRequest(c.req.raw) as {
-      controlVersion: SessionRecord['controlVersion'];
-      controlConfig: SessionRecord['controlConfig'];
-      systemPrompts: SessionRecord['systemPrompts'];
-    });
-    return c.json({ ok: true }, 200);
   });
 
   app.post('/_store/sessions/:sessionId/attach-run', async (c) => {

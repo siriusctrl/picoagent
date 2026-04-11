@@ -15,7 +15,6 @@ import {
   SessionResourcesQuerySchema,
   SessionSnapshotSchema,
   SessionSummarySchema,
-  SetSessionAgentRequestSchema,
   jsonContent,
   plainTextContent,
   textEventStreamContent,
@@ -143,7 +142,7 @@ export const createSessionRunRoute = createRoute({
   path: '/sessions/:sessionId/runs',
   summary: 'Create one run inside a session',
   description:
-    'Starts an async run that appends to the session context after successful completion. When agent is omitted, the run inherits the session default agent preset. The server refreshes the session control snapshot automatically if the bound workspace changed.',
+    'Starts an async run that appends to the session context after successful completion. The runtime re-reads the workspace control files for each run.',
   request: {
     params: SessionIdParamsSchema,
     body: {
@@ -214,37 +213,6 @@ export const readSessionResourceRoute = createRoute({
     },
     404: {
       description: 'Unknown session or resource path',
-      content: jsonContent(ErrorSchema),
-    },
-  },
-});
-
-export const setSessionAgentRoute = createRoute({
-  method: 'post',
-  path: '/sessions/:sessionId/agent',
-  summary: 'Update the default agent preset for a session',
-  request: {
-    params: SessionIdParamsSchema,
-    body: {
-      required: true,
-      content: jsonContent(SetSessionAgentRequestSchema),
-    },
-  },
-  responses: {
-    200: {
-      description: 'Updated session snapshot',
-      content: jsonContent(SessionSnapshotSchema),
-    },
-    400: {
-      description: 'Invalid request',
-      content: jsonContent(ErrorSchema),
-    },
-    404: {
-      description: 'Unknown session',
-      content: jsonContent(ErrorSchema),
-    },
-    409: {
-      description: 'Session already running',
       content: jsonContent(ErrorSchema),
     },
   },
