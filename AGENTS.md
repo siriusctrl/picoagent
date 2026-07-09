@@ -1,113 +1,83 @@
-Principles for agents contributing to this repository.
+# AGENTS.md
 
-## Core Principles
+This file is the operating map for agents working in this repo. Keep detailed
+source-area guidance in `docs/source-map.md`, durable principles in
+`docs/golden-principles.md`, and design rationale in `docs/design-choices.md`.
 
-1. **KISS**
-   - Prefer the simplest solution that works.
-   - Avoid premature abstraction.
-   - If a function is enough, do not create a class.
-   - If one clear module is enough, do not invent a framework.
+## Source Map
 
-2. **No speculative forward-compatibility**
-   - Do not add extension points, plugin systems, compatibility shims, or worker orchestration unless explicitly requested.
-   - Do not reintroduce frontend-agent / backend-agent splitting.
-   - Build for the current design, not hypothetical future variants.
+- `src/core/`: loop, execution, provider contract, tool registry, filesystem
+  view, hooks, and shared types.
+- `src/http/`: Bun/Hono HTTP server, sessions, filespaces, OpenAPI routes and
+  schemas.
+- `src/clients/cli/`: local CLI entrypoint and args.
+- `src/clients/tui/`: terminal UI controller, input, layout, and history.
+- `src/providers/`: model SDK adapters.
+- `src/tools/`: model-facing tools.
+- `src/config/`: config loading and provider env resolution.
+- `src/fs/`: filesystem traversal, rooted/workspace/http filesystems, path and
+  namespace helpers.
+- `src/prompting/`: prompt framing and frontmatter scanning.
+- `src/runtime/`: runtime context assembly, session stores, execution backend,
+  and control snapshots.
+- `docs/source-map.md`: detailed source-area routing.
+- `docs/architecture.md`: runtime boundaries.
+- `docs/runtime-model.md`: session, agent, and tool access behavior.
+- `docs/entrypoints.md`: HTTP, CLI, and local UI entrypoints.
 
-3. **Prefer strongest end-state solutions**
-   - When the right design is clear and requested, implement the coherent end state directly.
-   - Do not intentionally land transitional layers or partial architectures as stepping stones.
+## Engineering Invariants
 
-4. **Keep transports thin**
-   - Treat `src/core` as the runtime boundary.
-   - Keep `src/core` transport-agnostic.
-   - Keep HTTP-specific behavior in `src/http` and UI-specific behavior in `src/clients`.
-
-5. **Conventional Commits with real bodies**
-   - Use Conventional Commits for every commit.
-   - Do not write title-only commits.
-   - In the commit body, explain both:
-     - what changed
-     - why the change was made
-
-## Navigation
-
-Use docs to understand constraints first. Use source directories only after you know which boundary matters.
-
-Keep this file coarse-grained. Do not try to mirror every subdirectory here. For source-area guidance, read `docs/source-map.md`.
-
-### Read these docs first
-
-- `README.md`
-- `docs/architecture.md`
-- `docs/design-choices.md`
-- `docs/golden-principles.md`
-
-### Read these docs when the task matches
-
-- Session behavior, agent behavior, or tool access:
-  - Read `docs/runtime-model.md`
-- HTTP or local UI entrypoints:
-  - Read `docs/entrypoints.md`
-- Architecture or boundary changes:
-  - Read `docs/architecture.md`
-  - Read `docs/design-choices.md`
-
-## Top-level Source Map
-
-- `src/core` - loop, provider contract, tool registry, shared types
-- `src/http` - async HTTP server for runs, sessions, and events
-- `src/clients` - local CLI and TUI clients
-- `src/providers` - model SDK adapters
-- `src/tools` - LLM-facing tools
-- `src/config` - config loading and provider env resolution
-- `src/fs` - filesystem traversal and search helpers
-- `src/prompting` - prompt framing and frontmatter scanning
-- `src/runtime` - runtime context assembly and session control snapshots
-- `tests` - focused contract tests
+- TypeScript everywhere.
+- Treat `src/core/` as the runtime boundary.
+- Keep `src/core/` transport-agnostic.
+- Keep HTTP-specific behavior in `src/http/` and UI-specific behavior in
+  `src/clients/`.
+- Keep provider SDK imports out of `src/core/`.
+- Keep tools focused: one tool, one capability.
+- Validate external, model, and tool input at boundaries.
+- Do not reintroduce frontend-agent/backend-agent splitting.
+- Do not add plugin systems, compatibility shims, worker orchestration, or
+  speculative extension points unless explicitly requested.
+- Prefer the strongest coherent end state over transitional layers when the
+  requested design is clear.
 
 ## Task Routing
 
-- For loop, tool, or provider-contract work, inspect `src/core` first.
-- For HTTP behavior, inspect `src/http`.
-- For terminal UI changes, inspect `src/clients/tui`.
-- For tool behavior, inspect `src/tools`.
-- For shared helpers, inspect `src/config`, `src/fs`, and `src/prompting`.
-- For agent wiring or runtime context assembly, inspect `src/runtime/index.ts` and `src/core/tool-registry.ts`.
+- Unknown task: read `README.md`, `docs/source-map.md`, and the matching doc
+  below.
+- Loop, tool, or provider-contract work: inspect `src/core/`.
+- HTTP behavior: inspect `src/http/` and `docs/entrypoints.md`.
+- Terminal UI: inspect `src/clients/tui/`.
+- Tool behavior: inspect `src/tools/`.
+- Runtime context or session control: inspect `src/runtime/` and
+  `docs/runtime-model.md`.
+- Architecture or boundary changes: read `docs/architecture.md` and
+  `docs/design-choices.md`.
 
-## Engineering Rules
+## Verification
 
-- TypeScript everywhere.
-- Validate external, model, and tool input at boundaries.
-- Keep provider SDK imports out of `src/core`.
-- Keep tools focused: one tool, one capability.
-- Update docs when architecture, runtime behavior, or entrypoints change.
-- When a design discussion converges on a durable choice, record it promptly in `docs/design-choices.md`.
-- Prefer keeping detailed source-area guidance in `docs/source-map.md`, not local `AGENTS.md` files under `src/`.
+- Run `bun run build`.
+- Run `bun run test`.
+- Run `bun run typecheck`.
+- For TUI behavior, manually run `bun run dev:tui`.
 
-## Verification Requirements
+## Docs Update Rules
 
-- Minimum bar for meaningful changes:
-  - `bun run build`
-  - `bun run test`
-  - `bun run typecheck`
-- If you change TUI behavior, manually run `bun run dev:tui`.
-
-## Collaboration Preferences
-
-- Keep implementations small and legible.
-- Optimize for code that future agents can read in one pass.
-- Hold the architectural bar requested by the user; do not quietly retreat to a weaker design for convenience.
-- When a large refactor can be split into clear, low-conflict chunks, prefer using multiple agents.
-- Keep one main agent responsible for decomposition, integration, verification, and final quality decisions.
+- Runtime behavior, architecture, or entrypoints: update the matching file in
+  `docs/`.
+- Durable design choice: record it in `docs/design-choices.md`.
+- Source-area routing changes: update `docs/source-map.md`.
+- User-visible behavior or setup: update `README.md`.
 
 ## Agent Strategy Defaults
 
-Use these as workflow defaults for large refactors, not as a reason to introduce multi-agent runtime architecture into the product.
+- Use subagents only when ownership can be split cleanly by module, boundary, or
+  file set.
+- Keep the main agent responsible for architecture decisions, integration,
+  verification, and final merge quality.
 
-- Prefer forking subagents only when ownership can be split cleanly by module, boundary, or file set.
-- Do not delegate the immediate critical-path blocker if the main agent needs that answer before it can proceed.
-- Give each subagent an explicit, bounded write scope and a concrete outcome to return.
-- Avoid parallel agent work when tasks are tightly coupled or likely to cause overlapping edits.
-- For explicit, bounded coding tasks, prefer Codex subagents running `gpt-5.3-codex-spark`.
-- For architectural judgment, tricky debugging, broad reasoning, or ambiguous review, prefer Codex subagents running `gpt-5.4` with `high` reasoning.
-- Keep the main agent responsible for architecture decisions, merge-quality judgment, end-to-end verification, and final integration.
+## Commit Rules
+
+- Use Conventional Commits with a body.
+- Keep changes small and legible.
+- Do not revert unrelated user changes.
