@@ -1,168 +1,161 @@
 # Architecture
 
-Read with:
+Picoagent is a headless Rust agent harness for local and cloud jobs. The launch
+architecture favors a small, inspectable execution core over a UI or platform
+framework.
 
-- `README.md`
-- `docs/design-choices.md`
-- `docs/golden-principles.md`
+## Runtime Flow
 
-## Goal
+```text
+job/CLI
+  -> AgentRunner
+     -> ModelProvider
+     -> ToolRegistry
+        -> built-in Tool
+        -> MCP Tool adapter
+        -> skill / memory_update Tool
+        -> spawn / wait
+           -> background Tool
+           -> child AgentRunner
+     -> ArtifactStore
+     -> RunDirStore
+     -> EventSink
+```
 
-`picoagent` is a small, controllable agent harness.
+`AgentRunner` is the only model/tool loop. It calls a provider, executes the
+returned tool calls, appends complete tool results, and repeats until the model
+returns a final answer or the configured step limit is reached.
 
-The architectural goal is to keep four concerns explicit:
+## Core Boundaries
 
-- `session` stores context
-- `runtime` executes one run through the shared loop
-- `filesystem` provides file-backed surfaces
-- `execution backend` runs commands
+### Model provider
 
-## Current Scope
+`ModelProvider` translates the canonical message and tool shapes to one wire
+protocol. OAuth, API keys, SSE parsing, provider errors, and provider-specific
+cache hints stay behind this boundary.
 
-The repository is intentionally one TypeScript package with:
+Initial adapters:
 
-- one core runtime
-- one thin HTTP adapter
-- thin local clients
+- OpenAI OAuth
+- OpenAI-compatible Responses or Chat Completions
+- Anthropic-compatible Messages
+- deterministic echo for tests and smoke runs
 
-The local host stack is Bun-native, but Bun stays behind those boundaries.
+### Tool registry
 
-## Code Boundaries
+Every model-callable action implements `Tool`. Built-ins, skills, MCP, memory
+updates, and background control share the same registry. The registry is sorted so tool schema
+order remains deterministic across requests.
 
-### `src/core`
+This registry is the capability router: it maps a model-returned tool name to
+one implementation and one schema. It does not decide what to do or create a
+second planning layer; the model selects a capability, and the runner performs
+the deterministic lookup. Duplicate names fail during startup instead of
+silently replacing an existing capability.
 
-Responsibilities:
+### Run storage
 
-- message and tool types
-- provider contract
-- tool registry
-- agent loop
+Each run is a portable directory beneath `<workspace>/.pico/runs/<run-id>/`.
+It contains run metadata, complete messages, structured events, the final answer,
+artifacts, and background task records. This is what persistence means in the
+launch runtime: a cloud worker can retain or inspect a job without a database.
 
-Rules:
+Only complete messages are resumable. Stream deltas are emitted to sinks and may
+be logged as events, but are not appended as partial conversation messages.
 
-- no provider SDK imports
-- no HTTP or Ink types
+The persisted run state is intentionally coarse:
 
-### `src/runtime`
+```text
+queued -> running -> completed
+                  `-> failed
+```
 
-Responsibilities:
+The loop itself is a small state machine too: inject newly completed background
+results, request model output, persist the complete assistant message, execute
+zero or more direct tool calls, persist their results, then either repeat or
+complete. This makes crash boundaries and event ordering explicit without
+introducing a workflow engine.
 
-- assemble the general tool registry
-- load control files and config
-- build the final system prompt
-- run the runtime engine and runtime service
-- own runtime/session store interfaces and implementations
+Background tasks have a separate persisted state:
 
-Rules:
+```text
+queued -> running -> completed
+                  |-> failed
+                  `-> timed_out
+```
 
-- keep orchestration here, not in HTTP
-- keep session as context storage, not runtime policy
+`delivered` is orthogonal metadata indicating whether a terminal result has
+already entered the parent context. A `spawn` result is one normal tool result;
+later completion is a new user/runtime message, never a second tool result with
+the same provider call id.
 
-### `src/http`
+### Artifact storage
 
-Responsibilities:
+Large tool outputs are never discarded and do not enter the live context in
+full. The store writes the complete bytes, records immutable metadata, and gives
+the model a bounded beginning/end preview and a relative path it can inspect in
+pages. See [artifacts.md](artifacts.md).
 
-- expose run, session, and event resources
-- expose JSON and SSE event reads
-- generate OpenAPI from route schemas
-- project snapshots from the runtime store
+### Skills and instructions
 
-Rules:
+The stable system prefix contains built-in instructions, workspace `AGENTS.md`,
+and sorted skill metadata. A skill body enters the conversation only after the
+model calls `load_skill`.
 
-- keep the surface narrow
-- keep handlers thin
-- do not let request handlers become the source of truth for runtime state
+### Memory
 
-### `src/tools`
+Memory is durable knowledge about the user and projects. The system prompt
+exposes two ordinary Markdown locations; `read` and `bash` inspect them.
+`memory_update` invokes the general-task profile to make semantic changes, and
+an external cron or job scheduler can invoke model-driven consolidation. See
+[memory.md](memory.md).
 
-Responsibilities:
+### Subagents
 
-- define and validate tool parameters
-- expose the model-facing file-view and command tools
-- call into filesystem or execution helpers
+A subagent is a child invocation of the same `AgentRunner`. It has its own run
+directory and transcript, a `parent_run_id`, and a depth. The launch runtime runs
+children in-process, shares the parent workspace and base tools, and caps depth
+at one. “Shared workspace” means parent and child operate on the same working
+project files; it is not a special second workspace abstraction. Child
+transcripts stay out of the parent context; only the bounded final result and
+artifact reference return to the parent.
 
-### `src/config`
+`spawn` is also the async wrapper for ordinary tools. Direct calls remain
+synchronous. This keeps async policy out of every individual tool schema while
+still letting the model parallelize independent work. `wait` is a bounded join;
+all background executions have a separate hard timeout.
 
-Responsibilities:
+## Prompt And Cache Shape
 
-- load workspace and user config
-- resolve provider auth from environment variables
+Stable instructions, project instructions, skill metadata, and sorted tool
+schemas stay in deterministic order. Tool outputs and background completions
+are append-only tail messages. Large outputs become immutable artifacts with
+bounded previews. Together these choices avoid rebuilding earlier messages and
+make provider KV-cache reuse possible without making cache behavior part of the
+core API.
 
-### `src/fs`
+### Hooks
 
-Responsibilities:
+Command hooks observe `run_start`, `run_end`, `tool_before`, and `tool_after`.
+They receive JSON over stdin and inherit the host process permissions. Hooks do
+not define a second execution path.
 
-- define filesystem boundaries
-- normalize and resolve paths
-- traverse files
-- perform text search
+## Headless Surface
 
-### `src/prompting`
+The binary emits NDJSON runtime events for machines and a compact final result
+for humans. There is no TUI or embedded web frontend. A future API or web client
+should consume the same runtime events and run artifacts rather than introduce
+model logic in the transport.
 
-Responsibilities:
+## Deliberate Launch Omissions
 
-- scan control documents
-- assemble the runtime system prompt
+- OS sandbox and interactive approvals
+- TUI or browser frontend
+- built-in scheduler
+- vector search
+- database-backed run indexing
+- native dynamic plugins
+- distributed subagents
 
-### `src/providers`
-
-Responsibilities:
-
-- translate between core message/tool shapes and SDK-specific payloads
-- stream provider deltas back into the core loop
-
-### `src/clients`
-
-Responsibilities:
-
-- stay thin over the HTTP surface
-- keep local UX concerns out of runtime code
-
-## Runtime State
-
-Runtime state lives behind explicit store boundaries rather than inside HTTP handlers.
-
-Current shape:
-
-- a file-backed runtime store owns sessions, runs, subscriptions, and append-only run events
-- sessions store conversation history, run references, active-run state, and checkpoints
-- the runtime engine owns run orchestration over the store, filesystem boundary, and execution backend
-- tools can browse session history through a read-only `/session/...` file-view
-- HTTP separately exposes session resource reads and run event streams
-
-## Current Gaps
-
-Known missing pieces:
-
-- session history is still a dedicated read-only projection rather than a general writable mounted filesystem
-- `cmd` still uses the local OS process backend by default
-- session-wide event streaming does not exist yet
-
-## Runtime Hands
-
-The runtime depends on two explicit host boundaries:
-
-- a filesystem boundary for file-backed behavior
-- an execution backend for command execution
-
-Local filesystem and local process execution are only the default implementations.
-Future remote sandboxes should replace those boundaries, not rewrite HTTP or `src/core`.
-
-## Dependency Rules
-
-- `core` must stay independent of provider SDKs, HTTP, and Ink
-- `providers` may depend on `core`, but not vice versa
-- `tools` may depend on `core` and `fs`
-- `runtime` may depend on `core`, `config`, `providers`, and `tools`
-- `http` may depend on `core`, `runtime`, `tools`, `fs`, and `prompting`
-- `clients` should depend on HTTP behavior and local client concerns only
-
-## Product Rule
-
-Default sequence for changes:
-
-1. `src/core`
-2. transport adapter updates only if needed
-3. thin client updates only if needed
-
-If a feature only exists to make the TUI nicer, that is usually not a good enough reason to reshape the system.
+These omissions reduce launch complexity. Existing boundaries allow them to be
+added without creating another agent loop.

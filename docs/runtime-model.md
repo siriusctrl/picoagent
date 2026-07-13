@@ -1,118 +1,48 @@
 # Runtime Model
 
-The runtime model is intentionally small:
+## Run
 
-- `session` stores context
-- `runtime` reads control files, assembles prompts, and executes runs
-- `filesystem` provides file-backed surfaces
-- `execution backend` runs commands
-- `run` is one execution through the runtime
+A run is one task executed by `AgentRunner`. Its launch states are queued,
+running, completed, or failed. The implementation does not resume inside a
+provider stream or shell command; the last complete message is the durable
+boundary.
 
-Use `docs/design-choices.md` for the durable reasoning behind these boundaries.
+## Loop
 
-## Workspace And Control Files
+For each model step:
 
-The current workspace is the main writable file surface.
+1. append newly completed background results to the current messages;
+2. send sorted tool schemas to the active provider;
+3. stream text as events while collecting the complete response;
+4. persist the complete assistant message;
+5. execute requested tools sequentially;
+6. artifact large outputs and persist complete tool messages;
+7. repeat, join outstanding background work before finalization, or write
+   `final.md` when no tool calls or tasks remain.
 
-It can contain ordinary project files plus control files such as:
+## Tool Results
 
-- `.pico/config.jsonc`
-- `AGENTS.md`
-- `SOUL.md`
-- `USER.md`
-- `.pico/memory/`
-- `skills/`
+Tool errors are returned to the model as error tool results instead of
+immediately aborting the loop. Runtime/store/provider failures fail the run.
 
-Host defaults such as `$HOME/.pico/config.jsonc` and `$HOME/.pico/memory/` are also read during control loading.
+## Subagents
 
-The runtime keeps a control snapshot cache per workspace.
-Before a run starts it checks the relevant control files, reuses the cached snapshot when nothing changed, and rebuilds it only when the control version changes.
-There are no built-in runtime agent presets anymore.
+`spawn` runs independent tools or general-task child agents concurrently up to
+the configured limit. Each child creates a normal run with a parent id. Children
+share the workspace, provider, and base tools. The default maximum depth of one
+keeps the initial execution model predictable. `wait` is a bounded join; a wait
+timeout does not cancel the task.
 
-## Session
+## Streaming
 
-Each conversation is one session.
+Provider text deltas are runtime events. NDJSON clients can render them live.
+Only the complete assistant message enters `messages.jsonl`, preventing partial
+or duplicated content after a crash.
 
-In the current local harness, a session is created against one workspace root.
-That workspace binding is local-host behavior, not the main point of the abstraction.
+## Prompt Stability
 
-A session stores:
-
-- workspace root and related roots
-- conversation history
-- ordered run ids
-- active-run state
-- optional checkpoints created by compaction
-
-The session does not carry prompt-assembly policy.
-It is append-only context storage plus the metadata needed to project that history back out.
-
-When the runtime is bound to an external session service:
-
-- clients still create sessions through the runtime API
-- the runtime forwards session creation into the external session service
-- the runtime reads session state back through the session-store boundary
-- run-facing session projections such as `/session/...` stay consistent
-
-## Run Execution
-
-For each run, the runtime:
-
-1. checks the current control version
-2. reuses or rebuilds the cached control snapshot
-3. creates the provider
-4. executes the shared agent loop with the general tool surface
-
-That means workspace control changes apply on the next run without mutating stored session state.
-
-## Session History
-
-Session compaction uses `checkpoint + tail`, not destructive history rewriting.
-
-After compaction:
-
-- older turns are summarized into a checkpoint
-- recent messages stay live
-- runs and run events are still available to clients
-
-For model-side inspection, the session exposes a read-only file-view:
-
-- `summary.md`
-- `checkpoints/<id>.md`
-- `runs/<id>.md`
-
-This projection is for browsing context, not for editing the session itself.
-Raw run events remain available through HTTP event and session-resource endpoints.
-
-## File Views And Tools
-
-The runtime exposes one general tool surface:
-
-- `glob`
-- `grep`
-- `read`
-- `patch`
-- `cmd`
-
-These tools operate on file-view paths such as:
-
-- `/workspace/src/http/server.ts`
-- `/session/summary.md`
-
-Mounted file-views may declare `supportsCmd`.
-`cmd` always requires an explicit namespace-rooted `cwd`.
-
-`grep` prefers `rg` on a cmd-enabled workspace when available and falls back to the built-in file-view search otherwise.
-`glob` follows Bun glob semantics in the default local runtime.
-
-## Events
-
-Run events are append-only records for one execution.
-
-They back:
-
-- run snapshots
-- `GET /events/:runId` JSON reads
-- `GET /events/:runId` SSE streams
-
-Session-wide streaming is still missing.
+Built-in instructions, `AGENTS.md`, tool schemas, and skill metadata use stable
+ordering. Dynamic tool output and memory results append near the conversation
+tail. Large results remain behind stable artifact references. These choices
+reduce context growth and improve the opportunity for provider-side prefix-cache
+reuse without coupling the loop to one cache API.

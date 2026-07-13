@@ -1,0 +1,141 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeEvent {
+    pub run_id: String,
+    pub timestamp: DateTime<Utc>,
+    #[serde(flatten)]
+    pub kind: RuntimeEventKind,
+}
+
+impl RuntimeEvent {
+    pub fn new(run_id: impl Into<String>, kind: RuntimeEventKind) -> Self {
+        Self {
+            run_id: run_id.into(),
+            timestamp: Utc::now(),
+            kind,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RuntimeEventKind {
+    RunStarted {
+        prompt: String,
+    },
+    ModelStarted {
+        step: usize,
+    },
+    ModelDelta {
+        text: String,
+    },
+    ModelCompleted {
+        step: usize,
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        cached_input_tokens: Option<u64>,
+    },
+    ToolStarted {
+        call_id: String,
+        name: String,
+    },
+    ToolCompleted {
+        call_id: String,
+        name: String,
+    },
+    BackgroundTaskStarted {
+        task_id: String,
+        name: String,
+    },
+    BackgroundTaskCompleted {
+        task_id: String,
+        name: String,
+    },
+    BackgroundTaskFailed {
+        task_id: String,
+        name: String,
+        error: String,
+    },
+    BackgroundTaskTimedOut {
+        task_id: String,
+        name: String,
+    },
+    BackgroundTaskDelivered {
+        task_id: String,
+    },
+    ArtifactCreated {
+        call_id: String,
+        path: String,
+        bytes: u64,
+    },
+    SubagentStarted {
+        child_run_id: String,
+        task: String,
+    },
+    SubagentCompleted {
+        child_run_id: String,
+    },
+    SubagentFailed {
+        child_run_id: String,
+        error: String,
+    },
+    RunCompleted {
+        final_output: String,
+    },
+    RunFailed {
+        error: String,
+    },
+}
+
+#[async_trait]
+pub trait EventSink: Send + Sync {
+    async fn emit(&self, event: &RuntimeEvent) -> Result<()>;
+}
+
+#[derive(Default)]
+pub struct NoopEventSink;
+
+#[async_trait]
+impl EventSink for NoopEventSink {
+    async fn emit(&self, _event: &RuntimeEvent) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub type SharedEventSink = Arc<dyn EventSink>;
+
+pub struct NdjsonEventSink;
+
+#[async_trait]
+impl EventSink for NdjsonEventSink {
+    async fn emit(&self, event: &RuntimeEvent) -> Result<()> {
+        println!("{}", serde_json::to_string(event)?);
+        Ok(())
+    }
+}
+
+pub struct CompositeEventSink {
+    sinks: Vec<SharedEventSink>,
+}
+
+impl CompositeEventSink {
+    pub fn new(sinks: Vec<SharedEventSink>) -> Self {
+        Self { sinks }
+    }
+}
+
+#[async_trait]
+impl EventSink for CompositeEventSink {
+    async fn emit(&self, event: &RuntimeEvent) -> Result<()> {
+        for sink in &self.sinks {
+            sink.emit(event).await?;
+        }
+        Ok(())
+    }
+}

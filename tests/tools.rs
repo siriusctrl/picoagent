@@ -1,0 +1,306 @@
+use picoagent::tools::{
+    Tool, ToolContext,
+    builtin::{BashTool, ReadTool, WebSearchTool, WriteTool},
+};
+use serde_json::json;
+use tempfile::tempdir;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{header, method, path, query_param},
+};
+
+fn context(workspace: &std::path::Path, call_id: &str) -> ToolContext {
+    ToolContext {
+        run_id: "run-1".to_owned(),
+        call_id: call_id.to_owned(),
+        workspace: workspace.to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn read_returns_a_bounded_line_range() {
+    let workspace = tempdir().unwrap();
+    tokio::fs::write(
+        workspace.path().join("sample.txt"),
+        "zero\none\ntwo\nthree\n",
+    )
+    .await
+    .unwrap();
+    let output = ReadTool
+        .execute(
+            context(workspace.path(), "read"),
+            json!({ "path": "sample.txt", "offset": 1, "limit": 2 }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(String::from_utf8(output.content).unwrap(), "one\ntwo");
+}
+
+#[tokio::test]
+async fn read_bounds_a_single_long_utf8_line_by_bytes() {
+    let workspace = tempdir().unwrap();
+    tokio::fs::write(workspace.path().join("long.txt"), "甲".repeat(10_000))
+        .await
+        .unwrap();
+    let output = ReadTool
+        .execute(
+            context(workspace.path(), "read-long"),
+            json!({ "path": "long.txt", "max_bytes": 101 }),
+        )
+        .await
+        .unwrap();
+    let text = String::from_utf8(output.content).unwrap();
+    assert!(text.len() < 256);
+    assert!(text.contains("byte limit reached"));
+    assert!(!text.contains('\u{fffd}'));
+}
+
+#[tokio::test]
+async fn write_creates_a_file_and_applies_multiple_atomic_edits() {
+    let workspace = tempdir().unwrap();
+    let tool = WriteTool::default();
+    tool.execute(
+        context(workspace.path(), "write"),
+        json!({ "path": "nested/sample.txt", "content": "alpha\nbeta\ngamma\n" }),
+    )
+    .await
+    .unwrap();
+    tool.execute(
+        context(workspace.path(), "edit"),
+        json!({
+            "path": "nested/sample.txt",
+            "edits": [
+                { "old_text": "alpha", "new_text": "one" },
+                { "old_text": "gamma", "new_text": "three" }
+            ]
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        tokio::fs::read_to_string(workspace.path().join("nested/sample.txt"))
+            .await
+            .unwrap(),
+        "one\nbeta\nthree\n"
+    );
+}
+
+#[tokio::test]
+async fn write_rejects_an_ambiguous_edit_without_changing_the_file() {
+    let workspace = tempdir().unwrap();
+    let path = workspace.path().join("sample.txt");
+    tokio::fs::write(&path, "same same").await.unwrap();
+    let error = WriteTool::default()
+        .execute(
+            context(workspace.path(), "edit"),
+            json!({
+                "path": "sample.txt",
+                "edits": [{ "old_text": "same", "new_text": "new" }]
+            }),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("matches 2 regions"));
+    assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), "same same");
+}
+
+#[tokio::test]
+async fn write_counts_overlapping_matches_as_ambiguous() {
+    let workspace = tempdir().unwrap();
+    let path = workspace.path().join("sample.txt");
+    tokio::fs::write(&path, "aaa").await.unwrap();
+    let error = WriteTool::default()
+        .execute(
+            context(workspace.path(), "edit"),
+            json!({
+                "path": "sample.txt",
+                "edits": [{ "old_text": "aa", "new_text": "b" }]
+            }),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("matches 2 regions"));
+    assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), "aaa");
+}
+
+#[tokio::test]
+async fn write_refuses_to_silently_normalize_mixed_line_endings() {
+    let workspace = tempdir().unwrap();
+    let path = workspace.path().join("mixed.txt");
+    tokio::fs::write(&path, "alpha\r\nbeta\n").await.unwrap();
+    let error = WriteTool::default()
+        .execute(
+            context(workspace.path(), "edit"),
+            json!({
+                "path": "mixed.txt",
+                "edits": [{ "old_text": "beta", "new_text": "gamma" }]
+            }),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("mixed line endings"));
+    assert_eq!(
+        tokio::fs::read_to_string(path).await.unwrap(),
+        "alpha\r\nbeta\n"
+    );
+}
+
+#[tokio::test]
+async fn write_preserves_bom_and_crlf() {
+    let workspace = tempdir().unwrap();
+    let path = workspace.path().join("windows.txt");
+    tokio::fs::write(&path, "\u{feff}alpha\r\nbeta\r\n")
+        .await
+        .unwrap();
+    WriteTool::default()
+        .execute(
+            context(workspace.path(), "edit"),
+            json!({
+                "path": "windows.txt",
+                "edits": [{ "old_text": "beta", "new_text": "gamma" }]
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::fs::read_to_string(path).await.unwrap(),
+        "\u{feff}alpha\r\ngamma\r\n"
+    );
+}
+
+#[tokio::test]
+async fn write_uses_conservative_indentation_matching() {
+    let workspace = tempdir().unwrap();
+    let path = workspace.path().join("sample.rs");
+    tokio::fs::write(&path, "fn main() {\n    old();\n}\n")
+        .await
+        .unwrap();
+    let output = WriteTool::default()
+        .execute(
+            context(workspace.path(), "edit"),
+            json!({
+                "path": "sample.rs",
+                "edits": [{ "old_text": "      old();", "new_text": "      new();" }]
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8(output.content)
+            .unwrap()
+            .contains("normalization")
+    );
+    assert_eq!(
+        tokio::fs::read_to_string(path).await.unwrap(),
+        "fn main() {\n    new();\n}\n"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn write_follows_an_existing_symlink_without_replacing_it() {
+    let workspace = tempdir().unwrap();
+    let target = workspace.path().join("target.txt");
+    let alias = workspace.path().join("alias.txt");
+    tokio::fs::write(&target, "old\n").await.unwrap();
+    std::os::unix::fs::symlink(&target, &alias).unwrap();
+    WriteTool::default()
+        .execute(
+            context(workspace.path(), "edit-link"),
+            json!({
+                "path": "alias.txt",
+                "edits": [{ "old_text": "old", "new_text": "new" }]
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(
+        tokio::fs::symlink_metadata(&alias)
+            .await
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(tokio::fs::read_to_string(target).await.unwrap(), "new\n");
+}
+
+#[tokio::test]
+async fn bash_captures_stdout_stderr_and_exit_code() {
+    let workspace = tempdir().unwrap();
+    let output = BashTool
+        .execute(
+            context(workspace.path(), "bash"),
+            json!({ "command": "pwd; echo warning >&2; exit 7" }),
+        )
+        .await
+        .unwrap();
+    assert!(output.content.is_empty());
+    let source_path = output.source_path.expect("bash output should be spooled");
+    let text = tokio::fs::read_to_string(source_path).await.unwrap();
+    assert!(output.is_error);
+    assert!(text.contains("Exit code: 7"));
+    assert!(text.contains(workspace.path().to_string_lossy().as_ref()));
+    assert!(text.contains("warning"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelling_bash_terminates_its_process_group() {
+    let workspace = tempdir().unwrap();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        BashTool.execute(
+            context(workspace.path(), "bash-timeout"),
+            json!({
+                "command": "sleep 30 & child=$!; echo $child > child.pid; wait"
+            }),
+        ),
+    )
+    .await;
+    assert!(outcome.is_err(), "bash command unexpectedly completed");
+    let pid = tokio::fs::read_to_string(workspace.path().join("child.pid"))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let alive = std::process::Command::new("kill")
+        .args(["-0", pid.trim()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(!alive, "background child survived Bash cancellation");
+}
+
+#[tokio::test]
+async fn web_search_uses_brave_request_shape_and_returns_compact_results() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search"))
+        .and(query_param("q", "rust agents"))
+        .and(query_param("count", "2"))
+        .and(header("x-subscription-token", "secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "web": { "results": [{
+                "title": "Result one",
+                "url": "https://example.com/one",
+                "description": "A useful result",
+                "age": "1 day ago",
+                "extra_snippets": ["More context"]
+            }] }
+        })))
+        .mount(&server)
+        .await;
+    let tool = WebSearchTool::with_endpoint(format!("{}/search", server.uri()), "secret", 8);
+    let output = tool
+        .execute(
+            context(tempdir().unwrap().path(), "web"),
+            json!({ "query": "rust agents", "count": 2 }),
+        )
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.content).unwrap();
+    assert_eq!(value["query"], "rust agents");
+    assert_eq!(value["results"][0]["title"], "Result one");
+    assert_eq!(value["results"][0]["extra_snippets"][0], "More context");
+}

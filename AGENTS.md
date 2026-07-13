@@ -1,83 +1,115 @@
 # AGENTS.md
 
-This file is the operating map for agents working in this repo. Keep detailed
-source-area guidance in `docs/source-map.md`, durable principles in
-`docs/golden-principles.md`, and design rationale in `docs/design-choices.md`.
+This file is the operating map for agents working in this repository. Keep the
+product and user workflow in `README.md`, durable tradeoffs in `docs/`, and this
+file focused on navigation, invariants, verification, and handoff.
 
 ## Source Map
 
-- `src/core/`: loop, execution, provider contract, tool registry, filesystem
-  view, hooks, and shared types.
-- `src/http/`: Bun/Hono HTTP server, sessions, filespaces, OpenAPI routes and
-  schemas.
-- `src/clients/cli/`: local CLI entrypoint and args.
-- `src/clients/tui/`: terminal UI controller, input, layout, and history.
-- `src/providers/`: model SDK adapters.
-- `src/tools/`: model-facing tools.
-- `src/config/`: config loading and provider env resolution.
-- `src/fs/`: filesystem traversal, rooted/workspace/http filesystems, path and
-  namespace helpers.
-- `src/prompting/`: prompt framing and frontmatter scanning.
-- `src/runtime/`: runtime context assembly, session stores, execution backend,
-  and control snapshots.
-- `docs/source-map.md`: detailed source-area routing.
-- `docs/architecture.md`: runtime boundaries.
-- `docs/runtime-model.md`: session, agent, and tool access behavior.
-- `docs/entrypoints.md`: HTTP, CLI, and local UI entrypoints.
+- `src/agent/`: the single agent loop, run state, prompt assembly, and child-run
+  supervision. Main runs and subagents must use the same runner.
+- `src/model/`: provider-neutral message/tool contracts plus OpenAI OAuth,
+  OpenAI-compatible, Anthropic-compatible, and deterministic echo adapters.
+- `src/tools/`: the stable tool registry and built-in `read`, `write`, `bash`,
+  optional `web_search`, and background-control tools.
+- `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,
+  and project-local artifact paths.
+- `src/storage/`: self-contained run directories, message/event JSONL, status,
+  and final-result persistence.
+- `src/skills/`: Agent Skills discovery and progressive `SKILL.md` loading.
+- `src/mcp.rs`: MCP stdio connection lifecycle and tool adapters.
+- `src/hooks.rs`: command hook discovery and lifecycle invocation.
+- `src/memory.rs`: user/project Markdown paths and model-driven `memory_update`.
+- `src/config.rs`: `.pico/config.toml` loading and runtime/provider settings.
+- `src/events.rs`: transport-neutral runtime events and event sinks.
+- `src/cli.rs`: command-line shape; `src/main.rs`: headless composition root.
+  Runtime behavior does not belong in either file.
+- `tests/`: cross-module and end-to-end behavior.
+- `docs/`: architecture, artifact, memory, configuration, and runtime contracts.
 
 ## Engineering Invariants
 
-- TypeScript everywhere.
-- Treat `src/core/` as the runtime boundary.
-- Keep `src/core/` transport-agnostic.
-- Keep HTTP-specific behavior in `src/http/` and UI-specific behavior in
-  `src/clients/`.
-- Keep provider SDK imports out of `src/core/`.
-- Keep tools focused: one tool, one capability.
-- Validate external, model, and tool input at boundaries.
-- Do not reintroduce frontend-agent/backend-agent splitting.
-- Do not add plugin systems, compatibility shims, worker orchestration, or
-  speculative extension points unless explicitly requested.
-- Prefer the strongest coherent end state over transitional layers when the
-  requested design is clear.
+- Rust is the only implementation language for the harness.
+- Keep one `AgentRunner`; a subagent is a child run with a parent id and a
+  constrained depth, not a second loop or agent class.
+- Keep provider wire formats and auth outside the agent loop.
+- Keep one deterministic, namespaced tool registry. MCP tools adapt into the
+  same `Tool` contract and cannot silently replace built-ins.
+- Treat completed messages as the resumable boundary. Stream deltas are events,
+  not durable conversation messages.
+- Spill large tool results to `.pico/runs/<run-id>/artifacts/`; preserve the full
+  result and return a bounded head/tail preview plus an immutable artifact ref.
+- Enforce both the per-result inline threshold and the cumulative per-run preview
+  budget; once the latter is exhausted, return artifact references without previews.
+- Keep artifact ids and metadata stable. Changing content under the same hash or
+  identity is a contract violation.
+- Keep prompt prefixes deterministic: stable section order, sorted tools and
+  skills, and dynamic memory/tool results near the tail.
+- Memory is durable user/project knowledge outside the live transcript. Inspect
+  its ordinary Markdown with `read`/`bash`; do not inject the tree into every prompt.
+- Keep user memory and project memory distinct. Raw artifacts and transcripts
+  are sources, not automatically curated memory.
+- The launch runtime intentionally has no security sandbox or approval engine.
+  Tools and hooks inherit the picoagent process permissions; document this
+  plainly and do not imply otherwise.
+- Do not add a TUI, frontend framework, built-in scheduler, vector database,
+  native dynamic plugin ABI, or distributed worker system without a concrete
+  request.
+- Prefer a readable module over speculative framework layers or defensive code
+  for states the program cannot produce.
 
-## Task Routing
+## Artifact Contract
 
-- Unknown task: read `README.md`, `docs/source-map.md`, and the matching doc
-  below.
-- Loop, tool, or provider-contract work: inspect `src/core/`.
-- HTTP behavior: inspect `src/http/` and `docs/entrypoints.md`.
-- Terminal UI: inspect `src/clients/tui/`.
-- Tool behavior: inspect `src/tools/`.
-- Runtime context or session control: inspect `src/runtime/` and
-  `docs/runtime-model.md`.
-- Architecture or boundary changes: read `docs/architecture.md` and
-  `docs/design-choices.md`.
+- Small UTF-8 tool results may stay inline.
+- Large results must preserve their complete bytes under the current run.
+- A truncated model-facing result must include `truncated`, total bytes, media
+  type, hash, stable relative path, and useful beginning/end previews.
+- `read` must support bounded reads so the model can inspect an artifact
+  without loading it all back into context.
+- Run directories and artifact manifests are portable job outputs. Avoid
+  machine-specific absolute paths in persisted references.
+
+See `docs/artifacts.md` for the complete format.
 
 ## Verification
 
-- Run `bun run build`.
-- Run `bun run test`.
-- Run `bun run typecheck`.
-- For TUI behavior, manually run `bun run dev:tui`.
+Run for every code change:
+
+```bash
+cargo fmt --check
+cargo check --all-targets
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets
+```
+
+For provider changes, run the mock-server contract tests covering streamed text,
+fragmented tool arguments, error responses, and authentication refresh behavior.
+
+For runtime or artifact changes, also run a headless smoke task with the echo
+provider and inspect the generated run directory, `messages.jsonl`,
+`events.jsonl`, final output, and artifact metadata.
 
 ## Docs Update Rules
 
-- Runtime behavior, architecture, or entrypoints: update the matching file in
-  `docs/`.
-- Durable design choice: record it in `docs/design-choices.md`.
-- Source-area routing changes: update `docs/source-map.md`.
-- User-visible behavior or setup: update `README.md`.
+- User-visible commands, setup, or supported features: update `README.md`.
+- Runtime or module boundaries: update `docs/architecture.md`.
+- Artifact envelope, spill threshold, paths, or cleanup: update
+  `docs/artifacts.md`.
+- Memory scopes, update behavior, paths, or consolidation: update `docs/memory.md`.
+- Config fields or provider behavior: update `docs/configuration.md`.
+- Durable tradeoffs or rejected alternatives: update `docs/design-choices.md`.
 
-## Agent Strategy Defaults
+## Review And Handoff
 
-- Use subagents only when ownership can be split cleanly by module, boundary, or
-  file set.
-- Keep the main agent responsible for architecture decisions, integration,
-  verification, and final merge quality.
+- Review module size and ownership before adding to a file already near 400
+  lines; split by behavior, not by arbitrary helper categories.
+- Distinguish correctness checks from speculative defense. Keep checks at real
+  external boundaries and remove unreachable fallback layers.
+- Report tests actually run and any provider path not exercised with live
+  credentials.
+- Do not revert unrelated user changes.
 
 ## Commit Rules
 
-- Use Conventional Commits with a body.
-- Keep changes small and legible.
-- Do not revert unrelated user changes.
+- Use Conventional Commits with a body explaining what changed and why.
+- Keep generated run directories, credentials, and target output out of Git.
