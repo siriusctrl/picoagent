@@ -197,7 +197,7 @@ impl OpenAiOAuthProvider {
             .post(join_url(&self.options.base_url, "responses"))
             .bearer_auth(&credentials.access_token)
             .header("originator", "picoagent")
-            .json(&responses_body(request));
+            .json(&responses_body(request, None));
         if let Some(account_id) = &credentials.account_id {
             builder = builder.header("chatgpt-account-id", account_id);
         }

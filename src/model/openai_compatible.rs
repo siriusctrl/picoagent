@@ -1,3 +1,5 @@
+use std::fmt;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder};
@@ -19,11 +21,22 @@ pub enum OpenAiProtocol {
     ChatCompletions,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenAiCompatibleOptions {
     pub base_url: String,
     pub api_key: String,
     pub protocol: OpenAiProtocol,
+}
+
+impl fmt::Debug for OpenAiCompatibleOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OpenAiCompatibleOptions")
+            .field("base_url", &self.base_url)
+            .field("api_key", &"[REDACTED]")
+            .field("protocol", &self.protocol)
+            .finish()
+    }
 }
 
 impl OpenAiCompatibleOptions {
@@ -44,6 +57,7 @@ impl OpenAiCompatibleOptions {
 pub struct OpenAiCompatibleProvider {
     client: Client,
     options: OpenAiCompatibleOptions,
+    reasoning_effort: Option<String>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -59,11 +73,21 @@ impl OpenAiCompatibleProvider {
         Self {
             client: Client::new(),
             options,
+            reasoning_effort: None,
         }
     }
 
     pub fn with_client(options: OpenAiCompatibleOptions, client: Client) -> Self {
-        Self { client, options }
+        Self {
+            client,
+            options,
+            reasoning_effort: None,
+        }
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = Some(effort.into());
+        self
     }
 }
 
@@ -82,11 +106,11 @@ impl ModelProvider for OpenAiCompatibleProvider {
             OpenAiProtocol::Responses => self
                 .client
                 .post(join_url(&self.options.base_url, "responses"))
-                .json(&responses_body(&request)),
+                .json(&responses_body(&request, self.reasoning_effort.as_deref())),
             OpenAiProtocol::ChatCompletions => self
                 .client
                 .post(join_url(&self.options.base_url, "chat/completions"))
-                .json(&chat_body(&request)),
+                .json(&chat_body(&request, self.reasoning_effort.as_deref())),
         };
         openai_stream::complete_request(
             bearer(builder, &self.options.api_key),
@@ -103,5 +127,23 @@ fn bearer(builder: RequestBuilder, token: &str) -> RequestBuilder {
         builder
     } else {
         builder.bearer_auth(token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn options_debug_redacts_resolved_api_key() {
+        let options = OpenAiCompatibleOptions::new(
+            "https://example.test/v1",
+            "super-secret-token",
+            OpenAiProtocol::Responses,
+        );
+
+        let debug = format!("{options:?}");
+        assert!(!debug.contains("super-secret-token"));
+        assert!(debug.contains("[REDACTED]"));
     }
 }

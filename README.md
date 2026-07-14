@@ -105,9 +105,27 @@ import a compatible `$CODEX_HOME/auth.json` or `$HOME/.codex/auth.json`.
 kind = "openai-compatible"
 model = "my-model"
 base_url = "http://127.0.0.1:8000/v1"
-api_key_env = "OPENAI_API_KEY"
+api_key = "${OPENAI_API_KEY}" # or a literal key
 protocol = "chat-completions" # or "responses"
+reasoning_effort = "medium" # optional; provider/model-specific
 ```
+
+`api_key` accepts either a literal key or a whole environment reference such as
+`${OPENAI_API_KEY}`. Keep a literal key in the user config at
+`$HOME/.pico/config.toml` with restrictive file permissions rather than in a
+workspace file that may be shared. The legacy `api_key_env = "OPENAI_API_KEY"`
+form remains accepted for migration, but must not be combined with `api_key`.
+If both fields are omitted, picoagent retains the legacy `OPENAI_API_KEY`
+fallback.
+
+`reasoning_effort` is optional. Picoagent sends it as `reasoning_effort` for
+Chat Completions and as `reasoning.effort` for Responses. If omitted, the
+provider's model default is used. Common values include `none`, `minimal`,
+`low`, `medium`, `high`, and `xhigh`; accepted values depend on the endpoint and
+model.
+
+When Chat Completions reasoning is configured, `max_output_tokens` is sent as
+`max_completion_tokens`, as required by reasoning-capable Chat endpoints.
 
 ### Anthropic-compatible
 

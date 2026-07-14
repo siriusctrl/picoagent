@@ -6,12 +6,13 @@ use picoagent::{
     events::{EventSink, NoopEventSink, RuntimeEvent, RuntimeEventKind},
     model::{
         AnthropicCompatibleProvider, Message, ModelProvider, ModelRequest, OAuthCredentials,
-        OpenAiCompatibleProvider, OpenAiOAuthOptions, OpenAiOAuthProvider, OpenAiProtocol, Role,
+        OpenAiCompatibleOptions, OpenAiCompatibleProvider, OpenAiOAuthOptions, OpenAiOAuthProvider,
+        OpenAiProtocol, Role,
     },
 };
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{header, method, path},
+    matchers::{body_partial_json, header, method, path},
 };
 
 #[derive(Default)]
@@ -55,6 +56,10 @@ async fn responses_streams_text_and_usage() {
     );
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
+        .and(body_partial_json(serde_json::json!({
+            "reasoning": {"effort": "high"},
+            "max_output_tokens": 128
+        })))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -63,11 +68,12 @@ async fn responses_streams_text_and_usage() {
         .mount(&server)
         .await;
 
-    let provider = OpenAiCompatibleProvider::new(
+    let options = OpenAiCompatibleOptions::new(
         format!("{}/v1", server.uri()),
         "test-key",
         OpenAiProtocol::Responses,
     );
+    let provider = OpenAiCompatibleProvider::with_options(options).with_reasoning_effort("high");
     let events = Arc::new(RecordingSink::default());
     let response = provider
         .complete(request(), events.clone())
@@ -97,6 +103,10 @@ async fn chat_stream_reassembles_fragmented_tool_arguments() {
     );
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
+        .and(body_partial_json(serde_json::json!({
+            "reasoning_effort": "low",
+            "max_completion_tokens": 128
+        })))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -105,11 +115,12 @@ async fn chat_stream_reassembles_fragmented_tool_arguments() {
         .mount(&server)
         .await;
 
-    let provider = OpenAiCompatibleProvider::new(
+    let options = OpenAiCompatibleOptions::new(
         format!("{}/v1", server.uri()),
         "test-key",
         OpenAiProtocol::ChatCompletions,
     );
+    let provider = OpenAiCompatibleProvider::with_options(options).with_reasoning_effort("low");
     let response = provider
         .complete(request(), Arc::new(NoopEventSink))
         .await

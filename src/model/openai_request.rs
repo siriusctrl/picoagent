@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use super::{Message, MessageContent, ModelRequest, Role, ToolSpec, common::content_text};
 
-pub(crate) fn responses_body(request: &ModelRequest) -> Value {
+pub(crate) fn responses_body(request: &ModelRequest, reasoning_effort: Option<&str>) -> Value {
     let mut body = json!({
         "model": request.model,
         "input": responses_input(&request.messages),
@@ -17,10 +17,13 @@ pub(crate) fn responses_body(request: &ModelRequest) -> Value {
     if let Some(max_tokens) = request.max_output_tokens {
         body["max_output_tokens"] = json!(max_tokens);
     }
+    if let Some(effort) = reasoning_effort {
+        body["reasoning"] = json!({"effort": effort});
+    }
     body
 }
 
-pub(crate) fn chat_body(request: &ModelRequest) -> Value {
+pub(crate) fn chat_body(request: &ModelRequest, reasoning_effort: Option<&str>) -> Value {
     let mut messages = Vec::new();
     if !request.system.is_empty() {
         messages.push(json!({"role": "system", "content": request.system}));
@@ -34,7 +37,15 @@ pub(crate) fn chat_body(request: &ModelRequest) -> Value {
         "stream_options": {"include_usage": true},
     });
     if let Some(max_tokens) = request.max_output_tokens {
-        body["max_tokens"] = json!(max_tokens);
+        let field = if reasoning_effort.is_some() {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        body[field] = json!(max_tokens);
+    }
+    if let Some(effort) = reasoning_effort {
+        body["reasoning_effort"] = json!(effort);
     }
     body
 }
@@ -188,7 +199,7 @@ mod tests {
             max_output_tokens: None,
         };
 
-        let body = responses_body(&request);
+        let body = responses_body(&request, None);
         assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
         assert_eq!(body["input"][0], reasoning);
     }
@@ -220,7 +231,7 @@ mod tests {
             max_output_tokens: None,
         };
 
-        let body = responses_body(&request);
+        let body = responses_body(&request, None);
         assert_eq!(body["input"][0]["type"], "reasoning");
         assert_eq!(body["input"][1]["content"][0]["text"], "checked");
         assert_eq!(body["input"][2]["type"], "function_call");
@@ -245,8 +256,8 @@ mod tests {
             max_output_tokens: None,
         };
 
-        let responses = responses_body(&request);
-        let chat = chat_body(&request);
+        let responses = responses_body(&request, None);
+        let chat = chat_body(&request, None);
         assert_eq!(responses["input"][0]["role"], "user");
         assert!(
             responses["input"][0]["content"][0]["text"]
@@ -261,5 +272,29 @@ mod tests {
                 .unwrap()
                 .contains("done")
         );
+    }
+
+    #[test]
+    fn reasoning_effort_uses_protocol_specific_request_shapes() {
+        let request = ModelRequest {
+            run_id: "run".into(),
+            model: "reasoning-model".into(),
+            system: String::new(),
+            messages: vec![Message::text(Role::User, "solve this")],
+            tools: Vec::new(),
+            max_output_tokens: Some(128),
+        };
+
+        let responses = responses_body(&request, Some("high"));
+        let chat = chat_body(&request, Some("low"));
+        let default_chat = chat_body(&request, None);
+        assert_eq!(responses["reasoning"], json!({"effort": "high"}));
+        assert_eq!(chat["reasoning_effort"], json!("low"));
+        assert_eq!(chat["max_completion_tokens"], json!(128));
+        assert!(chat.get("max_tokens").is_none());
+        assert_eq!(default_chat["max_tokens"], json!(128));
+        assert!(default_chat.get("max_completion_tokens").is_none());
+        assert!(responses_body(&request, None).get("reasoning").is_none());
+        assert!(default_chat.get("reasoning_effort").is_none());
     }
 }

@@ -1,11 +1,13 @@
 use std::{
     collections::BTreeMap,
-    env, fs,
+    env, fmt, fs,
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+
+const DEFAULT_OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -21,7 +23,7 @@ pub struct AppConfig {
     pub hooks: HookConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ProviderConfig {
     OpenaiOauth {
@@ -34,10 +36,14 @@ pub enum ProviderConfig {
     OpenaiCompatible {
         model: String,
         base_url: String,
-        #[serde(default = "default_openai_key_env")]
-        api_key_env: String,
+        #[serde(default, skip_serializing)]
+        api_key: Option<String>,
+        #[serde(default)]
+        api_key_env: Option<String>,
         #[serde(default)]
         protocol: OpenAiProtocol,
+        #[serde(default)]
+        reasoning_effort: Option<String>,
     },
     AnthropicCompatible {
         model: String,
@@ -51,6 +57,55 @@ pub enum ProviderConfig {
         #[serde(default = "default_echo_model")]
         model: String,
     },
+}
+
+impl fmt::Debug for ProviderConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OpenaiOauth {
+                model,
+                base_url,
+                auth_file,
+            } => formatter
+                .debug_struct("OpenaiOauth")
+                .field("model", model)
+                .field("base_url", base_url)
+                .field("auth_file", auth_file)
+                .finish(),
+            Self::OpenaiCompatible {
+                model,
+                base_url,
+                api_key,
+                api_key_env,
+                protocol,
+                reasoning_effort,
+            } => formatter
+                .debug_struct("OpenaiCompatible")
+                .field("model", model)
+                .field("base_url", base_url)
+                .field("api_key", &api_key.as_ref().map(|_| "[REDACTED]"))
+                .field("api_key_env", api_key_env)
+                .field("protocol", protocol)
+                .field("reasoning_effort", reasoning_effort)
+                .finish(),
+            Self::AnthropicCompatible {
+                model,
+                base_url,
+                api_key_env,
+                anthropic_version,
+            } => formatter
+                .debug_struct("AnthropicCompatible")
+                .field("model", model)
+                .field("base_url", base_url)
+                .field("api_key_env", api_key_env)
+                .field("anthropic_version", anthropic_version)
+                .finish(),
+            Self::Echo { model } => formatter
+                .debug_struct("Echo")
+                .field("model", model)
+                .finish(),
+        }
+    }
 }
 
 impl Default for ProviderConfig {
@@ -246,8 +301,31 @@ fn read_config(path: &Path) -> Result<AppConfig> {
     toml::from_str(&source).with_context(|| format!("invalid config {}", path.display()))
 }
 
-fn default_openai_key_env() -> String {
-    "OPENAI_API_KEY".to_owned()
+pub fn resolve_env_reference(value: &str) -> Result<String> {
+    let name = value
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+        .or_else(|| value.strip_prefix('$'));
+    match name {
+        Some("") => bail!("environment reference must include a variable name"),
+        Some(name) => env::var(name).with_context(|| format!("missing environment value `{name}`")),
+        None => Ok(value.to_owned()),
+    }
+}
+
+pub fn resolve_openai_api_key(api_key: Option<&str>, api_key_env: Option<&str>) -> Result<String> {
+    match (api_key, api_key_env) {
+        (Some(_), Some(_)) => {
+            bail!("set only one of `provider.api_key` or deprecated `provider.api_key_env`")
+        }
+        (Some(value), None) => resolve_env_reference(value),
+        (None, Some("")) => bail!("`provider.api_key_env` must include a variable name"),
+        (None, Some(name)) => {
+            env::var(name).with_context(|| format!("missing provider credential `{name}`"))
+        }
+        (None, None) => env::var(DEFAULT_OPENAI_API_KEY_ENV)
+            .with_context(|| format!("missing provider credential `{DEFAULT_OPENAI_API_KEY_ENV}`")),
+    }
 }
 fn default_anthropic_key_env() -> String {
     "ANTHROPIC_API_KEY".to_owned()
@@ -268,7 +346,9 @@ mod tests {
             kind = "openai-compatible"
             model = "local-model"
             base_url = "http://localhost:8000/v1"
+            api_key = "inline-token"
             protocol = "chat-completions"
+            reasoning_effort = "high"
 
             [runtime]
             max_steps = 12
@@ -277,6 +357,100 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.provider.model(), "local-model");
+        let ProviderConfig::OpenaiCompatible {
+            api_key,
+            reasoning_effort,
+            ..
+        } = &config.provider
+        else {
+            panic!("expected openai-compatible provider");
+        };
+        assert_eq!(api_key.as_deref(), Some("inline-token"));
+        assert_eq!(reasoning_effort.as_deref(), Some("high"));
         assert_eq!(config.runtime.max_steps, 12);
+    }
+
+    #[test]
+    fn parses_legacy_openai_api_key_env() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [provider]
+            kind = "openai-compatible"
+            model = "legacy-model"
+            base_url = "http://localhost:8000/v1"
+            api_key_env = "LEGACY_OPENAI_API_KEY"
+            "#,
+        )
+        .unwrap();
+
+        let ProviderConfig::OpenaiCompatible {
+            api_key,
+            api_key_env,
+            ..
+        } = config.provider
+        else {
+            panic!("expected openai-compatible provider");
+        };
+        assert!(api_key.is_none());
+        assert_eq!(api_key_env.as_deref(), Some("LEGACY_OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn resolves_literal_and_braced_environment_values() {
+        assert_eq!(
+            resolve_env_reference("inline-token").unwrap(),
+            "inline-token"
+        );
+        assert_eq!(
+            resolve_env_reference("${PATH}").unwrap(),
+            env::var("PATH").unwrap()
+        );
+        assert!(resolve_env_reference("${}").is_err());
+    }
+
+    #[test]
+    fn resolves_new_and_legacy_openai_credentials_without_ambiguity() {
+        assert_eq!(
+            resolve_openai_api_key(Some("inline-token"), None).unwrap(),
+            "inline-token"
+        );
+        assert_eq!(
+            resolve_openai_api_key(Some("${PATH}"), None).unwrap(),
+            env::var("PATH").unwrap()
+        );
+        assert_eq!(
+            resolve_openai_api_key(None, Some("PATH")).unwrap(),
+            env::var("PATH").unwrap()
+        );
+        match env::var(DEFAULT_OPENAI_API_KEY_ENV) {
+            Ok(expected) => {
+                assert_eq!(resolve_openai_api_key(None, None).unwrap(), expected);
+            }
+            Err(_) => {
+                let error = resolve_openai_api_key(None, None).unwrap_err().to_string();
+                assert!(error.contains(DEFAULT_OPENAI_API_KEY_ENV), "{error}");
+            }
+        }
+        assert!(resolve_openai_api_key(Some("token"), Some("PATH")).is_err());
+    }
+
+    #[test]
+    fn provider_debug_and_serialization_redact_literal_api_keys() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [provider]
+            kind = "openai-compatible"
+            model = "model"
+            base_url = "http://localhost:8000/v1"
+            api_key = "super-secret-token"
+            "#,
+        )
+        .unwrap();
+
+        let debug = format!("{:?}", config.provider);
+        let serialized = toml::to_string(&config.provider).unwrap();
+        assert!(!debug.contains("super-secret-token"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!serialized.contains("super-secret-token"));
     }
 }

@@ -248,28 +248,56 @@ async fn bash_captures_stdout_stderr_and_exit_code() {
 #[tokio::test]
 async fn cancelling_bash_terminates_its_process_group() {
     let workspace = tempdir().unwrap();
-    let outcome = tokio::time::timeout(
-        std::time::Duration::from_millis(500),
-        BashTool.execute(
-            context(workspace.path(), "bash-timeout"),
-            json!({
-                "command": "sleep 30 & child=$!; echo $child > child.pid; wait"
-            }),
-        ),
-    )
+    let tool_context = context(workspace.path(), "bash-timeout");
+    let execution = tokio::spawn(async move {
+        BashTool
+            .execute(
+                tool_context,
+                json!({
+                    "command": "sleep 30 & child=$!; echo $child > child.pid; wait"
+                }),
+            )
+            .await
+    });
+    let pid_path = workspace.path().join("child.pid");
+    let pid = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match tokio::fs::read_to_string(&pid_path).await {
+                Ok(pid) => break pid,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(error) => panic!("failed to read child pid: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("bash command did not start its background child");
+
+    execution.abort();
+    assert!(
+        execution.await.unwrap_err().is_cancelled(),
+        "bash execution was not cancelled"
+    );
+    let stopped = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let alive = std::process::Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
     .await;
-    assert!(outcome.is_err(), "bash command unexpectedly completed");
-    let pid = tokio::fs::read_to_string(workspace.path().join("child.pid"))
-        .await
-        .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let alive = std::process::Command::new("kill")
-        .args(["-0", pid.trim()])
-        .stderr(std::process::Stdio::null())
-        .status()
-        .unwrap()
-        .success();
-    assert!(!alive, "background child survived Bash cancellation");
+    assert!(
+        stopped.is_ok(),
+        "background child survived Bash cancellation"
+    );
 }
 
 #[tokio::test]

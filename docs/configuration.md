@@ -21,9 +21,31 @@ model = "gpt-5.6-sol"
 kind = "openai-compatible"
 model = "local-model"
 base_url = "http://127.0.0.1:8000/v1"
-api_key_env = "OPENAI_API_KEY"
+api_key = "${OPENAI_API_KEY}" # or a literal key
 protocol = "responses" # or "chat-completions"
+reasoning_effort = "medium" # optional; provider/model-specific
 ```
+
+`api_key` accepts either a literal value or a whole environment reference such
+as `${OPENAI_API_KEY}`. Environment references are resolved when the runtime is
+assembled. Keep literal credentials in `$HOME/.pico/config.toml` with
+restrictive file permissions rather than in a workspace config that may be
+shared. The legacy `api_key_env = "OPENAI_API_KEY"` form is still accepted for
+migration. Configuring both `api_key` and `api_key_env` is an error.
+If both are omitted, the runtime retains the legacy behavior of reading
+`OPENAI_API_KEY`.
+
+`reasoning_effort` is passed through as a string because OpenAI-compatible
+providers and models support different levels. Picoagent maps it to
+`reasoning.effort` for the Responses protocol and to the top-level
+`reasoning_effort` field for Chat Completions. Omitting it preserves the
+provider's default. Common values are `none`, `minimal`, `low`, `medium`,
+`high`, and `xhigh`; some endpoints support additional values.
+
+For Chat Completions, setting `reasoning_effort` also makes the runtime map
+`max_output_tokens` to `max_completion_tokens`. Without reasoning configured,
+the existing `max_tokens` request field is preserved for compatibility with
+older OpenAI-compatible endpoints.
 
 ```toml
 [provider]

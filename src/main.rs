@@ -9,7 +9,10 @@ use clap::Parser;
 use picoagent::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
     artifact::{ArtifactPolicy, ArtifactStore},
-    config::{AppConfig, OpenAiProtocol as ConfigOpenAiProtocol, ProviderConfig},
+    config::{
+        AppConfig, OpenAiProtocol as ConfigOpenAiProtocol, ProviderConfig, resolve_env_reference,
+        resolve_openai_api_key,
+    },
     events::{NdjsonEventSink, NoopEventSink, SharedEventSink},
     hooks::{CommandHook, HookEvent, HookPipeline},
     mcp::{McpStdioClient, McpStdioConfig},
@@ -18,7 +21,7 @@ use picoagent::{
         ModelProvider,
         anthropic_compatible::{AnthropicCompatibleOptions, AnthropicCompatibleProvider},
         echo::EchoProvider,
-        openai_compatible::{OpenAiCompatibleProvider, OpenAiProtocol},
+        openai_compatible::{OpenAiCompatibleOptions, OpenAiCompatibleProvider, OpenAiProtocol},
         openai_oauth::{DEFAULT_OPENAI_OAUTH_BASE_URL, OpenAiOAuthProvider},
     },
     skills::{LoadSkillTool, SkillRegistry},
@@ -116,7 +119,7 @@ async fn run_request(
             env: server
                 .env
                 .iter()
-                .map(|(name, value)| Ok((name.clone(), expand_env_reference(value)?)))
+                .map(|(name, value)| Ok((name.clone(), resolve_env_reference(value)?)))
                 .collect::<Result<_>>()?,
             cwd: Some(workspace.to_path_buf()),
         })
@@ -200,17 +203,23 @@ fn build_provider(config: &ProviderConfig, pico_home: &Path) -> Result<Arc<dyn M
         }
         ProviderConfig::OpenaiCompatible {
             base_url,
+            api_key,
             api_key_env,
             protocol,
+            reasoning_effort,
             ..
         } => {
-            let api_key = env::var(api_key_env)
-                .with_context(|| format!("missing provider credential `{api_key_env}`"))?;
+            let api_key = resolve_openai_api_key(api_key.as_deref(), api_key_env.as_deref())?;
             let protocol = match protocol {
                 ConfigOpenAiProtocol::Responses => OpenAiProtocol::Responses,
                 ConfigOpenAiProtocol::ChatCompletions => OpenAiProtocol::ChatCompletions,
             };
-            Arc::new(OpenAiCompatibleProvider::new(base_url, api_key, protocol))
+            let options = OpenAiCompatibleOptions::new(base_url, api_key, protocol);
+            let mut provider = OpenAiCompatibleProvider::with_options(options);
+            if let Some(reasoning_effort) = reasoning_effort {
+                provider = provider.with_reasoning_effort(reasoning_effort);
+            }
+            Arc::new(provider)
         }
         ProviderConfig::AnthropicCompatible {
             base_url,
@@ -356,19 +365,6 @@ fn pico_home() -> Result<PathBuf> {
     }
     let home = env::var_os("HOME").context("HOME is not set; set PICO_HOME explicitly")?;
     Ok(PathBuf::from(home).join(".pico"))
-}
-
-fn expand_env_reference(value: &str) -> Result<String> {
-    let name = value
-        .strip_prefix("${")
-        .and_then(|value| value.strip_suffix('}'))
-        .or_else(|| value.strip_prefix('$'));
-    match name {
-        Some(name) => {
-            env::var(name).with_context(|| format!("missing MCP environment value `{name}`"))
-        }
-        None => Ok(value.to_owned()),
-    }
 }
 
 fn dunce_canonicalize(path: &Path) -> Result<PathBuf> {
