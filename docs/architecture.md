@@ -98,13 +98,14 @@ pages. See [artifacts.md](artifacts.md).
 
 ### Skills and instructions
 
-The stable system prefix contains built-in instructions, workspace `AGENTS.md`,
-and sorted skill metadata. A skill body enters the conversation only after the
-model calls `load_skill`.
+The system prompt contains only stable built-in instructions. The first user
+message carries a `runtime_reminder` content block with the workspace
+`AGENTS.md` and sorted skill metadata, followed by the original request. A skill
+body enters the conversation only after the model calls `load_skill`.
 
 ### Memory
 
-Memory is durable knowledge about the user and projects. The system prompt
+Memory is durable knowledge about the user and projects. The runtime reminder
 exposes two ordinary Markdown locations; `read` and `bash` inspect them.
 `memory_update` invokes the general-task profile to make semantic changes, and
 an external cron or job scheduler can invoke model-driven consolidation. See
@@ -127,12 +128,14 @@ all background executions have a separate hard timeout.
 
 ## Prompt And Cache Shape
 
-Stable instructions, project instructions, skill metadata, and sorted tool
-schemas stay in deterministic order. Tool outputs and background completions
-are append-only tail messages. Large outputs become immutable artifacts with
-bounded previews. Together these choices avoid rebuilding earlier messages and
-make provider KV-cache reuse possible without making cache behavior part of the
-core API.
+The built-in system prompt and sorted tool schemas stay in deterministic order.
+Project instructions, skill metadata, memory paths, and delegated instructions
+form a deterministic runtime reminder at the start of each run. Both the
+reminder and tool registry are frozen for that run; later tool outputs and
+background completions are append-only tail messages. Large outputs become
+immutable artifacts with bounded previews. Together these choices avoid
+rebuilding earlier messages and make provider KV-cache reuse possible without
+making cache behavior part of the core API.
 
 ### Hooks
 

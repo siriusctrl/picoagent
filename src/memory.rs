@@ -42,9 +42,9 @@ impl MemoryPaths {
         }
     }
 
-    pub fn prompt_section(&self) -> String {
+    pub fn runtime_reminder_section(&self) -> String {
         format!(
-            "# Runtime memory locations\n\nGlobal user memory: {}\nProject memory: {}\n\nUse read and bash to inspect these ordinary Markdown files. Use memory_update when durable knowledge should be added, corrected, merged, or removed; do not edit memory directly during the main task.",
+            "user: {}\nproject: {}\n\nUse `read` and `bash` to inspect these ordinary Markdown files. Use `memory_update` when durable knowledge should be added, corrected, merged, or removed; do not edit memory directly during the main task.",
             self.user.display(),
             self.project.display()
         )

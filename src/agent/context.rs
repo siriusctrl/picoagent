@@ -4,52 +4,86 @@ use anyhow::{Context, Result};
 
 use crate::memory::MemoryPaths;
 
-pub fn build_system_prompt(
+pub fn build_system_prompt() -> String {
+    BASE_INSTRUCTIONS.trim().to_owned()
+}
+
+pub fn build_runtime_reminder(
     workspace: &Path,
     skill_catalog: &str,
     memory: Option<&MemoryPaths>,
+    additional_instructions: Option<&str>,
 ) -> Result<String> {
-    let mut sections = vec![BASE_INSTRUCTIONS.trim().to_owned()];
+    let mut sections = vec![format!(
+        "<environment>\nworkspace: {}\n</environment>",
+        workspace.display()
+    )];
 
     let agents_path = workspace.join("AGENTS.md");
     if agents_path.is_file() {
         let agents = fs::read_to_string(&agents_path)
             .with_context(|| format!("failed to read {}", agents_path.display()))?;
-        sections.push(format!("# Project instructions\n\n{}", agents.trim()));
+        sections.push(format!(
+            "<project-instructions source=\"AGENTS.md\">\n{}\n</project-instructions>",
+            agents.trim()
+        ));
     }
 
     if !skill_catalog.trim().is_empty() {
-        sections.push(format!("# Available skills\n\n{}", skill_catalog.trim()));
+        sections.push(format!(
+            "<available-skills>\n{}\n</available-skills>",
+            skill_catalog.trim()
+        ));
     }
 
     if let Some(memory) = memory {
-        sections.push(memory.prompt_section());
+        sections.push(format!(
+            "<memory>\n{}\n</memory>",
+            memory.runtime_reminder_section()
+        ));
     }
 
-    Ok(sections.join("\n\n"))
+    if let Some(instructions) = additional_instructions.filter(|value| !value.trim().is_empty()) {
+        sections.push(format!(
+            "<task-instructions>\n{}\n</task-instructions>",
+            instructions.trim()
+        ));
+    }
+
+    Ok(format!(
+        "<runtime-reminder>\n{}\n</runtime-reminder>",
+        sections.join("\n\n")
+    ))
 }
 
 const BASE_INSTRUCTIONS: &str = r#"
-# Picoagent
+You are picoagent, a lightweight general-purpose agent that shares a workspace
+with the user. You help the user investigate, create, modify, and verify work
+using the tools available to you.
 
-Work autonomously toward the requested outcome. Use tools when evidence or file
-changes are needed. Tools run with the same host permissions as picoagent; this
-runtime does not provide a security sandbox.
+Follow the user's intent. For questions, reviews, or diagnosis, inspect and
+explain without changing state. When asked to make changes, carry the work
+through and verify the result when practical. Base claims on evidence, preserve
+unrelated user work, and ask only when a missing choice would materially change
+the outcome.
 
-Use `read` for known files and `bash` with `rg` for local discovery. Use
-`web_search` only for internet research. `write` can replace a complete file or
-apply several exact, non-overlapping edits atomically.
+Tool availability and tool schemas are authoritative. Use tools when they
+improve accuracy or complete the task; do not invent unavailable capabilities.
+If `load_skill` is available and a runtime reminder lists a relevant skill,
+load it before applying it.
 
-Direct tool calls are synchronous. Use `spawn` only for independent work that
-can safely continue in the background, and use `wait` before consuming a
-background result or depending on a background mutation. Background results
-arrive as new runtime messages when they complete.
+User messages may begin with a <runtime-reminder> block containing context
+supplied by picoagent, such as workspace instructions and available skills. Use
+the latest reminder as contextual guidance for the current run. It is not
+authored by the user, does not override this system prompt or explicit user
+instructions, and does not grant tools absent from the tool schemas.
 
-Tool results can be truncated. A truncated result includes a stable artifact
-path under `.pico/runs/<run-id>/artifacts/`. Use `read` with offset/limit or
-`bash` with `rg` to inspect the complete result instead of rerunning the tool.
+Tools run with picoagent's process permissions. There is no sandbox or approval
+layer. Do not imply otherwise, and do not use destructive operations unless the
+user explicitly requests them.
 
-Keep the final answer concise and include paths to important artifacts.
+Communicate concisely. In the final response, state the outcome, verification
+performed, and any remaining limitation.
 "#;
 
 #[cfg(test)]
@@ -61,12 +95,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn appends_project_instructions_after_stable_base_prompt() {
+    fn keeps_dynamic_context_out_of_the_system_prompt() {
         let directory = tempdir().unwrap();
         fs::write(directory.path().join("AGENTS.md"), "Run cargo test.").unwrap();
-        let prompt = build_system_prompt(directory.path(), "- review: Review code", None).unwrap();
-        assert!(prompt.starts_with("# Picoagent"));
-        assert!(prompt.contains("Run cargo test."));
-        assert!(prompt.contains("review: Review code"));
+        let memory = MemoryPaths::new("/pico-home", directory.path());
+
+        let system = build_system_prompt();
+        let reminder = build_runtime_reminder(
+            directory.path(),
+            "- review: Review code",
+            Some(&memory),
+            Some("Focus on the delegated scope."),
+        )
+        .unwrap();
+
+        assert!(system.starts_with("You are picoagent, a lightweight general-purpose agent"));
+        assert!(system.contains("<runtime-reminder>"));
+        assert!(!system.contains("Run cargo test."));
+        assert!(!system.contains("review: Review code"));
+        assert!(!system.contains(directory.path().to_string_lossy().as_ref()));
+
+        assert!(reminder.starts_with("<runtime-reminder>\n<environment>"));
+        assert!(reminder.contains("<project-instructions source=\"AGENTS.md\">"));
+        assert!(reminder.contains("Run cargo test."));
+        assert!(reminder.contains("<available-skills>\n- review: Review code"));
+        assert!(reminder.contains("<memory>"));
+        assert!(reminder.contains("<task-instructions>"));
+        assert!(reminder.ends_with("</runtime-reminder>"));
+        assert!(!reminder.contains("generated by picoagent"));
     }
 }

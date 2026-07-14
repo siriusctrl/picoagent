@@ -15,7 +15,7 @@ use crate::{
 };
 
 use super::{
-    context::build_system_prompt,
+    context::{build_runtime_reminder, build_system_prompt},
     task::{BackgroundTaskRecord, SpawnTool, TaskManager, TaskManagerConfig, WaitTool},
     tool_execution::DirectToolRuntime,
 };
@@ -143,14 +143,24 @@ impl AgentRunner {
             )
             .await?;
 
-        let mut system =
-            build_system_prompt(&self.workspace, &self.skill_catalog, self.memory.as_ref())?;
-        if let Some(additional) = &request.additional_instructions {
-            system.push_str("\n\n# Delegated task instructions\n\n");
-            system.push_str(additional.trim());
-        }
-
-        let user_message = Message::text(Role::User, request.prompt.clone());
+        let system = build_system_prompt();
+        let runtime_reminder = build_runtime_reminder(
+            &self.workspace,
+            &self.skill_catalog,
+            self.memory.as_ref(),
+            request.additional_instructions.as_deref(),
+        )?;
+        let user_message = Message {
+            role: Role::User,
+            content: vec![
+                MessageContent::RuntimeReminder {
+                    text: runtime_reminder,
+                },
+                MessageContent::Text {
+                    text: request.prompt.clone(),
+                },
+            ],
+        };
         self.store.append_message(&run_id, &user_message).await?;
         let mut messages = vec![user_message];
         let mut registry = self.base_tools.clone();

@@ -35,6 +35,10 @@ pub enum Role {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageContent {
+    /// Synthetic runtime context prepended to the first user request.
+    RuntimeReminder {
+        text: String,
+    },
     Text {
         text: String,
     },

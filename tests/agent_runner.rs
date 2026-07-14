@@ -17,6 +17,20 @@ use picoagent::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+fn first_user_text(request: &ModelRequest) -> &str {
+    request
+        .messages
+        .iter()
+        .find(|message| message.role == Role::User)
+        .and_then(|message| {
+            message.content.iter().find_map(|content| match content {
+                MessageContent::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+        })
+        .unwrap_or_default()
+}
+
 struct FileProducingProvider;
 
 #[async_trait]
@@ -186,16 +200,7 @@ impl ModelProvider for DelegatingProvider {
         request: ModelRequest,
         _events: SharedEventSink,
     ) -> Result<ModelResponse> {
-        let first_user = request
-            .messages
-            .iter()
-            .find(|message| message.role == Role::User)
-            .and_then(|message| message.content.first())
-            .and_then(|content| match content {
-                MessageContent::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .unwrap_or_default();
+        let first_user = first_user_text(&request);
         let has_result = request
             .messages
             .iter()
@@ -572,16 +577,7 @@ impl ModelProvider for MemoryTimeoutProvider {
         request: ModelRequest,
         _events: SharedEventSink,
     ) -> Result<ModelResponse> {
-        let first_user = request
-            .messages
-            .iter()
-            .find(|message| message.role == Role::User)
-            .and_then(|message| message.content.first())
-            .and_then(|content| match content {
-                MessageContent::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .unwrap_or_default();
+        let first_user = first_user_text(&request);
         if first_user.starts_with("Update durable") {
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
@@ -662,16 +658,7 @@ impl ModelProvider for MemorySuccessProvider {
         request: ModelRequest,
         _events: SharedEventSink,
     ) -> Result<ModelResponse> {
-        let first_user = request
-            .messages
-            .iter()
-            .find(|message| message.role == Role::User)
-            .and_then(|message| message.content.first())
-            .and_then(|content| match content {
-                MessageContent::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .unwrap_or_default();
+        let first_user = first_user_text(&request);
         let has_tool_result = request
             .messages
             .iter()

@@ -141,7 +141,8 @@ fn anthropic_message(message: &Message) -> Value {
                     } => {
                         json!({"type": "tool_use", "id": id, "name": name, "input": arguments})
                     }
-                    MessageContent::ToolResult { .. }
+                    MessageContent::RuntimeReminder { .. }
+                    | MessageContent::ToolResult { .. }
                     | MessageContent::Reasoning { .. }
                     | MessageContent::ProviderItem { .. }
                     | MessageContent::BackgroundTaskResult { .. } => Value::Null,
@@ -314,5 +315,33 @@ mod tests {
         let text = body["messages"][0]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("task-1"));
         assert!(text.contains("done"));
+    }
+
+    #[test]
+    fn runtime_reminder_precedes_anthropic_user_text() {
+        let request = ModelRequest {
+            run_id: "run".into(),
+            model: "model".into(),
+            system: String::new(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![
+                    MessageContent::RuntimeReminder {
+                        text: "<runtime-reminder>context</runtime-reminder>".into(),
+                    },
+                    MessageContent::Text {
+                        text: "do the task".into(),
+                    },
+                ],
+            }],
+            tools: Vec::new(),
+            max_output_tokens: None,
+        };
+
+        let body = anthropic_body(&request);
+        assert_eq!(
+            body["messages"][0]["content"][0]["text"],
+            "<runtime-reminder>context</runtime-reminder>\n\ndo the task"
+        );
     }
 }

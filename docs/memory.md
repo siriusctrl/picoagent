@@ -10,8 +10,8 @@ live context window, transcript persistence, or a run summary.
 
 Both locations contain ordinary human-editable Markdown. Picoagent does not
 define a database schema, vector index, or dedicated memory read/search API.
-The system prompt names the resolved paths; the model uses `read` for known
-files and `bash` with `rg` for discovery.
+The run's initial runtime reminder names the resolved paths; the model uses
+`read` for known files and `bash` with `rg` for discovery.
 
 Project rules that every agent must obey belong in `AGENTS.md`. Memory records
 user preferences, historical explanations, prior decisions, and evolving
@@ -55,7 +55,7 @@ projection, but vector search is not required for the launch runtime.
 ## Prompt And Persistence Behavior
 
 Memory contents are not injected wholesale. Only the two paths and usage rules
-are in the system prompt; selected reads and update summaries appear near the
-conversation tail. Each maintenance child has its own run directory, transcript,
-events, artifacts, and parent id, so memory changes remain auditable without
-inflating the parent context.
+are in the initial runtime reminder; selected reads and update summaries appear
+near the conversation tail. Each maintenance child has its own run directory,
+transcript, events, artifacts, and parent id, so memory changes remain auditable
+without inflating the parent context.

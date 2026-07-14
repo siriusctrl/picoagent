@@ -304,6 +304,38 @@ mod tests {
     }
 
     #[test]
+    fn runtime_reminder_precedes_user_text_for_both_openai_protocols() {
+        let request = ModelRequest {
+            run_id: "run".into(),
+            model: "model".into(),
+            system: "stable system".into(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![
+                    MessageContent::RuntimeReminder {
+                        text: "<runtime-reminder>context</runtime-reminder>".into(),
+                    },
+                    MessageContent::Text {
+                        text: "do the task".into(),
+                    },
+                ],
+            }],
+            tools: Vec::new(),
+            max_output_tokens: None,
+        };
+
+        let expected = "<runtime-reminder>context</runtime-reminder>\n\ndo the task";
+        assert_eq!(
+            responses_body(&request, None)["input"][0]["content"][0]["text"],
+            expected
+        );
+        assert_eq!(
+            chat_body(&request, None)["messages"][1]["content"],
+            expected
+        );
+    }
+
+    #[test]
     fn reasoning_effort_uses_protocol_specific_request_shapes() {
         let request = ModelRequest {
             run_id: "run".into(),

@@ -44,8 +44,15 @@ duplicated content after a crash. Reasoning is not included in `final.md`.
 
 ## Prompt Stability
 
-Built-in instructions, `AGENTS.md`, tool schemas, and skill metadata use stable
-ordering. Dynamic tool output and memory results append near the conversation
-tail. Large results remain behind stable artifact references. These choices
-reduce context growth and improve the opportunity for provider-side prefix-cache
-reuse without coupling the loop to one cache API.
+The built-in system prompt is workspace-independent. Sorted tool schemas form
+the other stable request prefix and are frozen for the run. The first user
+message begins with a `runtime_reminder` content block containing the workspace
+snapshot: path, `AGENTS.md`, sorted skill metadata, memory paths, and optional
+delegated instructions. The original user request follows after a blank line.
+
+Tool output, background results, and later complete messages append at the
+conversation tail. Files or configuration changed during a run are observed by
+the next run rather than rewriting an earlier prefix. Large results remain
+behind stable artifact references. These choices reduce context growth and
+improve the opportunity for provider-side prefix-cache reuse without coupling
+the loop to one cache API.

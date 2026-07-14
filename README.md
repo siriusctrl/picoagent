@@ -71,6 +71,18 @@ Inspect a previous result:
 pico inspect <run-id>
 ```
 
+## Prompt Layout
+
+Picoagent keeps its built-in system prompt independent of the workspace. At the
+start of each run, the first user message contains a synthetic
+`<runtime-reminder>` block before the original request. The reminder snapshots
+the workspace path, `AGENTS.md`, discovered skill metadata, memory locations,
+and any delegated-task instructions. Tool schemas and this reminder are frozen
+for that run; configuration or file changes take effect on the next run.
+
+The reminder is stored as separate `runtime_reminder` content in
+`messages.jsonl`, while `run.json` retains the original user prompt.
+
 ## Provider Setup
 
 Configuration is loaded from the first existing path:
@@ -225,7 +237,7 @@ in their own run directories.
 
 Memory is durable knowledge about the user and projects, not the current
 conversation. It is ordinary Markdown at two locations which are included in
-the system prompt:
+the initial runtime reminder:
 
 - `$PICO_HOME/memory/user/` for cross-project user knowledge
 - `<workspace>/.pico/memory/project/` for project-specific knowledge

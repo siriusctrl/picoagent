@@ -72,6 +72,20 @@ The loop understands canonical messages and tool calls only. OAuth refresh,
 provider headers, SSE event shapes, and prompt-cache hints stay in provider
 modules.
 
+## Stable Prompt Prefix
+
+The built-in system prompt contains only product identity and stable operating
+rules. Workspace `AGENTS.md`, skill metadata, memory paths, and delegated-task
+instructions are snapshotted into a synthetic runtime reminder at the start of
+each run. Tool descriptions remain in sorted tool schemas rather than being
+duplicated in the system prompt. The tool registry and reminder are frozen for
+the run; changes take effect on the next run instead of rewriting prior
+messages.
+
+Rejected for launch: hot-reloading project context or tool definitions inside a
+run. Appending revisions would grow context, while replacing earlier messages
+would break the durable transcript boundary and provider prefix-cache reuse.
+
 ## External Scheduling
 
 Memory consolidation is a command. Cron, systemd, Kubernetes, or another job
