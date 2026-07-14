@@ -36,11 +36,14 @@ timeout does not cancel the task.
 
 ## Streaming
 
-Provider text deltas are `model_delta` runtime events. Explicit reasoning
-deltas are separate `model_reasoning_delta` events, so clients can choose
-whether to render them. Only the complete assistant message, including any
-separate reasoning block, enters `messages.jsonl`, preventing partial or
-duplicated content after a crash. Reasoning is not included in `final.md`.
+Provider text deltas are transient `model_delta` runtime events. Explicit
+reasoning deltas are separate transient `model_reasoning_delta` events, so live
+sinks can choose whether to render them. `RunDirStore` does not write either
+per-chunk event to `events.jsonl`; that file retains lifecycle, tool, artifact,
+usage, and failure events for inspection and debugging. Only the complete
+assistant message, including any separate reasoning block, enters
+`messages.jsonl`, preventing partial or duplicated content after a crash.
+Reasoning is not included in `final.md`.
 
 ## Prompt Stability
 

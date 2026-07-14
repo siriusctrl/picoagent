@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{fs::OpenOptions, io::AsyncWriteExt, sync::Mutex};
 
 use crate::{
-    events::{EventSink, RuntimeEvent, SharedEventSink},
+    events::{EventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
     model::Message,
 };
 
@@ -171,6 +171,12 @@ impl RunDirStore {
 #[async_trait]
 impl EventSink for RunDirStore {
     async fn emit(&self, event: &RuntimeEvent) -> Result<()> {
+        if matches!(
+            &event.kind,
+            RuntimeEventKind::ModelDelta { .. } | RuntimeEventKind::ModelReasoningDelta { .. }
+        ) {
+            return Ok(());
+        }
         let _guard = self.write_lock.lock().await;
         let paths = self.paths(&event.run_id);
         ensure_run_exists(&paths).await?;

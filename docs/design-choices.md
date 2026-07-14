@@ -23,6 +23,10 @@ or an event-sourced service. Complete messages and metadata are enough for
 inspection and provide the boundary for a future bounded resume command; object
 storage can archive the directory as a unit.
 
+The persisted event log contains lifecycle and debugging records, not streaming
+text or reasoning chunks. Complete messages are the searchable trajectory;
+live event sinks carry transient deltas for interactive consumers.
+
 Revisit when cross-run queries, multi-worker ownership, or server-side pagination
 become concrete requirements.
 

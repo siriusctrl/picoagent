@@ -60,8 +60,9 @@ It contains run metadata, complete messages, structured events, the final answer
 artifacts, and background task records. This is what persistence means in the
 launch runtime: a cloud worker can retain or inspect a job without a database.
 
-Only complete messages are resumable. Stream deltas are emitted to sinks and may
-be logged as events, but are not appended as partial conversation messages.
+Only complete messages are resumable. Stream deltas are emitted to live sinks
+but omitted from the persisted `events.jsonl` and are never appended as partial
+conversation messages.
 
 The persisted run state is intentionally coarse:
 

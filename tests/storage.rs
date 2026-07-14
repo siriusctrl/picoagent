@@ -83,6 +83,38 @@ async fn serializes_concurrent_event_appends_as_complete_json_lines() {
 }
 
 #[tokio::test]
+async fn keeps_stream_deltas_transient_while_persisting_lifecycle_events() {
+    let workspace = tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    store.create_run(&record(workspace.path())).await.unwrap();
+
+    for kind in [
+        RuntimeEventKind::ModelDelta {
+            text: "visible".into(),
+        },
+        RuntimeEventKind::ModelReasoningDelta {
+            text: "reasoning".into(),
+        },
+        RuntimeEventKind::ModelStarted { step: 1 },
+    ] {
+        store.emit(&RuntimeEvent::new("run-1", kind)).await.unwrap();
+    }
+
+    let events = tokio::fs::read_to_string(store.paths("run-1").events)
+        .await
+        .unwrap();
+    let stored: Vec<RuntimeEvent> = events
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(stored.len(), 1);
+    assert!(matches!(
+        &stored[0].kind,
+        RuntimeEventKind::ModelStarted { step: 1 }
+    ));
+}
+
+#[tokio::test]
 async fn rejects_writes_for_unknown_runs() {
     let workspace = tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());

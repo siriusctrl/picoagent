@@ -110,15 +110,15 @@ async fn chat_reasoning_is_persisted_as_a_separate_trajectory_channel() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| event["type"] == "model_reasoning_delta")
-            .map(|event| event["text"].as_str().unwrap())
+            .map(|event| event["type"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["inspect ", "first"]
+        [
+            "run_started",
+            "model_started",
+            "model_completed",
+            "run_completed"
+        ]
     );
-    assert!(events.iter().all(|event| {
-        event["type"] != "model_delta"
-            || event["text"].as_str().is_some_and(|text| !text.is_empty())
-    }));
     let completed = events
         .iter()
         .find(|event| event["type"] == "model_completed")
