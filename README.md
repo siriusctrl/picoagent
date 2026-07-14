@@ -127,6 +127,21 @@ model.
 When Chat Completions reasoning is configured, `max_output_tokens` is sent as
 `max_completion_tokens`, as required by reasoning-capable Chat endpoints.
 
+If a Chat Completions stream explicitly returns `delta.reasoning_content`,
+picoagent stores it as a separate `reasoning` block in `messages.jsonl` and
+emits `model_reasoning_delta` events. Reasoning token counts are preserved in
+`model_completed` events when the provider reports them. Reasoning is kept out
+of the visible answer and `final.md`. This records only reasoning text exposed
+by the compatible endpoint; it cannot recover reasoning that the provider does
+not return.
+
+Inspect the persisted reasoning for a run with:
+
+```bash
+jq -c '.content[]? | select(.type == "reasoning")' .pico/runs/<run-id>/messages.jsonl
+jq -c 'select(.type == "model_reasoning_delta" or .type == "model_completed")' .pico/runs/<run-id>/events.jsonl
+```
+
 ### Anthropic-compatible
 
 ```toml

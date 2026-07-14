@@ -35,11 +35,15 @@ pub enum RuntimeEventKind {
     ModelDelta {
         text: String,
     },
+    ModelReasoningDelta {
+        text: String,
+    },
     ModelCompleted {
         step: usize,
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
         cached_input_tokens: Option<u64>,
+        reasoning_tokens: Option<u64>,
     },
     ToolStarted {
         call_id: String,

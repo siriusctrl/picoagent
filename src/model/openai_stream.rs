@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::{
     MessageContent, ModelResponse, ModelUsage,
-    common::{ToolCallBuilder, emit_text, ensure_success, merge_usage},
+    common::{ToolCallBuilder, emit_reasoning, emit_text, ensure_success, merge_usage},
     openai_compatible::OpenAiProtocol,
 };
 use crate::events::SharedEventSink;
@@ -55,7 +55,12 @@ pub(crate) async fn complete_response(
             OpenAiProtocol::ChatCompletions => accumulator.handle_chat(&value)?,
         };
         for delta in deltas {
-            emit_text(&events, run_id, &delta).await?;
+            match delta {
+                OpenAiStreamDelta::Text(text) => emit_text(&events, run_id, &text).await?,
+                OpenAiStreamDelta::Reasoning(text) => {
+                    emit_reasoning(&events, run_id, &text).await?
+                }
+            }
         }
     }
 
@@ -79,9 +84,15 @@ fn reject_failure_event(event_type: &str, value: &Value) -> Result<()> {
     Ok(())
 }
 
+enum OpenAiStreamDelta {
+    Text(String),
+    Reasoning(String),
+}
+
 #[derive(Default)]
 struct OpenAiAccumulator {
     text: String,
+    reasoning: String,
     texts: BTreeMap<usize, String>,
     tools: BTreeMap<usize, ToolCallBuilder>,
     item_indexes: BTreeMap<String, usize>,
@@ -91,7 +102,11 @@ struct OpenAiAccumulator {
 }
 
 impl OpenAiAccumulator {
-    fn handle_responses(&mut self, event_type: &str, value: &Value) -> Result<Vec<String>> {
+    fn handle_responses(
+        &mut self,
+        event_type: &str,
+        value: &Value,
+    ) -> Result<Vec<OpenAiStreamDelta>> {
         match event_type {
             "response.output_text.delta" => self.handle_text_delta(value),
             "response.output_item.added" | "response.output_item.done" => {
@@ -112,7 +127,7 @@ impl OpenAiAccumulator {
         }
     }
 
-    fn handle_text_delta(&mut self, value: &Value) -> Result<Vec<String>> {
+    fn handle_text_delta(&mut self, value: &Value) -> Result<Vec<OpenAiStreamDelta>> {
         let delta = value
             .get("delta")
             .and_then(Value::as_str)
@@ -127,11 +142,15 @@ impl OpenAiAccumulator {
         Ok(if delta.is_empty() {
             Vec::new()
         } else {
-            vec![delta.to_owned()]
+            vec![OpenAiStreamDelta::Text(delta.to_owned())]
         })
     }
 
-    fn handle_output_item(&mut self, event_type: &str, value: &Value) -> Result<Vec<String>> {
+    fn handle_output_item(
+        &mut self,
+        event_type: &str,
+        value: &Value,
+    ) -> Result<Vec<OpenAiStreamDelta>> {
         let Some(item) = value.get("item") else {
             return Ok(Vec::new());
         };
@@ -195,7 +214,7 @@ impl OpenAiAccumulator {
         }
     }
 
-    fn handle_chat(&mut self, value: &Value) -> Result<Vec<String>> {
+    fn handle_chat(&mut self, value: &Value) -> Result<Vec<OpenAiStreamDelta>> {
         if let Some(usage) = value.get("usage") {
             merge_usage(&mut self.usage, usage);
         }
@@ -212,9 +231,21 @@ impl OpenAiAccumulator {
             self.completed = true;
         }
         let mut emitted = Vec::new();
-        if let Some(text) = delta.get("content").and_then(Value::as_str) {
+        if let Some(text) = delta
+            .get("reasoning_content")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+        {
+            self.reasoning.push_str(text);
+            emitted.push(OpenAiStreamDelta::Reasoning(text.to_owned()));
+        }
+        if let Some(text) = delta
+            .get("content")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+        {
             self.text.push_str(text);
-            emitted.push(text.to_owned());
+            emitted.push(OpenAiStreamDelta::Text(text.to_owned()));
         }
         if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for call in calls {
@@ -241,6 +272,11 @@ impl OpenAiAccumulator {
         }
         if protocol == OpenAiProtocol::ChatCompletions {
             let mut assistant_content = Vec::new();
+            if !self.reasoning.is_empty() {
+                assistant_content.push(MessageContent::Reasoning {
+                    text: self.reasoning,
+                });
+            }
             if !self.text.is_empty() {
                 assistant_content.push(MessageContent::Text {
                     text: self.text.clone(),

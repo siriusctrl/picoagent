@@ -140,7 +140,11 @@ fn chat_message(message: &Message) -> Value {
                     _ => None,
                 })
                 .collect();
-            json!({"role": "assistant", "content": content_text(&message.content), "tool_calls": calls})
+            json!({
+                "role": "assistant",
+                "content": content_text(&message.content),
+                "tool_calls": calls
+            })
         }
         Role::Tool => {
             let (call_id, content) = message
@@ -235,6 +239,31 @@ mod tests {
         assert_eq!(body["input"][0]["type"], "reasoning");
         assert_eq!(body["input"][1]["content"][0]["text"], "checked");
         assert_eq!(body["input"][2]["type"], "function_call");
+    }
+
+    #[test]
+    fn chat_keeps_reasoning_out_of_visible_continuation_context() {
+        let message = Message {
+            role: Role::Assistant,
+            content: vec![
+                MessageContent::Reasoning {
+                    text: "inspect first".into(),
+                },
+                MessageContent::Text {
+                    text: "checked".into(),
+                },
+                MessageContent::ToolCall {
+                    id: "call_1".into(),
+                    name: "read".into(),
+                    arguments: json!({"path": "README.md"}),
+                },
+            ],
+        };
+
+        let value = chat_message(&message);
+        assert!(value.get("reasoning_content").is_none());
+        assert_eq!(value["content"], "checked");
+        assert_eq!(value["tool_calls"][0]["id"], "call_1");
     }
 
     #[test]

@@ -38,6 +38,11 @@ pub enum MessageContent {
     Text {
         text: String,
     },
+    /// Reasoning text explicitly returned by a compatible provider.
+    /// Stored for trajectory inspection, not mixed into visible context.
+    Reasoning {
+        text: String,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -95,6 +100,7 @@ pub struct ModelUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

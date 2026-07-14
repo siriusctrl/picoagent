@@ -16,16 +16,24 @@ use wiremock::{
 };
 
 #[derive(Default)]
-struct RecordingSink(Mutex<Vec<String>>);
+struct RecordedDeltas {
+    text: Vec<String>,
+    reasoning: Vec<String>,
+}
+
+#[derive(Default)]
+struct RecordingSink(Mutex<RecordedDeltas>);
 
 #[async_trait]
 impl EventSink for RecordingSink {
     async fn emit(&self, event: &RuntimeEvent) -> Result<()> {
-        if let RuntimeEventKind::ModelDelta { text } = &event.kind {
-            self.0
-                .lock()
-                .expect("recording lock poisoned")
-                .push(text.clone());
+        let mut recorded = self.0.lock().expect("recording lock poisoned");
+        match &event.kind {
+            RuntimeEventKind::ModelDelta { text } => recorded.text.push(text.clone()),
+            RuntimeEventKind::ModelReasoningDelta { text } => {
+                recorded.reasoning.push(text.clone());
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -51,7 +59,7 @@ async fn responses_streams_text_and_usage() {
         "event: response.output_text.delta\n",
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"world\"}\n\n",
         "event: response.completed\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":12,\"output_tokens\":2,\"input_tokens_details\":{\"cached_tokens\":8}}}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":12,\"output_tokens\":2,\"input_tokens_details\":{\"cached_tokens\":8},\"output_tokens_details\":{\"reasoning_tokens\":1}}}}\n\n",
         "data: [DONE]\n\n",
     );
     Mock::given(method("POST"))
@@ -84,21 +92,24 @@ async fn responses_streams_text_and_usage() {
     assert_eq!(response.usage.input_tokens, Some(12));
     assert_eq!(response.usage.output_tokens, Some(2));
     assert_eq!(response.usage.cached_input_tokens, Some(8));
-    assert_eq!(
-        *events.0.lock().expect("recording lock poisoned"),
-        ["hello ", "world"]
-    );
+    assert_eq!(response.usage.reasoning_tokens, Some(1));
+    let recorded = events.0.lock().expect("recording lock poisoned");
+    assert_eq!(recorded.text, ["hello ", "world"]);
+    assert!(recorded.reasoning.is_empty());
 }
 
 #[tokio::test]
 async fn chat_stream_reassembles_fragmented_tool_arguments() {
     let server = MockServer::start().await;
     let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"inspect \"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"content\":\"\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"first\"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"content\":\"checking \"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"pa\"}}]}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"th\\\":\\\"README.md\\\"}\"}}]}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
-        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":1}}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":8,\"completion_tokens_details\":{\"reasoning_tokens\":7}}}\n\n",
         "data: [DONE]\n\n",
     );
     Mock::given(method("POST"))
@@ -121,8 +132,9 @@ async fn chat_stream_reassembles_fragmented_tool_arguments() {
         OpenAiProtocol::ChatCompletions,
     );
     let provider = OpenAiCompatibleProvider::with_options(options).with_reasoning_effort("low");
+    let events = Arc::new(RecordingSink::default());
     let response = provider
-        .complete(request(), Arc::new(NoopEventSink))
+        .complete(request(), events.clone())
         .await
         .expect("response should parse");
 
@@ -131,10 +143,22 @@ async fn chat_stream_reassembles_fragmented_tool_arguments() {
     assert_eq!(response.tool_calls[0].name, "read");
     assert_eq!(response.tool_calls[0].arguments["path"], "README.md");
     assert_eq!(response.text, "checking ");
+    assert_eq!(response.usage.reasoning_tokens, Some(7));
     assert!(matches!(
         &response.assistant_content[0],
+        picoagent::model::MessageContent::Reasoning { text } if text == "inspect first"
+    ));
+    assert!(matches!(
+        &response.assistant_content[1],
         picoagent::model::MessageContent::Text { text } if text == "checking "
     ));
+    assert!(matches!(
+        &response.assistant_content[2],
+        picoagent::model::MessageContent::ToolCall { id, .. } if id == "call_1"
+    ));
+    let recorded = events.0.lock().expect("recording lock poisoned");
+    assert_eq!(recorded.reasoning, ["inspect ", "first"]);
+    assert_eq!(recorded.text, ["checking "]);
 }
 
 #[tokio::test]

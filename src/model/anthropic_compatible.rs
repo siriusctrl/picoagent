@@ -142,6 +142,7 @@ fn anthropic_message(message: &Message) -> Value {
                         json!({"type": "tool_use", "id": id, "name": name, "input": arguments})
                     }
                     MessageContent::ToolResult { .. }
+                    | MessageContent::Reasoning { .. }
                     | MessageContent::ProviderItem { .. }
                     | MessageContent::BackgroundTaskResult { .. } => Value::Null,
                 })

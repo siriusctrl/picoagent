@@ -37,6 +37,21 @@ pub(crate) async fn emit_text(events: &SharedEventSink, run_id: &str, text: &str
         .await
 }
 
+pub(crate) async fn emit_reasoning(
+    events: &SharedEventSink,
+    run_id: &str,
+    text: &str,
+) -> Result<()> {
+    events
+        .emit(&RuntimeEvent::new(
+            run_id,
+            RuntimeEventKind::ModelReasoningDelta {
+                text: text.to_owned(),
+            },
+        ))
+        .await
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ToolCallBuilder {
     pub id: String,
@@ -85,6 +100,11 @@ pub(crate) fn merge_usage(target: &mut ModelUsage, value: &serde_json::Value) {
                 .and_then(serde_json::Value::as_u64)
         })
         .or(target.cached_input_tokens);
+    target.reasoning_tokens = value
+        .pointer("/output_tokens_details/reasoning_tokens")
+        .or_else(|| value.pointer("/completion_tokens_details/reasoning_tokens"))
+        .and_then(serde_json::Value::as_u64)
+        .or(target.reasoning_tokens);
 }
 
 pub(crate) fn content_text(content: &[MessageContent]) -> String {

@@ -40,26 +40,45 @@ impl ModelProvider for FileProducingProvider {
             Ok(ModelResponse {
                 text: "finished".to_owned(),
                 tool_calls: Vec::new(),
-                assistant_content: Vec::new(),
+                assistant_content: vec![
+                    MessageContent::Reasoning {
+                        text: "finish reasoning".to_owned(),
+                    },
+                    MessageContent::Text {
+                        text: "finished".to_owned(),
+                    },
+                ],
                 usage: ModelUsage {
                     input_tokens: Some(12),
                     output_tokens: Some(2),
                     cached_input_tokens: Some(8),
+                    reasoning_tokens: Some(3),
                 },
             })
         } else {
+            let call = ToolCall {
+                id: "large-call".to_owned(),
+                name: "large_output".to_owned(),
+                arguments: json!({}),
+            };
             Ok(ModelResponse {
                 text: String::new(),
-                tool_calls: vec![ToolCall {
-                    id: "large-call".to_owned(),
-                    name: "large_output".to_owned(),
-                    arguments: json!({}),
-                }],
-                assistant_content: Vec::new(),
+                tool_calls: vec![call.clone()],
+                assistant_content: vec![
+                    MessageContent::Reasoning {
+                        text: "tool reasoning".to_owned(),
+                    },
+                    MessageContent::ToolCall {
+                        id: call.id,
+                        name: call.name,
+                        arguments: call.arguments,
+                    },
+                ],
                 usage: ModelUsage {
                     input_tokens: Some(10),
                     output_tokens: Some(1),
                     cached_input_tokens: Some(6),
+                    reasoning_tokens: Some(2),
                 },
             })
         }
@@ -120,6 +139,14 @@ async fn runner_persists_complete_messages_and_spills_large_tool_output() {
 
     let messages = store.load_messages(&result.run_id).await.unwrap();
     assert_eq!(messages.len(), 4);
+    assert_eq!(
+        messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter(|content| matches!(content, MessageContent::Reasoning { .. }))
+            .count(),
+        2
+    );
     let tool_result = messages
         .iter()
         .flat_map(|message| &message.content)
@@ -134,6 +161,7 @@ async fn runner_persists_complete_messages_and_spills_large_tool_output() {
         .await
         .unwrap();
     assert!(events.contains("\"cached_input_tokens\":8"));
+    assert!(events.contains("\"reasoning_tokens\":3"));
     assert!(
         std::fs::read_dir(store.paths(&result.run_id).artifacts)
             .unwrap()

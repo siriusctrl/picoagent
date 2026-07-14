@@ -13,7 +13,8 @@ For each model step:
 
 1. append newly completed background results to the current messages;
 2. send sorted tool schemas to the active provider;
-3. stream text as events while collecting the complete response;
+3. stream visible text and explicitly returned reasoning as separate events
+   while collecting the complete response;
 4. persist the complete assistant message;
 5. execute requested tools sequentially;
 6. artifact large outputs and persist complete tool messages;
@@ -35,9 +36,11 @@ timeout does not cancel the task.
 
 ## Streaming
 
-Provider text deltas are runtime events. NDJSON clients can render them live.
-Only the complete assistant message enters `messages.jsonl`, preventing partial
-or duplicated content after a crash.
+Provider text deltas are `model_delta` runtime events. Explicit reasoning
+deltas are separate `model_reasoning_delta` events, so clients can choose
+whether to render them. Only the complete assistant message, including any
+separate reasoning block, enters `messages.jsonl`, preventing partial or
+duplicated content after a crash. Reasoning is not included in `final.md`.
 
 ## Prompt Stability
 

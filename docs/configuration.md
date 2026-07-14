@@ -47,6 +47,19 @@ For Chat Completions, setting `reasoning_effort` also makes the runtime map
 the existing `max_tokens` request field is preserved for compatibility with
 older OpenAI-compatible endpoints.
 
+For compatible Chat streams, `delta.reasoning_content` is captured separately
+from `delta.content`, persisted as `"type": "reasoning"` message content, and
+excluded from subsequent conversation context. This follows Qwen's multi-turn
+contract and keeps trajectory data separate from the visible assistant answer.
+Empty deltas are ignored. If usage includes
+`completion_tokens_details.reasoning_tokens`, that count is written to the
+`model_completed` event. Responses usage reports the equivalent count under
+`output_tokens_details.reasoning_tokens`.
+
+This behavior only records fields the provider actually sends. OpenAI
+Responses reasoning continuation items remain provider-owned items; the
+runtime does not infer or expose hidden chain-of-thought.
+
 ```toml
 [provider]
 kind = "anthropic-compatible"

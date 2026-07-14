@@ -251,6 +251,7 @@ impl AgentRunner {
                             input_tokens: response.usage.input_tokens,
                             output_tokens: response.usage.output_tokens,
                             cached_input_tokens: response.usage.cached_input_tokens,
+                            reasoning_tokens: response.usage.reasoning_tokens,
                         },
                     ))
                     .await?;
