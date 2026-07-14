@@ -27,6 +27,9 @@ The persisted event log contains lifecycle and debugging records, not streaming
 text or reasoning chunks. Complete messages are the searchable trajectory;
 live event sinks carry transient deltas for interactive consumers.
 
+See [ADR 0001](adr/0001-durable-messages-transient-stream-deltas.md) for the
+decision context and rejected alternatives.
+
 Revisit when cross-run queries, multi-worker ownership, or server-side pagination
 become concrete requirements.
 

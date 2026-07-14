@@ -1,8 +1,9 @@
 # AGENTS.md
 
 This file is the operating map for agents working in this repository. Keep the
-product and user workflow in `README.md`, durable tradeoffs in `docs/`, and this
-file focused on navigation, invariants, verification, and handoff.
+product and user workflow in `README.md`, current tradeoff summaries in `docs/`,
+individual architectural decisions in `docs/adr/`, and this file focused on
+navigation, invariants, verification, and handoff.
 
 ## Source Map
 
@@ -26,6 +27,8 @@ file focused on navigation, invariants, verification, and handoff.
   Runtime behavior does not belong in either file.
 - `tests/`: cross-module and end-to-end behavior.
 - `docs/`: architecture, artifact, memory, configuration, and runtime contracts.
+- `docs/adr/`: numbered Architecture Decision Records explaining durable
+  decisions, alternatives, and consequences.
 
 ## Engineering Invariants
 
@@ -97,7 +100,10 @@ provider and inspect the generated run directory, `messages.jsonl`,
   `docs/artifacts.md`.
 - Memory scopes, update behavior, paths, or consolidation: update `docs/memory.md`.
 - Config fields or provider behavior: update `docs/configuration.md`.
-- Durable tradeoffs or rejected alternatives: update `docs/design-choices.md`.
+- Current high-level tradeoff summaries: update `docs/design-choices.md`.
+- Significant cross-module decisions, durable invariants, or rejected credible
+  alternatives: add or supersede an ADR under `docs/adr/` and update its index.
+  Do not silently rewrite an accepted decision when the architecture changes.
 
 ## Review And Handoff
 
