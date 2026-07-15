@@ -11,6 +11,8 @@ use crate::{
 
 use super::paths::resolve_path;
 
+const DESCRIPTION: &str = include_str!("description.md");
+
 #[derive(Debug, Default)]
 pub struct ReadTool;
 
@@ -38,7 +40,7 @@ impl Tool for ReadTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "read".to_owned(),
-            description: "Read a UTF-8 local file or artifact by line range. offset is zero-based; limit and max_bytes bound the returned content. Use bash for directory listing or content discovery.".to_owned(),
+            description: DESCRIPTION.trim().to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

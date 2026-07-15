@@ -14,6 +14,10 @@ use crate::{
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
+const MEMORY_UPDATE_DESCRIPTION: &str = include_str!("memory/descriptions/memory_update.md");
+const MEMORY_MAINTENANCE_INSTRUCTIONS: &str =
+    include_str!("../prompts/agents/memory-maintenance.md");
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryScope {
@@ -145,7 +149,7 @@ impl Tool for MemoryUpdateTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "memory_update".to_owned(),
-            description: "Assign a focused general-task subagent to update durable Markdown memory. Use scope=user for cross-project user preferences and stable personal context; use scope=project for facts and decisions specific to this workspace. The subagent reads existing memory, makes the smallest useful file changes, and returns a summary. Call directly to wait synchronously, or wrap this tool with spawn to continue while it runs in the background.".to_owned(),
+            description: MEMORY_UPDATE_DESCRIPTION.trim().to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -196,7 +200,7 @@ impl Tool for MemoryUpdateTool {
                     parent_run_id: Some(self.parent_run_id.clone()),
                     depth: self.parent_depth + 1,
                     additional_instructions: Some(
-                        "This is a memory maintenance task. Work only inside the designated memory directory. Do not call memory_update or spawn another agent.".to_owned(),
+                        MEMORY_MAINTENANCE_INSTRUCTIONS.trim().to_owned(),
                     ),
                     tool_allowlist: Some(vec!["read".into(), "write".into(), "bash".into()]),
                     use_general_task_profile: true,

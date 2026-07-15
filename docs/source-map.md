@@ -8,7 +8,8 @@
 - `src/agent/task/lifecycle.rs`: background tool hooks, events, and failure commit.
 - `src/agent/task/record.rs`: persisted background task state and model envelope.
 - `src/agent/task/tools.rs`: model-facing `spawn` and `wait` schemas.
-- `src/agent/context.rs`: deterministic system-prompt framing.
+- `src/agent/context.rs`: deterministic prompt framing and dynamic reminder assembly.
+- `prompts/agents/`: compile-time agent instruction assets.
 - `src/model/mod.rs`: canonical messages, tools, requests, responses, and provider trait.
 - `src/model/openai_oauth.rs`: OAuth provider orchestration and 401 retry.
 - `src/model/openai_compatible.rs`: Responses/Chat provider facade.
@@ -17,8 +18,9 @@
 - `src/model/openai_oauth_credentials.rs`: auth-file, Codex import, and JWT helpers.
 - `src/model/openai_oauth_device.rs`: device-code request and polling.
 - `src/model/anthropic_compatible.rs`: Messages adapter.
-- `src/tools/mod.rs`: tool contract and sorted registry.
-- `src/tools/builtin/`: `read`, atomic `write`, `bash`, and optional `web_search`.
+- `src/tools/mod.rs`: tool contract, sorted registry, and default registration.
+- `src/tools/{read,write,bash,web_search}/`: flat standalone base tools with
+  compile-time descriptions beside their Rust implementation.
 - `src/artifact.rs`: versioned artifact envelope and spill.
 - `src/artifact/preview.rs`: bounded UTF-8-safe file and byte previews.
 - `src/storage/mod.rs`: run directories and JSON/JSONL persistence.

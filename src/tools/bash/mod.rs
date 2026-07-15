@@ -13,6 +13,8 @@ use crate::{
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
+const DESCRIPTION: &str = include_str!("description.md");
+
 #[derive(Debug, Default)]
 pub struct BashTool;
 
@@ -26,7 +28,7 @@ impl Tool for BashTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "bash".to_owned(),
-            description: "Run a Bash command in the current workspace. Use it for file discovery, local text search with rg, tests, builds, and other command-line work. stdout and stderr are preserved as an artifact when large. No sandbox is provided.".to_owned(),
+            description: DESCRIPTION.trim().to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

@@ -12,7 +12,7 @@ use picoagent::{
         MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role, ToolCall,
     },
     storage::{RunDirStore, RunState},
-    tools::{RawToolOutput, Tool, ToolContext, ToolRegistry, builtin::WriteTool},
+    tools::{RawToolOutput, Tool, ToolContext, ToolRegistry, WriteTool},
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;

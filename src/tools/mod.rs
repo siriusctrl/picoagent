@@ -6,7 +6,16 @@ use serde_json::Value;
 
 use crate::model::ToolSpec;
 
-pub mod builtin;
+pub mod bash;
+mod paths;
+pub mod read;
+pub mod web_search;
+pub mod write;
+
+pub use bash::BashTool;
+pub use read::ReadTool;
+pub use web_search::WebSearchTool;
+pub use write::WriteTool;
 
 #[derive(Clone)]
 pub struct ToolContext {
@@ -82,4 +91,11 @@ impl ToolRegistry {
         self.tools
             .retain(|name, _| names.iter().any(|item| item == name));
     }
+}
+
+pub fn register_defaults(registry: &mut ToolRegistry) -> Result<()> {
+    registry.register(Arc::new(ReadTool))?;
+    registry.register(Arc::new(WriteTool::default()))?;
+    registry.register(Arc::new(BashTool))?;
+    Ok(())
 }

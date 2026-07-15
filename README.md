@@ -83,6 +83,11 @@ for that run; configuration or file changes take effect on the next run.
 The reminder is stored as separate `runtime_reminder` content in
 `messages.jsonl`, while `run.json` retains the original user prompt.
 
+Stable agent instructions are maintained as compile-time Markdown assets under
+`prompts/agents/`. Standalone base tool descriptions live beside their Rust
+implementations under `src/tools/<tool>/`; names, schemas, validation, and
+execution remain Rust contracts.
+
 ## Provider Setup
 
 Configuration is loaded from the first existing path:

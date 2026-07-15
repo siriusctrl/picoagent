@@ -9,6 +9,8 @@ use crate::{
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
+const DESCRIPTION: &str = include_str!("description.md");
+
 const DEFAULT_BRAVE_ENDPOINT: &str = "https://api.search.brave.com/res/v1/web/search";
 
 #[derive(Clone)]
@@ -62,7 +64,7 @@ impl Tool for WebSearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "web_search".to_owned(),
-            description: "Search the public web and return current result titles, URLs, and snippets. Use this for information that may have changed, unfamiliar topics, or when sources are needed. This searches the internet; use read for local files and bash with rg for workspace text search.".to_owned(),
+            description: DESCRIPTION.trim().to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

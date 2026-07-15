@@ -13,6 +13,8 @@ use crate::{
 use super::{BackgroundTaskRecord, TaskManager};
 use crate::agent::runner::RunRequest;
 
+const GENERAL_TASK_INSTRUCTIONS: &str = include_str!("../../../prompts/agents/general-task.md");
+
 impl TaskManager {
     pub async fn spawn_tool(
         self: &Arc<Self>,
@@ -180,9 +182,7 @@ impl TaskManager {
                 prompt,
                 parent_run_id: Some(manager.parent_run_id.clone()),
                 depth: manager.parent_depth + 1,
-                additional_instructions: Some(
-                    "You are a focused general-task subagent. Complete the assigned task and return a concise result to the parent agent.".to_owned(),
-                ),
+                additional_instructions: Some(GENERAL_TASK_INSTRUCTIONS.trim().to_owned()),
                 tool_allowlist: None,
                 use_general_task_profile: true,
             };

@@ -26,8 +26,11 @@ use picoagent::{
     },
     skills::{LoadSkillTool, SkillRegistry},
     storage::RunDirStore,
-    tools::{ToolRegistry, builtin},
+    tools::{ToolRegistry, WebSearchTool, register_defaults},
 };
+
+const MEMORY_CONSOLIDATION_INSTRUCTIONS: &str =
+    include_str!("../prompts/agents/memory-consolidation.md");
 
 mod cli;
 
@@ -94,7 +97,7 @@ async fn run_request(
     let home = env::var_os("HOME").map(PathBuf::from);
     let skills = Arc::new(SkillRegistry::discover(workspace, home.as_deref())?);
     let mut tools = ToolRegistry::default();
-    builtin::register_all(&mut tools)?;
+    register_defaults(&mut tools)?;
     tools.register(Arc::new(LoadSkillTool::new(skills.clone())))?;
     if config.web_search.enabled {
         let api_key = env::var(&config.web_search.api_key_env).with_context(|| {
@@ -103,7 +106,7 @@ async fn run_request(
                 config.web_search.api_key_env
             )
         })?;
-        tools.register(Arc::new(builtin::WebSearchTool::with_endpoint(
+        tools.register(Arc::new(WebSearchTool::with_endpoint(
             &config.web_search.endpoint,
             api_key,
             config.web_search.default_count,
@@ -335,8 +338,7 @@ async fn memory_command(
                     parent_run_id: None,
                     depth: 0,
                     additional_instructions: Some(
-                        "This is a memory consolidation job. Only edit the named memory directories."
-                            .to_owned(),
+                        MEMORY_CONSOLIDATION_INSTRUCTIONS.trim().to_owned(),
                     ),
                     tool_allowlist: Some(vec!["read".into(), "write".into(), "bash".into()]),
                     use_general_task_profile: true,

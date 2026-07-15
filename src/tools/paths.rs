@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+// Shared path handling for workspace-local file tools.
+
 pub(crate) fn resolve_path(workspace: &Path, value: &str) -> PathBuf {
     let path = Path::new(value);
     if path.is_absolute() {

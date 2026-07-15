@@ -41,3 +41,4 @@ Use these sections:
 ## Index
 
 - [ADR 0001: Persist complete messages and keep stream deltas transient](0001-durable-messages-transient-stream-deltas.md)
+- [ADR 0002: Embed prompt assets and keep tools with their owners](0002-compile-time-prompt-assets-and-tool-ownership.md)

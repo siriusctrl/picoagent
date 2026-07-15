@@ -15,6 +15,8 @@ use crate::{
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
+const LOAD_SKILL_DESCRIPTION: &str = include_str!("descriptions/load_skill.md");
+
 /// The location from which a skill was discovered. Later sources override
 /// earlier ones: user, workspace `.agents`, then workspace-local `skills`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,7 +210,7 @@ impl Tool for LoadSkillTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "load_skill".to_owned(),
-            description: "Load the complete instructions for one skill by name. Skill metadata is available before loading; use this only when the skill applies.".to_owned(),
+            description: LOAD_SKILL_DESCRIPTION.trim().to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": { "name": { "type": "string" } },

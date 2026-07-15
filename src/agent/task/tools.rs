@@ -12,6 +12,9 @@ use crate::{
 
 use super::TaskManager;
 
+const SPAWN_DESCRIPTION: &str = include_str!("descriptions/spawn.md");
+const WAIT_DESCRIPTION: &str = include_str!("descriptions/wait.md");
+
 pub struct SpawnTool {
     manager: Arc<TaskManager>,
 }
@@ -42,7 +45,7 @@ impl Tool for SpawnTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "spawn".to_owned(),
-            description: "Start one tool call or general-task subagent in the background and return immediately with a task_id. Direct tool calls are synchronous, so use spawn only when work is independent and the current task can continue safely. Do not background a mutation that later work depends on; call it directly or use wait before consuming its result. Completed results are automatically appended at the next model boundary, or can be joined explicitly with wait.".to_owned(),
+            description: SPAWN_DESCRIPTION.trim().to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -117,7 +120,7 @@ impl Tool for WaitTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "wait".to_owned(),
-            description: "Wait for selected background tasks up to a bounded timeout and return their current states and terminal results. Pass task_ids=[] to wait for all tasks created by this run. A wait timeout does not cancel tasks; call wait again if needed. Results returned by wait are marked delivered and will not be appended again automatically.".to_owned(),
+            description: WAIT_DESCRIPTION.trim().to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

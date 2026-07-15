@@ -93,6 +93,16 @@ Rejected for launch: hot-reloading project context or tool definitions inside a
 run. Appending revisions would grow context, while replacing earlier messages
 would break the durable transcript boundary and provider prefix-cache reuse.
 
+## Compile-Time Prompt Assets
+
+Stable agent instructions and static tool descriptions are Markdown assets
+embedded with `include_str!`. Rust remains authoritative for prompt assembly,
+tool schemas, validation, and execution. Standalone base tools use flat
+`src/tools/<tool>/` modules; subsystem tools remain with their owning modules.
+
+See [ADR 0002](adr/0002-compile-time-prompt-assets-and-tool-ownership.md) for
+the packaging and ownership decision.
+
 ## External Scheduling
 
 Memory consolidation is a command. Cron, systemd, Kubernetes, or another job

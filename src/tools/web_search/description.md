@@ -1,0 +1,1 @@
+Search the public web and return current result titles, URLs, and snippets. Use this for information that may have changed, unfamiliar topics, or when sources are needed. This searches the internet; use read for local files and bash with rg for workspace text search.

@@ -1,6 +1,6 @@
 use picoagent::tools::{
-    Tool, ToolContext,
-    builtin::{BashTool, ReadTool, WebSearchTool, WriteTool},
+    BashTool, ReadTool, Tool, ToolContext, ToolRegistry, WebSearchTool, WriteTool,
+    register_defaults,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -15,6 +15,35 @@ fn context(workspace: &std::path::Path, call_id: &str) -> ToolContext {
         call_id: call_id.to_owned(),
         workspace: workspace.to_owned(),
     }
+}
+
+#[test]
+fn default_registry_uses_the_embedded_tool_descriptions() {
+    let mut registry = ToolRegistry::default();
+    register_defaults(&mut registry).unwrap();
+
+    assert_eq!(
+        registry.names().collect::<Vec<_>>(),
+        ["bash", "read", "write"]
+    );
+
+    let specs = registry
+        .specs()
+        .into_iter()
+        .map(|spec| (spec.name, spec.description))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        specs["bash"],
+        include_str!("../src/tools/bash/description.md").trim()
+    );
+    assert_eq!(
+        specs["read"],
+        include_str!("../src/tools/read/description.md").trim()
+    );
+    assert_eq!(
+        specs["write"],
+        include_str!("../src/tools/write/description.md").trim()
+    );
 }
 
 #[tokio::test]
@@ -320,6 +349,10 @@ async fn web_search_uses_brave_request_shape_and_returns_compact_results() {
         .mount(&server)
         .await;
     let tool = WebSearchTool::with_endpoint(format!("{}/search", server.uri()), "secret", 8);
+    assert_eq!(
+        tool.spec().description,
+        include_str!("../src/tools/web_search/description.md").trim()
+    );
     let output = tool
         .execute(
             context(tempdir().unwrap().path(), "web"),

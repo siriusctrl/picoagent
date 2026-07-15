@@ -1,0 +1,1 @@
+Wait for selected background tasks up to a bounded timeout and return their current states and terminal results. Pass task_ids=[] to wait for all tasks created by this run. A wait timeout does not cancel tasks; call wait again if needed. Results returned by wait are marked delivered and will not be appended again automatically.

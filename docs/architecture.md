@@ -44,14 +44,20 @@ Initial adapters:
 ### Tool registry
 
 Every model-callable action implements `Tool`. Built-ins, skills, MCP, memory
-updates, and background control share the same registry. The registry is sorted so tool schema
-order remains deterministic across requests.
+updates, and background control share the same registry. The registry is sorted
+so tool schema order remains deterministic across requests.
 
 This registry is the capability router: it maps a model-returned tool name to
 one implementation and one schema. It does not decide what to do or create a
 second planning layer; the model selects a capability, and the runner performs
 the deterministic lookup. Duplicate names fail during startup instead of
 silently replacing an existing capability.
+
+Standalone base tools live in flat `src/tools/<tool>/` modules. Their
+model-facing description is compile-time Markdown beside the implementation;
+their name, input schema, argument validation, and execution stay together in
+Rust. Tools coupled to task supervision, memory, skills, or MCP remain owned by
+those subsystems and adapt into the same registry.
 
 ### Run storage
 
@@ -99,10 +105,12 @@ pages. See [artifacts.md](artifacts.md).
 
 ### Skills and instructions
 
-The system prompt contains only stable built-in instructions. The first user
-message carries a `runtime_reminder` content block with the workspace
-`AGENTS.md` and sorted skill metadata, followed by the original request. A skill
-body enters the conversation only after the model calls `load_skill`.
+The system prompt contains only stable built-in instructions loaded from
+compile-time Markdown under `prompts/agents/`. Rust owns prompt precedence,
+section ordering, dynamic values, and the `runtime_reminder` envelope. The first
+user message carries that reminder with the workspace `AGENTS.md` and sorted
+skill metadata, followed by the original request. A skill body enters the
+conversation only after the model calls `load_skill`.
 
 ### Memory
 

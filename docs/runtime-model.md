@@ -47,11 +47,12 @@ Reasoning is not included in `final.md`.
 
 ## Prompt Stability
 
-The built-in system prompt is workspace-independent. Sorted tool schemas form
-the other stable request prefix and are frozen for the run. The first user
-message begins with a `runtime_reminder` content block containing the workspace
-snapshot: path, `AGENTS.md`, sorted skill metadata, memory paths, and optional
-delegated instructions. The original user request follows after a blank line.
+The built-in system prompt is workspace-independent and compiled from a
+Markdown asset. Sorted tool schemas form the other stable request prefix and
+are frozen for the run. The first user message begins with a
+`runtime_reminder` content block containing the workspace snapshot: path,
+`AGENTS.md`, sorted skill metadata, memory paths, and optional delegated
+instructions. The original user request follows after a blank line.
 
 Tool output, background results, and later complete messages append at the
 conversation tail. Files or configuration changed during a run are observed by

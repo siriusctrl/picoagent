@@ -11,8 +11,11 @@ navigation, invariants, verification, and handoff.
   supervision. Main runs and subagents must use the same runner.
 - `src/model/`: provider-neutral message/tool contracts plus OpenAI OAuth,
   OpenAI-compatible, Anthropic-compatible, and deterministic echo adapters.
-- `src/tools/`: the stable tool registry and built-in `read`, `write`, `bash`,
-  optional `web_search`, and background-control tools.
+- `src/tools/`: the stable tool contract and registry plus flat standalone base
+  tools (`read`, `write`, `bash`, and optional `web_search`). Each base tool owns
+  its implementation, schema, and compile-time Markdown description.
+- `prompts/`: stable agent-level Markdown instructions embedded into the binary
+  at compile time; dynamic prompt assembly remains in `src/agent/context.rs`.
 - `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,
   and project-local artifact paths.
 - `src/storage/`: self-contained run directories, message/event JSONL, status,
@@ -48,6 +51,8 @@ navigation, invariants, verification, and handoff.
   identity is a contract violation.
 - Keep prompt prefixes deterministic: stable section order, sorted tools and
   skills, and dynamic memory/tool results near the tail.
+- Keep stable model-facing prose in compile-time Markdown assets. Keep prompt
+  assembly, tool schemas, argument validation, and execution contracts in Rust.
 - Memory is durable user/project knowledge outside the live transcript. Inspect
   its ordinary Markdown with `read`/`bash`; do not inject the tree into every prompt.
 - Keep user memory and project memory distinct. Raw artifacts and transcripts
@@ -92,6 +97,9 @@ For runtime or artifact changes, also run a headless smoke task with the echo
 provider and inspect the generated run directory, `messages.jsonl`,
 `events.jsonl`, final output, and artifact metadata.
 
+For prompt or tool-description asset changes, verify `cargo package --list`
+contains every referenced Markdown file in addition to compiling all targets.
+
 ## Docs Update Rules
 
 - User-visible commands, setup, or supported features: update `README.md`.
@@ -100,6 +108,8 @@ provider and inspect the generated run directory, `messages.jsonl`,
   `docs/artifacts.md`.
 - Memory scopes, update behavior, paths, or consolidation: update `docs/memory.md`.
 - Config fields or provider behavior: update `docs/configuration.md`.
+- Prompt asset organization or assembly behavior: update `prompts/README.md`
+  and `docs/architecture.md`.
 - Current high-level tradeoff summaries: update `docs/design-choices.md`.
 - Significant cross-module decisions, durable invariants, or rejected credible
   alternatives: add or supersede an ADR under `docs/adr/` and update its index.

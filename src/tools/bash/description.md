@@ -1,0 +1,1 @@
+Run a Bash command in the current workspace. Use it for file discovery, local text search with rg, tests, builds, and other command-line work. stdout and stderr are preserved as an artifact when large. No sandbox is provided.
