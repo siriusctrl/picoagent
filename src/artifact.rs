@@ -9,7 +9,10 @@ use crate::tools::{RawToolOutput, ToolContext};
 
 mod preview;
 
-use preview::{cap_utf8, preview_bytes, preview_file};
+pub use preview::{OmittedRegion, PreviewInfo, PreviewReason, PreviewStrategy};
+use preview::{file_preview, textual_preview, unavailable_preview};
+
+const MODEL_INSPECTION_INSTRUCTION: &str = include_str!("artifact/model-instruction.md");
 
 /// Controls when a tool result is replaced with a small model-facing preview.
 #[derive(Debug, Clone)]
@@ -52,6 +55,8 @@ pub struct ToolOutput {
     pub artifact: Option<ArtifactRef>,
     pub truncated: bool,
     pub is_error: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_info: Option<PreviewInfo>,
 }
 
 impl ToolOutput {
@@ -60,10 +65,32 @@ impl ToolOutput {
         let Some(artifact) = &self.artifact else {
             return self.preview.clone();
         };
-
+        let info = self
+            .preview_info
+            .as_ref()
+            .expect("artifact-backed tool output must describe its preview");
+        let shown_bytes = info.shown_head_bytes + info.shown_tail_bytes;
+        let preview = if self.preview.is_empty() || info.strategy == PreviewStrategy::None {
+            String::new()
+        } else {
+            format!("\n\n[Preview]\n{}", self.preview)
+        };
         format!(
-            "{}\n\n[Full output artifact]\ntruncated: true\npath: {}\nmedia_type: {}\nbytes: {}\nsha256: {}\nUse read with offset/limit or bash with rg to inspect it.",
-            self.preview, artifact.path, artifact.media_type, artifact.bytes, artifact.sha256
+            "[Tool output]\ntruncated: {}\nreason: {}\npreview: {}; omitted_region: {}\nbytes: total={}; shown={} (head={}, tail={}); omitted={}\nartifact: {}\nmedia_type: {}\nsha256: {}\ninstruction: {}{}",
+            self.truncated,
+            info.reason.as_str(),
+            info.strategy.as_str(),
+            info.omitted_region.as_str(),
+            artifact.bytes,
+            shown_bytes,
+            info.shown_head_bytes,
+            info.shown_tail_bytes,
+            info.omitted_bytes,
+            artifact.path,
+            artifact.media_type,
+            artifact.sha256,
+            MODEL_INSPECTION_INSTRUCTION.trim(),
+            preview,
         )
     }
 }
@@ -117,6 +144,7 @@ impl ArtifactStore {
                 artifact: None,
                 truncated: false,
                 is_error: output.is_error,
+                preview_info: None,
             });
         }
 
@@ -161,24 +189,29 @@ impl ArtifactStore {
             .await
             .with_context(|| format!("write artifact sidecar {}", sidecar_path.display()))?;
 
-        let preview = if textual {
-            preview_bytes(
+        let (preview, preview_info) = if textual {
+            let reason = if output.content.len() > self.policy.inline_limit_bytes {
+                PreviewReason::OutputExceedsInlineLimit
+            } else {
+                PreviewReason::RunPreviewBudgetLimited
+            };
+            textual_preview(
                 &output.content,
                 self.policy.preview_head_bytes,
                 self.policy.preview_tail_bytes,
+                preview_budget,
+                reason,
             )
         } else {
-            format!(
-                "[Binary or non-UTF-8 output omitted from context: {} bytes]",
-                output.content.len()
-            )
+            unavailable_preview(output.content.len() as u64, preview_budget)
         };
-        let preview = cap_utf8(preview, preview_budget);
+        let truncated = preview_info.omitted_bytes > 0;
         Ok(ToolOutput {
             preview,
             artifact: Some(artifact),
-            truncated: true,
+            truncated,
             is_error: output.is_error,
+            preview_info: Some(preview_info),
         })
     }
 
@@ -212,23 +245,31 @@ impl ArtifactStore {
         }
         let artifact = artifact_ref(context, &output.media_type, bytes, sha256, &absolute_path);
         write_sidecar(&directory, &stable_name, &artifact).await?;
-        let preview = if is_textual(&output.media_type) {
-            preview_file(
+        let (preview, preview_info) = if is_textual(&output.media_type) {
+            let reason = if bytes > self.policy.inline_limit_bytes as u64 {
+                PreviewReason::OutputExceedsInlineLimit
+            } else {
+                PreviewReason::RunPreviewBudgetLimited
+            };
+            file_preview(
                 &absolute_path,
                 bytes,
                 self.policy.preview_head_bytes,
                 self.policy.preview_tail_bytes,
+                preview_budget,
+                reason,
             )
             .await?
         } else {
-            format!("[Binary output omitted from context: {bytes} bytes]")
+            unavailable_preview(bytes, preview_budget)
         };
-        let preview = cap_utf8(preview, preview_budget);
+        let truncated = preview_info.omitted_bytes > 0;
         Ok(ToolOutput {
             preview,
             artifact: Some(artifact),
-            truncated: true,
+            truncated,
             is_error: output.is_error,
+            preview_info: Some(preview_info),
         })
     }
 }

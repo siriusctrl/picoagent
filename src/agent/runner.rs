@@ -11,10 +11,12 @@ use crate::{
     memory::{MemoryPaths, MemoryUpdateTool},
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role},
     storage::{RunDirStore, RunRecord, RunState},
-    tools::ToolRegistry,
+    tools::{ToolRegistry, register_history_tools},
+    trajectory::{LocalTrajectoryReader, TrajectoryMessage},
 };
 
 use super::{
+    compaction::{CompactionAttempt, build_active_context, estimate_message_tokens, maybe_compact},
     context::{build_runtime_reminder, build_system_prompt},
     task::{BackgroundTaskRecord, SpawnTool, TaskManager, TaskManagerConfig, WaitTool},
     tool_execution::DirectToolRuntime,
@@ -143,7 +145,18 @@ impl AgentRunner {
             )
             .await?;
 
-        let system = build_system_prompt();
+        let artifact_inspection_enabled = ["read", "bash"].iter().any(|name| {
+            self.base_tools.get(name).is_some() && allowed(&request.tool_allowlist, name)
+        });
+        let compaction_enabled = self
+            .options
+            .compaction
+            .trigger_tokens
+            .is_some_and(|tokens| tokens > 0)
+            && allowed(&request.tool_allowlist, "history_search")
+            && allowed(&request.tool_allowlist, "history_read")
+            && artifact_inspection_enabled;
+        let system = build_system_prompt(compaction_enabled);
         let runtime_reminder = build_runtime_reminder(
             &self.workspace,
             &self.skill_catalog,
@@ -161,9 +174,19 @@ impl AgentRunner {
                 },
             ],
         };
-        self.store.append_message(&run_id, &user_message).await?;
-        let mut messages = vec![user_message];
+        let user_record = self.store.append_message(&run_id, &user_message).await?;
+        let mut trajectory = vec![user_record];
         let mut registry = self.base_tools.clone();
+        if compaction_enabled {
+            register_history_tools(
+                &mut registry,
+                Arc::new(LocalTrajectoryReader::with_local_artifacts(
+                    Arc::new(self.store.clone()),
+                    self.workspace.clone(),
+                )),
+                self.options.compaction.history_search_max_matches,
+            )?;
+        }
         if let Some(allowlist) = &request.tool_allowlist {
             registry.retain(allowlist);
         }
@@ -226,11 +249,37 @@ impl AgentRunner {
             timeout_seconds: self.options.direct_tool_timeout_seconds,
         };
         let outcome: Result<RunResult> = async {
+            let mut latest_checkpoint = self.store.load_latest_compaction(&run_id).await?;
+            let mut context_tokens: Option<u64> = None;
             for step in 1..=max_steps {
                 if let Some(manager) = &task_manager {
                     let ready = manager.drain_completed().await?;
-                    append_background_results(&self.store, &run_id, &mut messages, ready).await?;
+                    let added =
+                        append_background_results(&self.store, &run_id, &mut trajectory, ready)
+                            .await?;
+                    if let Some(tokens) = &mut context_tokens {
+                        *tokens = tokens.saturating_add(added);
+                    }
                 }
+
+                if compaction_enabled
+                    && let Some(checkpoint) = maybe_compact(CompactionAttempt {
+                        provider: &self.provider,
+                        model: &model,
+                        run_id: &run_id,
+                        trajectory: &trajectory,
+                        previous: latest_checkpoint.as_ref(),
+                        tokens_before: context_tokens,
+                        options: &self.options.compaction,
+                        store: &self.store,
+                        events: &events,
+                    })
+                    .await?
+                {
+                    latest_checkpoint = Some(checkpoint);
+                }
+                let active_messages =
+                    build_active_context(&trajectory, latest_checkpoint.as_ref())?;
 
                 events
                     .emit(&RuntimeEvent::new(
@@ -245,7 +294,7 @@ impl AgentRunner {
                             run_id: run_id.clone(),
                             model: model.clone(),
                             system: system.clone(),
-                            messages: messages.clone(),
+                            messages: active_messages,
                             tools: registry.specs(),
                             max_output_tokens,
                         },
@@ -265,7 +314,6 @@ impl AgentRunner {
                         },
                     ))
                     .await?;
-
                 let assistant_content = if response.assistant_content.is_empty() {
                     let mut content = Vec::new();
                     if !response.text.is_empty() {
@@ -288,17 +336,29 @@ impl AgentRunner {
                     role: Role::Assistant,
                     content: assistant_content,
                 };
-                self.store
+                context_tokens = response.usage.input_tokens.map(|tokens| {
+                    tokens.saturating_add(estimate_message_tokens(&assistant_message))
+                });
+                let assistant_record = self
+                    .store
                     .append_message(&run_id, &assistant_message)
                     .await?;
-                messages.push(assistant_message);
+                trajectory.push(assistant_record);
 
                 if response.tool_calls.is_empty() {
                     if let Some(manager) = &task_manager {
                         let ready = manager.settle_before_finish().await?;
                         if !ready.is_empty() {
-                            append_background_results(&self.store, &run_id, &mut messages, ready)
-                                .await?;
+                            let added = append_background_results(
+                                &self.store,
+                                &run_id,
+                                &mut trajectory,
+                                ready,
+                            )
+                            .await?;
+                            if let Some(tokens) = &mut context_tokens {
+                                *tokens = tokens.saturating_add(added);
+                            }
                             continue;
                         }
                     }
@@ -312,8 +372,11 @@ impl AgentRunner {
 
                 for call in response.tool_calls {
                     let tool_message = direct_tools.execute(call).await?;
-                    self.store.append_message(&run_id, &tool_message).await?;
-                    messages.push(tool_message);
+                    let record = self.store.append_message(&run_id, &tool_message).await?;
+                    if let Some(tokens) = &mut context_tokens {
+                        *tokens = tokens.saturating_add(estimate_message_tokens(&tool_message));
+                    }
+                    trajectory.push(record);
                 }
             }
 
@@ -365,9 +428,10 @@ fn allowed(allowlist: &Option<Vec<String>>, name: &str) -> bool {
 async fn append_background_results(
     store: &RunDirStore,
     run_id: &str,
-    messages: &mut Vec<Message>,
+    trajectory: &mut Vec<TrajectoryMessage>,
     records: Vec<BackgroundTaskRecord>,
-) -> Result<()> {
+) -> Result<u64> {
+    let mut estimated_tokens = 0_u64;
     for record in records {
         let status = record.status().to_owned();
         let content = record.model_content();
@@ -380,8 +444,9 @@ async fn append_background_results(
                 content,
             }],
         };
-        store.append_message(run_id, &message).await?;
-        messages.push(message);
+        let trajectory_record = store.append_message(run_id, &message).await?;
+        estimated_tokens = estimated_tokens.saturating_add(estimate_message_tokens(&message));
+        trajectory.push(trajectory_record);
     }
-    Ok(())
+    Ok(estimated_tokens)
 }

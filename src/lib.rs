@@ -9,3 +9,4 @@ pub mod model;
 pub mod skills;
 pub mod storage;
 pub mod tools;
+pub mod trajectory;

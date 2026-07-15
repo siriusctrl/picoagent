@@ -12,14 +12,44 @@ boundary.
 For each model step:
 
 1. append newly completed background results to the current messages;
-2. send sorted tool schemas to the active provider;
-3. stream visible text and explicitly returned reasoning as separate events
+2. if enabled and the provider-reported usage threshold is reached, summarize
+   an older completed-message prefix into a compaction checkpoint;
+3. assemble the active context and send sorted tool schemas to the provider;
+4. stream visible text and explicitly returned reasoning as separate events
    while collecting the complete response;
-4. persist the complete assistant message;
-5. execute requested tools sequentially;
-6. artifact large outputs and persist complete tool messages;
-7. repeat, join outstanding background work before finalization, or write
+5. persist the complete assistant message;
+6. execute requested tools sequentially;
+7. artifact large outputs and persist complete tool messages;
+8. repeat, join outstanding background work before finalization, or write
    `final.md` when no tool calls or tasks remain.
+
+## Compaction And History
+
+Automatic local compaction is off unless `compaction.trigger_tokens` is set. It
+can trigger only after the provider reports input-token usage. Between calls,
+picoagent estimates only content the adapters replay, excluding diagnostic
+reasoning text. The summary call uses the same provider and model, no tools, and
+a separate output limit; it does not consume a normal model-step slot. A
+summary failure emits a lifecycle event and leaves the prior/full context in
+use. If a run-level tool allowlist excludes either history tool or both generic
+artifact inspection tools (`read` and `bash`), that run also keeps the full
+context rather than compacting without exact retrieval.
+
+Compaction does not mutate `messages.jsonl`. It appends a checkpoint to
+`compactions.jsonl`, then assembles later model requests from the initial
+runtime message, latest summary, and exact recent messages. The raw trajectory
+therefore remains the source for read-only recovery:
+
+- `history_search` uses one Rust regex and returns newest matches only from the
+  compacted prefix, including matches in linked full textual artifacts;
+- `history_read` returns a bounded window around a stable ref and preserves
+  tool-call/result pairs.
+
+There is no cursor. The configured search maximum omits older query matches;
+refine the regex to reach them. If the already-bounded tool response is itself
+too large for model context, the normal artifact envelope preserves that full
+response. These are different truncation boundaries. Provider/server-side
+compaction is not implemented.
 
 ## Tool Results
 
@@ -55,8 +85,9 @@ are frozen for the run. The first user message begins with a
 instructions. The original user request follows after a blank line.
 
 Tool output, background results, and later complete messages append at the
-conversation tail. Files or configuration changed during a run are observed by
-the next run rather than rewriting an earlier prefix. Large results remain
-behind stable artifact references. These choices reduce context growth and
-improve the opportunity for provider-side prefix-cache reuse without coupling
-the loop to one cache API.
+durable conversation tail. Files or configuration changed during a run are
+observed by the next run rather than rewriting the stored trajectory. When
+enabled, a local compaction checkpoint can replace an older prefix only in the
+next provider request; large results remain behind stable artifact references.
+These choices reduce context growth and improve the opportunity for
+provider-side prefix-cache reuse without coupling the loop to one cache API.

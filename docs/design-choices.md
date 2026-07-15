@@ -33,6 +33,19 @@ decision context and rejected alternatives.
 Revisit when cross-run queries, multi-worker ownership, or server-side pagination
 become concrete requirements.
 
+## Append-Only Local Compaction
+
+Compaction reduces the active model request without changing the raw evidence:
+complete messages remain append-only, while model-generated summaries are
+separate append-only checkpoints. Exact compacted details remain available
+through read-only regex search and ref-centered reads; the retrieval interface
+can be backed by local files or a future remote store.
+
+Rejected: destructive transcript rewriting, cursored pagination in the initial
+tool contract, vector retrieval without a demonstrated need, and relying on a
+provider-specific server-side compaction API. See
+[ADR 0003](adr/0003-append-only-local-compaction-and-history-retrieval.md).
+
 ## Artifact-First Tool Output
 
 Large results are preserved in full but represented in model context by a small

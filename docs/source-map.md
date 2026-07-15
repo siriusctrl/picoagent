@@ -1,6 +1,8 @@
 # Source Map
 
 - `src/agent/runner.rs`: the only model/tool loop and run lifecycle.
+- `src/agent/compaction.rs`: local checkpoint planning, summary calls, and
+  active-context assembly.
 - `src/agent/tool_execution.rs`: direct tool hooks, timeout, events, and artifact envelope.
 - `src/agent/types.rs`: runner configuration, request, and result contracts.
 - `src/agent/task.rs`: background task records, persistence, and delivery state.
@@ -21,9 +23,18 @@
 - `src/tools/mod.rs`: tool contract, sorted registry, and default registration.
 - `src/tools/{read,write,bash,web_search}/`: flat standalone base tools with
   compile-time descriptions beside their Rust implementation.
+- `src/tools/{history_search,history_read}/`: read-only compacted-trajectory
+  retrieval with compile-time descriptions and bounded contracts.
+- `src/trajectory.rs` and `src/trajectory/`: provider-neutral history reader
+  contracts plus local message/artifact search.
 - `src/artifact.rs`: versioned artifact envelope and spill.
 - `src/artifact/preview.rs`: bounded UTF-8-safe file and byte previews.
-- `src/storage/mod.rs`: run directories and JSON/JSONL persistence.
+- `src/artifact/model-instruction.md`: compact model guidance for inspecting a
+  spilled result.
+- `src/storage/mod.rs`: run directories, metadata, events, and shared JSON
+  persistence helpers.
+- `src/storage/trajectory.rs`: append-only messages and compaction checkpoints,
+  compacted-history loading, and torn-tail JSONL recovery.
 - `src/skills/mod.rs`: Agent Skills metadata discovery and `load_skill`.
 - `src/mcp.rs`: rmcp stdio client and tool adapters.
 - `src/hooks.rs`: deterministic command-hook pipeline.

@@ -7,8 +7,9 @@ navigation, invariants, verification, and handoff.
 
 ## Source Map
 
-- `src/agent/`: the single agent loop, run state, prompt assembly, and child-run
-  supervision. Main runs and subagents must use the same runner.
+- `src/agent/`: the single agent loop, run state, prompt assembly, local
+  compaction, and child-run supervision. Main runs and subagents must use the
+  same runner.
 - `src/model/`: provider-neutral message/tool contracts plus OpenAI OAuth,
   OpenAI-compatible, Anthropic-compatible, and deterministic echo adapters.
 - `src/tools/`: the stable tool contract and registry plus flat standalone base
@@ -19,7 +20,9 @@ navigation, invariants, verification, and handoff.
 - `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,
   and project-local artifact paths.
 - `src/storage/`: self-contained run directories, message/event JSONL, status,
-  and final-result persistence.
+  compaction checkpoints, and final-result persistence.
+- `src/trajectory.rs` and `src/trajectory/`: provider-neutral compacted-history
+  search/read contracts plus the local message and artifact reader.
 - `src/skills/`: Agent Skills discovery and progressive `SKILL.md` loading.
 - `src/mcp.rs`: MCP stdio connection lifecycle and tool adapters.
 - `src/hooks.rs`: command hook discovery and lifecycle invocation.

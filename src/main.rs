@@ -161,6 +161,12 @@ async fn run_request(
             task_execution_timeout_seconds: config.tasks.default_execution_timeout_seconds,
             task_wait_timeout_seconds: config.tasks.default_wait_timeout_seconds,
             task_max_timeout_seconds: config.tasks.max_execution_timeout_seconds,
+            compaction: picoagent::agent::CompactionOptions {
+                trigger_tokens: config.compaction.trigger_tokens,
+                keep_recent_tokens: config.compaction.keep_recent_tokens,
+                summary_max_output_tokens: config.compaction.summary_max_output_tokens,
+                history_search_max_matches: config.compaction.history_search_max_matches,
+            },
             general_task: picoagent::agent::GeneralTaskProfile {
                 model: config.agents.general_task.model.clone(),
                 max_steps: config.agents.general_task.max_steps,

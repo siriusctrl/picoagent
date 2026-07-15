@@ -22,7 +22,27 @@ pub struct RunnerOptions {
     pub task_execution_timeout_seconds: u64,
     pub task_wait_timeout_seconds: u64,
     pub task_max_timeout_seconds: u64,
+    pub compaction: CompactionOptions,
     pub general_task: GeneralTaskProfile,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompactionOptions {
+    pub trigger_tokens: Option<u64>,
+    pub keep_recent_tokens: u64,
+    pub summary_max_output_tokens: u32,
+    pub history_search_max_matches: usize,
+}
+
+impl Default for CompactionOptions {
+    fn default() -> Self {
+        Self {
+            trigger_tokens: None,
+            keep_recent_tokens: 20_000,
+            summary_max_output_tokens: 4_096,
+            history_search_max_matches: 50,
+        }
+    }
 }
 
 impl Default for RunnerOptions {
@@ -36,6 +56,7 @@ impl Default for RunnerOptions {
             task_execution_timeout_seconds: 300,
             task_wait_timeout_seconds: 30,
             task_max_timeout_seconds: 1_800,
+            compaction: CompactionOptions::default(),
             general_task: GeneralTaskProfile {
                 model: None,
                 max_steps: 8,

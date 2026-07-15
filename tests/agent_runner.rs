@@ -169,7 +169,8 @@ async fn runner_persists_complete_messages_and_spills_large_tool_output() {
             _ => None,
         })
         .unwrap();
-    assert!(tool_result.contains("[Full output artifact]"));
+    assert!(tool_result.contains("[Tool output]"));
+    assert!(tool_result.contains("artifact: .pico/runs/"));
     assert!(tool_result.contains("truncated: true"));
     let events = tokio::fs::read_to_string(store.paths(&result.run_id).events)
         .await

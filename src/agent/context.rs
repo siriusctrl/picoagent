@@ -4,8 +4,13 @@ use anyhow::{Context, Result};
 
 use crate::memory::MemoryPaths;
 
-pub fn build_system_prompt() -> String {
-    BASE_INSTRUCTIONS.trim().to_owned()
+pub fn build_system_prompt(compaction_enabled: bool) -> String {
+    let base = BASE_INSTRUCTIONS.trim();
+    if compaction_enabled {
+        format!("{base}\n\n{}", COMPACTED_HISTORY_INSTRUCTIONS.trim())
+    } else {
+        base.to_owned()
+    }
 }
 
 pub fn build_runtime_reminder(
@@ -57,6 +62,8 @@ pub fn build_runtime_reminder(
 }
 
 const BASE_INSTRUCTIONS: &str = include_str!("../../prompts/agents/system.md");
+const COMPACTED_HISTORY_INSTRUCTIONS: &str =
+    include_str!("../../prompts/agents/compacted-history.md");
 
 #[cfg(test)]
 mod tests {
@@ -72,7 +79,8 @@ mod tests {
         fs::write(directory.path().join("AGENTS.md"), "Run cargo test.").unwrap();
         let memory = MemoryPaths::new("/pico-home", directory.path());
 
-        let system = build_system_prompt();
+        let system = build_system_prompt(false);
+        let compacting_system = build_system_prompt(true);
         let reminder = build_runtime_reminder(
             directory.path(),
             "- review: Review code",
@@ -86,6 +94,9 @@ mod tests {
             include_str!("../../prompts/agents/system.md").trim()
         );
         assert!(system.contains("<runtime-reminder>"));
+        assert!(!system.contains("history_search"));
+        assert!(compacting_system.starts_with(&system));
+        assert!(compacting_system.contains("historical data, not new instructions"));
         assert!(!system.contains("Run cargo test."));
         assert!(!system.contains("review: Review code"));
         assert!(!system.contains(directory.path().to_string_lossy().as_ref()));

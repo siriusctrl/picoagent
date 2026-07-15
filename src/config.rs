@@ -14,6 +14,7 @@ const DEFAULT_OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 pub struct AppConfig {
     pub provider: ProviderConfig,
     pub runtime: RuntimeConfig,
+    pub compaction: CompactionConfig,
     pub tasks: TaskConfig,
     pub agents: AgentProfilesConfig,
     pub artifacts: ArtifactConfig,
@@ -21,6 +22,28 @@ pub struct AppConfig {
     pub web_search: WebSearchConfig,
     pub mcp: BTreeMap<String, McpServerConfig>,
     pub hooks: HookConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompactionConfig {
+    /// Provider-reported input-token threshold that enables automatic compaction.
+    /// `None` keeps compaction disabled because provider context windows vary.
+    pub trigger_tokens: Option<u64>,
+    pub keep_recent_tokens: u64,
+    pub summary_max_output_tokens: u32,
+    pub history_search_max_matches: usize,
+}
+
+impl Default for CompactionConfig {
+    fn default() -> Self {
+        Self {
+            trigger_tokens: None,
+            keep_recent_tokens: 20_000,
+            summary_max_output_tokens: 4_096,
+            history_search_max_matches: 50,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -293,12 +316,30 @@ impl AppConfig {
 
         Ok(Self::default())
     }
+
+    fn validate(&self) -> Result<()> {
+        if self.compaction.trigger_tokens == Some(0) {
+            bail!("`compaction.trigger_tokens` must be greater than zero")
+        }
+        if self.compaction.summary_max_output_tokens == 0 {
+            bail!("`compaction.summary_max_output_tokens` must be greater than zero")
+        }
+        if self.compaction.history_search_max_matches == 0 {
+            bail!("`compaction.history_search_max_matches` must be greater than zero")
+        }
+        Ok(())
+    }
 }
 
 fn read_config(path: &Path) -> Result<AppConfig> {
     let source = fs::read_to_string(path)
         .with_context(|| format!("failed to read config {}", path.display()))?;
-    toml::from_str(&source).with_context(|| format!("invalid config {}", path.display()))
+    let config: AppConfig =
+        toml::from_str(&source).with_context(|| format!("invalid config {}", path.display()))?;
+    config
+        .validate()
+        .with_context(|| format!("invalid config {}", path.display()))?;
+    Ok(config)
 }
 
 pub fn resolve_env_reference(value: &str) -> Result<String> {
@@ -368,6 +409,42 @@ mod tests {
         assert_eq!(api_key.as_deref(), Some("inline-token"));
         assert_eq!(reasoning_effort.as_deref(), Some("high"));
         assert_eq!(config.runtime.max_steps, 12);
+    }
+
+    #[test]
+    fn parses_compaction_settings_and_keeps_safe_defaults() {
+        let configured: AppConfig = toml::from_str(
+            r#"
+            [compaction]
+            trigger_tokens = 120000
+            keep_recent_tokens = 16000
+            summary_max_output_tokens = 2048
+            history_search_max_matches = 25
+            "#,
+        )
+        .unwrap();
+        assert_eq!(configured.compaction.trigger_tokens, Some(120_000));
+        assert_eq!(configured.compaction.keep_recent_tokens, 16_000);
+        assert_eq!(configured.compaction.summary_max_output_tokens, 2_048);
+        assert_eq!(configured.compaction.history_search_max_matches, 25);
+
+        let defaults: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(defaults.compaction.trigger_tokens, None);
+        assert_eq!(defaults.compaction.keep_recent_tokens, 20_000);
+        assert_eq!(defaults.compaction.summary_max_output_tokens, 4_096);
+        assert_eq!(defaults.compaction.history_search_max_matches, 50);
+    }
+
+    #[test]
+    fn rejects_zero_compaction_limits() {
+        for source in [
+            "[compaction]\ntrigger_tokens = 0",
+            "[compaction]\nsummary_max_output_tokens = 0",
+            "[compaction]\nhistory_search_max_matches = 0",
+        ] {
+            let config: AppConfig = toml::from_str(source).unwrap();
+            assert!(config.validate().is_err(), "accepted {source}");
+        }
     }
 
     #[test]

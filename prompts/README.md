@@ -8,6 +8,8 @@ schemas, and execution contracts remain in Rust.
 - Tool descriptions live beside their owning implementations. Standalone base
   tools use `src/tools/<tool>/description.md`; subsystem tools remain with their
   subsystem.
+- Other stable model instructions live with the subsystem that assembles them,
+  such as `src/artifact/model-instruction.md`.
 
 These files are compile-time assets, not runtime overrides or dynamically
 discovered plugins. Project-specific instructions belong in `AGENTS.md`, and

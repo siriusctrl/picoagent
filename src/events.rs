@@ -45,6 +45,21 @@ pub enum RuntimeEventKind {
         cached_input_tokens: Option<u64>,
         reasoning_tokens: Option<u64>,
     },
+    CompactionStarted {
+        checkpoint_id: String,
+        tokens_before: u64,
+    },
+    CompactionCompleted {
+        checkpoint_id: String,
+        covered_through_message_ref: String,
+        first_kept_message_ref: String,
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+    },
+    CompactionFailed {
+        checkpoint_id: String,
+        error: String,
+    },
     ToolStarted {
         call_id: String,
         name: String,

@@ -40,5 +40,9 @@ Use these sections:
 
 ## Index
 
-- [ADR 0001: Persist complete messages and keep stream deltas transient](0001-durable-messages-transient-stream-deltas.md)
-- [ADR 0002: Embed prompt assets and keep tools with their owners](0002-compile-time-prompt-assets-and-tool-ownership.md)
+- [ADR 0001: Persist complete messages and keep stream deltas
+  transient](0001-durable-messages-transient-stream-deltas.md)
+- [ADR 0002: Embed prompt assets and keep tools with their
+  owners](0002-compile-time-prompt-assets-and-tool-ownership.md)
+- [ADR 0003: Add local compaction without rewriting the
+  trajectory](0003-append-only-local-compaction-and-history-retrieval.md)

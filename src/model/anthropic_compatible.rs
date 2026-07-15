@@ -112,14 +112,60 @@ fn anthropic_body(request: &ModelRequest) -> Value {
     let mut body = json!({
         "model": request.model,
         "max_tokens": request.max_output_tokens.unwrap_or(4096),
-        "messages": request.messages.iter().map(anthropic_message).collect::<Vec<_>>(),
-        "tools": anthropic_tools(&request.tools),
+        "messages": anthropic_messages(&request.messages),
         "stream": true,
     });
+    if !request.tools.is_empty() {
+        body["tools"] = anthropic_tools(&request.tools);
+    }
     if !request.system.is_empty() {
         body["system"] = json!(request.system);
     }
     body
+}
+
+fn anthropic_messages(messages: &[Message]) -> Vec<Value> {
+    let mut serialized = Vec::new();
+    for message in messages {
+        let next = anthropic_message(message);
+        let can_merge = serialized
+            .last()
+            .is_some_and(|previous: &Value| previous["role"] == next["role"]);
+        if can_merge {
+            let content = next["content"]
+                .as_array()
+                .expect("serialized Anthropic content must be an array")
+                .clone();
+            serialized
+                .last_mut()
+                .and_then(|previous| previous["content"].as_array_mut())
+                .expect("serialized Anthropic content must be an array")
+                .extend(content);
+        } else {
+            serialized.push(next);
+        }
+    }
+    serialized
+}
+
+fn anthropic_tool_results(message: &Message) -> Vec<Value> {
+    message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            MessageContent::ToolResult {
+                call_id,
+                content,
+                is_error,
+            } => Some(json!({
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": content,
+                "is_error": is_error,
+            })),
+            _ => None,
+        })
+        .collect()
 }
 
 fn anthropic_message(message: &Message) -> Value {
@@ -151,26 +197,7 @@ fn anthropic_message(message: &Message) -> Value {
                 .collect();
             json!({"role": "assistant", "content": content})
         }
-        Role::Tool => {
-            let content: Vec<_> = message
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    MessageContent::ToolResult {
-                        call_id,
-                        content,
-                        is_error,
-                    } => Some(json!({
-                        "type": "tool_result",
-                        "tool_use_id": call_id,
-                        "content": content,
-                        "is_error": is_error,
-                    })),
-                    _ => None,
-                })
-                .collect();
-            json!({"role": "user", "content": content})
-        }
+        Role::Tool => json!({"role": "user", "content": anthropic_tool_results(message)}),
     }
 }
 
@@ -290,6 +317,111 @@ impl AnthropicAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request_with(messages: Vec<Message>, tools: Vec<ToolSpec>) -> ModelRequest {
+        ModelRequest {
+            run_id: "run".into(),
+            model: "model".into(),
+            system: String::new(),
+            messages,
+            tools,
+            max_output_tokens: None,
+        }
+    }
+
+    #[test]
+    fn anthropic_body_omits_empty_tools_and_keeps_nonempty_tools() {
+        let empty = request_with(vec![Message::text(Role::User, "hello")], Vec::new());
+        assert!(anthropic_body(&empty).get("tools").is_none());
+
+        let with_tool = request_with(
+            vec![Message::text(Role::User, "hello")],
+            vec![ToolSpec {
+                name: "read".into(),
+                description: "Read a file".into(),
+                input_schema: json!({"type": "object"}),
+            }],
+        );
+        assert_eq!(anthropic_body(&with_tool)["tools"][0]["name"], "read");
+    }
+
+    #[test]
+    fn consecutive_tool_messages_share_one_anthropic_user_turn() {
+        let request = request_with(
+            vec![
+                Message::text(Role::User, "start"),
+                Message {
+                    role: Role::Assistant,
+                    content: vec![
+                        MessageContent::ToolCall {
+                            id: "call-1".into(),
+                            name: "read".into(),
+                            arguments: json!({"path": "one"}),
+                        },
+                        MessageContent::ToolCall {
+                            id: "call-2".into(),
+                            name: "read".into(),
+                            arguments: json!({"path": "two"}),
+                        },
+                    ],
+                },
+                Message {
+                    role: Role::Tool,
+                    content: vec![MessageContent::ToolResult {
+                        call_id: "call-1".into(),
+                        content: "one result".into(),
+                        is_error: false,
+                    }],
+                },
+                Message {
+                    role: Role::Tool,
+                    content: vec![MessageContent::ToolResult {
+                        call_id: "call-2".into(),
+                        content: "two result".into(),
+                        is_error: true,
+                    }],
+                },
+                Message::text(Role::Assistant, "done"),
+            ],
+            Vec::new(),
+        );
+
+        let messages = anthropic_body(&request)["messages"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(messages[2]["content"][0]["tool_use_id"], "call-1");
+        assert_eq!(messages[2]["content"][1]["tool_use_id"], "call-2");
+        assert_eq!(messages[2]["content"][1]["is_error"], true);
+        assert_eq!(messages[3]["role"], "assistant");
+        assert_eq!(messages[3]["content"][0]["text"], "done");
+    }
+
+    #[test]
+    fn consecutive_user_messages_share_one_anthropic_turn() {
+        let request = request_with(
+            vec![
+                Message::text(Role::User, "initial request"),
+                Message::text(Role::User, "compacted history"),
+            ],
+            Vec::new(),
+        );
+
+        let messages = anthropic_body(&request)["messages"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(messages[0]["content"][0]["text"], "initial request");
+        assert_eq!(messages[0]["content"][1]["text"], "compacted history");
+    }
 
     #[test]
     fn background_results_are_serialized_as_anthropic_user_text() {

@@ -17,6 +17,8 @@ system.
 - exact-first, atomic multi-edit writes with CRLF/BOM preservation
 - versioned artifact spill for large tool results with bounded head/tail previews
 - run-level cumulative inline-result budget for stable context growth
+- optional local context compaction with append-only checkpoints and read-only
+  regex history retrieval
 - Agent Skills discovery with progressive `SKILL.md` loading
 - MCP stdio servers adapted into the same tool registry
 - command hooks for run and tool lifecycle events
@@ -59,6 +61,7 @@ Runtime output is stored beneath the current project:
 .pico/runs/<run-id>/
   run.json
   messages.jsonl
+  compactions.jsonl  # created after the first checkpoint
   events.jsonl
   final.md
   artifacts/
@@ -82,6 +85,10 @@ for that run; configuration or file changes take effect on the next run.
 
 The reminder is stored as separate `runtime_reminder` content in
 `messages.jsonl`, while `run.json` retains the original user prompt.
+
+Every completed message also receives a stable `message_id` and sequence number
+in `messages.jsonl`. Compaction never rewrites or deletes this raw trajectory;
+its checkpoints are appended separately to `compactions.jsonl` when enabled.
 
 Stable agent instructions are maintained as compile-time Markdown assets under
 `prompts/agents/`. Standalone base tool descriptions live beside their Rust
@@ -171,8 +178,57 @@ base_url = "https://api.anthropic.com/v1"
 api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-See [configuration.md](docs/configuration.md) for runtime, artifact, MCP, hook,
-and memory settings.
+See [configuration.md](docs/configuration.md) for runtime, compaction, artifact,
+MCP, hook, and memory settings.
+
+## Context Compaction And History
+
+Local compaction is disabled by default. Enable it with a threshold appropriate
+to the model's context window:
+
+```toml
+[compaction]
+trigger_tokens = 100000
+keep_recent_tokens = 20000
+summary_max_output_tokens = 4096
+history_search_max_matches = 50
+```
+
+After a provider reports input-token usage, picoagent tracks the active context
+and can make an additional model call when it reaches `trigger_tokens`. That
+call summarizes the older completed-message prefix. Later requests contain the
+checkpoint summary plus the exact recent suffix, while `messages.jsonl` remains
+append-only. Providers that do not report input-token usage do not trigger
+automatic compaction. Start/completion/failure records remain in `events.jsonl`.
+Diagnostic reasoning text that an adapter does not replay is excluded from the
+between-call estimate.
+
+Two read-only tools recover exact details omitted from the active request:
+
+- `history_search({"pattern":"..."})` applies a Rust regular expression only
+  to compacted messages and their linked textual tool-result artifacts. Results
+  are newest-first and carry stable message refs.
+- `history_read({"ref":"msg_...","before":2,"after":2})` reads a bounded
+  conversation-ordered window around one ref and keeps tool calls paired with
+  their results.
+
+The local reader invokes `rg` for bounded-memory searches inside full textual
+artifacts, so ripgrep must be available on `PATH` for that part of
+`history_search`. A future remote reader can provide the same contract from a
+database or service.
+
+Neither tool has a cursor. `history_search_max_matches` limits a query to its
+newest matches; if reached, older matches are omitted and the model must refine
+the regex. This is distinct from artifact preview truncation: if the returned
+JSONL itself is too large, its complete bounded result is saved as an artifact
+and can be inspected with `read` or `bash`/`rg`. Query-limit omissions are not
+present in that artifact.
+
+Capability-restricted runs compact only when both history tools and at least
+one artifact inspection tool (`read` or `bash`) remain available.
+
+This release implements local model-generated checkpoints only. It does not use
+OpenAI or another provider's server-side compaction API.
 
 ## Large Tool Results
 

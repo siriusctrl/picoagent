@@ -82,6 +82,47 @@ max_output_tokens = 8192
 `max_steps` counts model calls, not individual tool calls. Child runs receive
 their own step budget.
 
+## Compaction And History Retrieval
+
+```toml
+[compaction]
+# trigger_tokens = 100000       # omitted by default: automatic compaction off
+keep_recent_tokens = 20000
+summary_max_output_tokens = 4096
+history_search_max_matches = 50
+```
+
+`trigger_tokens` enables local compaction and must be greater than zero. The
+summary and history-search limits must also be positive. The trigger depends on
+the active provider reporting input-token usage; a provider that omits it
+cannot trigger automatic compaction. When the tracked context reaches the
+threshold, picoagent uses the same provider and model for an additional,
+tool-free summary request. A failed summary leaves the existing context or
+checkpoint in use and is recorded as a compaction failure event.
+
+`keep_recent_tokens` is the approximate size of the exact message suffix kept
+beside the summary. It uses a provider-neutral estimate for choosing completed
+message boundaries and keeps a tool call with its result. Diagnostic reasoning
+text that provider adapters do not replay is excluded; replayable opaque
+provider items remain included.
+`summary_max_output_tokens` limits the summary request. Compaction requests are
+additional provider calls and do not consume a normal agent `max_steps` slot.
+Runs whose tool allowlist removes either history tool, or removes both `read`
+and `bash`, keep their full context instead of compacting without an
+exact-recovery path.
+
+`history_search_max_matches` is a positive, per-query cap for newest-first
+regex matches over messages removed from the active context. It is not an
+artifact byte limit: matches omitted by this cap are not placed in the result
+artifact. `history_search` and `history_read` have no cursor and never modify
+the transcript; refine the regex or read a bounded window around a returned ref.
+The local reader uses `rg` from `PATH` to scan linked full-text artifacts
+without loading them into the Rust heap; message-only matching does not require
+that subprocess. Remote readers may implement the same interface directly.
+
+Compaction is local and model-generated. Picoagent does not currently call a
+provider's server-side compaction API.
+
 ## Background Tasks And Agent Profiles
 
 ```toml

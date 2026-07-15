@@ -7,12 +7,16 @@ use serde_json::Value;
 use crate::model::ToolSpec;
 
 pub mod bash;
+pub mod history_read;
+pub mod history_search;
 mod paths;
 pub mod read;
 pub mod web_search;
 pub mod write;
 
 pub use bash::BashTool;
+pub use history_read::HistoryReadTool;
+pub use history_search::HistorySearchTool;
 pub use read::ReadTool;
 pub use web_search::WebSearchTool;
 pub use write::WriteTool;
@@ -97,5 +101,19 @@ pub fn register_defaults(registry: &mut ToolRegistry) -> Result<()> {
     registry.register(Arc::new(ReadTool))?;
     registry.register(Arc::new(WriteTool::default()))?;
     registry.register(Arc::new(BashTool))?;
+    Ok(())
+}
+
+pub fn register_history_tools(
+    registry: &mut ToolRegistry,
+    reader: Arc<dyn crate::trajectory::TrajectoryReader>,
+    max_matches: usize,
+) -> Result<()> {
+    if registry.get("history_search").is_some() || registry.get("history_read").is_some() {
+        bail!("history tools are already registered");
+    }
+    let search = HistorySearchTool::new(reader.clone(), max_matches)?;
+    registry.register(Arc::new(search))?;
+    registry.register(Arc::new(HistoryReadTool::new(reader)))?;
     Ok(())
 }

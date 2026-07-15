@@ -19,6 +19,7 @@ job/CLI
            -> child AgentRunner
      -> ArtifactStore
      -> RunDirStore
+        -> compaction checkpoints / compacted-history reader
      -> EventSink
 ```
 
@@ -62,13 +63,18 @@ those subsystems and adapt into the same registry.
 ### Run storage
 
 Each run is a portable directory beneath `<workspace>/.pico/runs/<run-id>/`.
-It contains run metadata, complete messages, structured events, the final answer,
-artifacts, and background task records. This is what persistence means in the
-launch runtime: a cloud worker can retain or inspect a job without a database.
+It contains run metadata, append-only complete messages, optional append-only
+compaction checkpoints, structured events, the final answer, artifacts, and
+background task records. This is what persistence means in the launch runtime:
+a cloud worker can retain or inspect a job without a database.
 
 Only complete messages are resumable. Stream deltas are emitted to live sinks
 but omitted from the persisted `events.jsonl` and are never appended as partial
 conversation messages.
+
+Message and compaction loaders tolerate only a torn final JSONL record; a later
+append removes that partial tail first. Malformed completed records still fail
+loading so corruption is not silently skipped.
 
 The persisted run state is intentionally coarse:
 
@@ -78,10 +84,11 @@ queued -> running -> completed
 ```
 
 The loop itself is a small state machine too: inject newly completed background
-results, request model output, persist the complete assistant message, execute
-zero or more direct tool calls, persist their results, then either repeat or
-complete. This makes crash boundaries and event ordering explicit without
-introducing a workflow engine.
+results, optionally checkpoint an old completed-message prefix, request model
+output, persist the complete assistant message, execute zero or more direct
+tool calls, persist their results, then either repeat or complete. This makes
+crash boundaries and event ordering explicit without introducing a workflow
+engine.
 
 Background tasks have a separate persisted state:
 
@@ -102,6 +109,44 @@ Large tool outputs are never discarded and do not enter the live context in
 full. The store writes the complete bytes, records immutable metadata, and gives
 the model a bounded beginning/end preview and a relative path it can inspect in
 pages. See [artifacts.md](artifacts.md).
+
+### Context compaction and trajectory retrieval
+
+Local compaction changes request assembly, not the durable trajectory.
+`messages.jsonl` retains every completed message with a stable ref and sequence;
+`compactions.jsonl` appends summary checkpoints that identify the covered
+prefix and first exact message kept. The active request contains the initial
+runtime message, the newest checkpoint summary, and the exact recent suffix.
+
+The trigger is deliberately based on provider-reported usage. If a provider
+does not report input tokens, automatic compaction does not run. A checkpoint
+summary is produced through an additional tool-free call to the same provider
+and model; picoagent does not implement provider/server-side compaction.
+
+`history_search` and `history_read` expose a read-only `TrajectoryReader`
+boundary. The local implementation searches only messages outside the active
+context, plus full textual artifacts linked to their tool results. Search uses
+Rust regular expressions, returns newest matches up to a configured cap, and
+has no cursor. Read accepts one stable message ref and a bounded before/after
+window, expanding it when necessary to preserve tool-call/result pairs. A
+future remote or database-backed trajectory can implement the same reader
+without granting the model filesystem write access.
+
+For linked local artifacts, the query opens sidecar metadata lazily in message
+order, resolves the exact digest carried by the foreground or background
+result envelope, verifies it with a bounded-memory stream, and invokes `rg`
+with bounded output. It stops after the requested newest matches plus one,
+avoiding whole-artifact heap loads and unnecessary older scans. A call id alone
+is not treated as immutable identity when multiple sidecars share it.
+
+The launch local message source still materializes one run's trajectory JSONL
+per history query. Artifact contents remain streamed and bounded. If run sizes
+outgrow this simple backend, an indexed local or remote `TrajectoryReader` can
+replace it without changing the model-facing tools.
+
+Capability-restricted runs compact only when both history tools and at least
+one generic artifact inspection tool (`read` or `bash`) remain available,
+preserving exact recovery as part of the compaction contract.
 
 ### Skills and instructions
 
@@ -140,11 +185,13 @@ all background executions have a separate hard timeout.
 The built-in system prompt and sorted tool schemas stay in deterministic order.
 Project instructions, skill metadata, memory paths, and delegated instructions
 form a deterministic runtime reminder at the start of each run. Both the
-reminder and tool registry are frozen for that run; later tool outputs and
-background completions are append-only tail messages. Large outputs become
-immutable artifacts with bounded previews. Together these choices avoid
-rebuilding earlier messages and make provider KV-cache reuse possible without
-making cache behavior part of the core API.
+reminder and tool registry are frozen for that run. The durable trajectory
+remains append-only; before a model call, an optional compaction checkpoint can
+replace its older active prefix with one summary while retaining the exact
+recent suffix. Large outputs become immutable artifacts with bounded previews.
+These choices bound request growth while keeping raw evidence inspectable and
+making provider KV-cache reuse possible without making cache behavior part of
+the core API.
 
 ### Hooks
 
@@ -165,6 +212,7 @@ model logic in the transport.
 - TUI or browser frontend
 - built-in scheduler
 - vector search
+- provider/server-side compaction
 - database-backed run indexing
 - native dynamic plugins
 - distributed subagents

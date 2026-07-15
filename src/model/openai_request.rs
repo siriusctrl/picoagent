@@ -6,11 +6,13 @@ pub(crate) fn responses_body(request: &ModelRequest, reasoning_effort: Option<&s
     let mut body = json!({
         "model": request.model,
         "input": responses_input(&request.messages),
-        "tools": response_tools(&request.tools),
         "stream": true,
         "store": false,
         "include": ["reasoning.encrypted_content"],
     });
+    if !request.tools.is_empty() {
+        body["tools"] = response_tools(&request.tools);
+    }
     if !request.system.is_empty() {
         body["instructions"] = json!(request.system);
     }
@@ -32,10 +34,12 @@ pub(crate) fn chat_body(request: &ModelRequest, reasoning_effort: Option<&str>) 
     let mut body = json!({
         "model": request.model,
         "messages": messages,
-        "tools": chat_tools(&request.tools),
         "stream": true,
         "stream_options": {"include_usage": true},
     });
+    if !request.tools.is_empty() {
+        body["tools"] = chat_tools(&request.tools);
+    }
     if let Some(max_tokens) = request.max_output_tokens {
         let field = if reasoning_effort.is_some() {
             "max_completion_tokens"
@@ -180,6 +184,35 @@ fn chat_tools(tools: &[ToolSpec]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request_with_tools(tools: Vec<ToolSpec>) -> ModelRequest {
+        ModelRequest {
+            run_id: "run".into(),
+            model: "model".into(),
+            system: String::new(),
+            messages: vec![Message::text(Role::User, "hello")],
+            tools,
+            max_output_tokens: None,
+        }
+    }
+
+    #[test]
+    fn openai_bodies_omit_empty_tools_and_keep_nonempty_tools() {
+        let empty = request_with_tools(Vec::new());
+        assert!(responses_body(&empty, None).get("tools").is_none());
+        assert!(chat_body(&empty, None).get("tools").is_none());
+
+        let with_tool = request_with_tools(vec![ToolSpec {
+            name: "read".into(),
+            description: "Read a file".into(),
+            input_schema: json!({"type": "object"}),
+        }]);
+        assert_eq!(responses_body(&with_tool, None)["tools"][0]["name"], "read");
+        assert_eq!(
+            chat_body(&with_tool, None)["tools"][0]["function"]["name"],
+            "read"
+        );
+    }
 
     #[test]
     fn oauth_request_replays_encrypted_reasoning_items() {

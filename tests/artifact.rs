@@ -59,6 +59,88 @@ async fn cumulative_budget_forces_later_small_results_to_artifacts() {
         .unwrap();
     assert!(second.artifact.is_some());
     assert!(second.preview.len() <= 2);
+    let model_content = second.model_content();
+    assert!(model_content.contains("preview: head_only"));
+    assert!(model_content.contains("bytes: total=8; shown=2 (head=2, tail=0); omitted=6"));
+    assert!(model_content.contains("omitted_region: tail"));
+    assert!(model_content.contains("reason: run_preview_budget_limited"));
+}
+
+#[tokio::test]
+async fn identifies_budget_as_the_reason_when_a_small_result_spills() {
+    let workspace = tempdir().unwrap();
+    let store = ArtifactStore::new(ArtifactPolicy {
+        inline_limit_bytes: 128,
+        max_inline_bytes_per_run: 40,
+        preview_head_bytes: 1,
+        preview_tail_bytes: 1,
+    });
+    let output = store
+        .persist_output_with_budget(
+            &context(workspace.path()),
+            RawToolOutput::text("x".repeat(50)),
+            40,
+        )
+        .await
+        .unwrap();
+
+    assert!(output.artifact.is_some());
+    assert!(
+        output
+            .model_content()
+            .contains("reason: run_preview_budget_limited")
+    );
+}
+
+#[tokio::test]
+async fn artifact_backed_full_preview_is_not_labeled_truncated() {
+    let workspace = tempdir().unwrap();
+    let store = ArtifactStore::new(ArtifactPolicy {
+        inline_limit_bytes: 4,
+        max_inline_bytes_per_run: 100,
+        preview_head_bytes: 8,
+        preview_tail_bytes: 8,
+    });
+    let output = store
+        .persist_output(&context(workspace.path()), RawToolOutput::text("abcdef"))
+        .await
+        .unwrap();
+
+    assert!(output.artifact.is_some());
+    assert!(!output.truncated);
+    assert_eq!(output.preview, "abcdef");
+    assert!(output.model_content().contains("truncated: false"));
+    assert!(output.model_content().contains("preview: full"));
+}
+
+#[tokio::test]
+async fn exhausted_preview_budget_returns_metadata_and_inspection_guidance() {
+    let workspace = tempdir().unwrap();
+    let store = ArtifactStore::new(ArtifactPolicy {
+        inline_limit_bytes: 32,
+        max_inline_bytes_per_run: 0,
+        preview_head_bytes: 8,
+        preview_tail_bytes: 4,
+    });
+    let output = store
+        .persist_output_with_budget(
+            &context(workspace.path()),
+            RawToolOutput::text("abcdefgh"),
+            0,
+        )
+        .await
+        .unwrap();
+
+    assert!(output.preview.is_empty());
+    let model_content = output.model_content();
+    assert!(model_content.contains("preview: none"));
+    assert!(model_content.contains("bytes: total=8; shown=0 (head=0, tail=0); omitted=8"));
+    assert!(model_content.contains("omitted_region: all"));
+    assert!(model_content.contains("reason: run_preview_budget_exhausted"));
+    assert!(model_content.contains("artifact preserves the complete returned output"));
+    assert!(model_content.contains("`read` (`path`, `offset`, `limit`)"));
+    assert!(model_content.contains("`bash`/`rg`"));
+    assert!(!model_content.contains("[Preview]"));
 }
 
 #[tokio::test]
@@ -83,7 +165,12 @@ async fn spills_small_binary_results_without_lossy_inline_decoding() {
         .unwrap();
 
     assert!(output.truncated);
-    assert!(output.preview.contains("non-UTF-8"));
+    assert!(output.preview.is_empty());
+    let model_content = output.model_content();
+    assert!(model_content.contains("preview: none"));
+    assert!(model_content.contains("omitted_region: all"));
+    assert!(model_content.contains("reason: binary_or_non_utf8"));
+    assert!(!model_content.contains("[Preview]"));
     assert!(output.artifact.unwrap().path.contains("call-binary-"));
 }
 
@@ -109,6 +196,12 @@ async fn spills_large_results_with_versioned_sidecar_and_head_tail_preview() {
     let model_content = output.model_content();
     assert!(model_content.contains("truncated: true"));
     assert!(model_content.contains("media_type: text/plain"));
+    assert!(model_content.contains("preview: head_tail"));
+    assert!(model_content.contains("shown=16 (head=8, tail=8)"));
+    assert!(model_content.contains("omitted_region: middle"));
+    assert!(model_content.contains("reason: output_exceeds_inline_limit"));
+    assert!(model_content.contains("`read` (`path`, `offset`, `limit`)"));
+    assert!(model_content.contains("`bash`/`rg`"));
 
     let artifact = output.artifact.unwrap();
     assert_eq!(artifact.version, 1);

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -9,10 +10,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{fs::OpenOptions, io::AsyncWriteExt, sync::Mutex};
 
-use crate::{
-    events::{EventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
-    model::Message,
-};
+use crate::events::{EventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink};
+
+mod trajectory;
+
+pub use trajectory::CompactionCheckpoint;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -67,6 +69,7 @@ pub struct RunPaths {
     pub directory: PathBuf,
     pub metadata: PathBuf,
     pub messages: PathBuf,
+    pub compactions: PathBuf,
     pub events: PathBuf,
     pub final_output: PathBuf,
     pub artifacts: PathBuf,
@@ -75,14 +78,14 @@ pub struct RunPaths {
 #[derive(Clone)]
 pub struct RunDirStore {
     workspace: PathBuf,
-    write_lock: Arc<Mutex<()>>,
+    write_lock: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 impl RunDirStore {
     pub fn new(workspace: impl Into<PathBuf>) -> Self {
         Self {
             workspace: workspace.into(),
-            write_lock: Arc::new(Mutex::new(())),
+            write_lock: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -99,6 +102,7 @@ impl RunDirStore {
         RunPaths {
             metadata: directory.join("run.json"),
             messages: directory.join("messages.jsonl"),
+            compactions: directory.join("compactions.jsonl"),
             events: directory.join("events.jsonl"),
             final_output: directory.join("final.md"),
             artifacts: directory.join("artifacts"),
@@ -107,7 +111,7 @@ impl RunDirStore {
     }
 
     pub async fn create_run(&self, run: &RunRecord) -> Result<RunPaths> {
-        let _guard = self.write_lock.lock().await;
+        let mut sequences = self.write_lock.lock().await;
         let paths = self.paths(&run.id);
         if paths.metadata.exists() {
             bail!("run `{}` already exists", run.id);
@@ -116,6 +120,7 @@ impl RunDirStore {
             .await
             .with_context(|| format!("create run directory {}", paths.directory.display()))?;
         write_json_atomic(&paths.metadata, run).await?;
+        sequences.insert(run.id.clone(), 1);
         Ok(paths)
     }
 
@@ -129,13 +134,6 @@ impl RunDirStore {
         Ok(run)
     }
 
-    pub async fn append_message(&self, run_id: &str, message: &Message) -> Result<()> {
-        let _guard = self.write_lock.lock().await;
-        let paths = self.paths(run_id);
-        ensure_run_exists(&paths).await?;
-        append_json_line(&paths.messages, message).await
-    }
-
     pub async fn write_final(&self, run_id: &str, output: &str) -> Result<()> {
         let _guard = self.write_lock.lock().await;
         let paths = self.paths(run_id);
@@ -147,20 +145,6 @@ impl RunDirStore {
 
     pub async fn load_run(&self, run_id: &str) -> Result<RunRecord> {
         read_json(&self.paths(run_id).metadata).await
-    }
-
-    pub async fn load_messages(&self, run_id: &str) -> Result<Vec<Message>> {
-        let path = self.paths(run_id).messages;
-        let content = match tokio::fs::read_to_string(&path).await {
-            Ok(content) => content,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
-        };
-        content
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str(line).context("parse stored message"))
-            .collect()
     }
 
     pub fn event_sink(&self) -> SharedEventSink {
@@ -184,14 +168,14 @@ impl EventSink for RunDirStore {
     }
 }
 
-async fn ensure_run_exists(paths: &RunPaths) -> Result<()> {
+pub(super) async fn ensure_run_exists(paths: &RunPaths) -> Result<()> {
     if !tokio::fs::try_exists(&paths.metadata).await? {
         bail!("run does not exist: {}", paths.directory.display());
     }
     Ok(())
 }
 
-async fn append_json_line(path: &Path, value: &impl Serialize) -> Result<()> {
+pub(super) async fn append_json_line(path: &Path, value: &impl Serialize) -> Result<()> {
     let mut line = serde_json::to_vec(value).context("serialize JSONL record")?;
     line.push(b'\n');
     let mut file = OpenOptions::new()
