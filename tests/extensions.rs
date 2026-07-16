@@ -46,7 +46,7 @@ async fn skills_load_on_demand_and_memory_uses_ordinary_paths() {
         memory.project,
         workspace.path().join(".pico/memory/project")
     );
-    let prompt = memory.runtime_reminder_section();
+    let prompt = memory.runtime_reminder_section(true);
     assert!(prompt.contains(memory.user.to_string_lossy().as_ref()));
     assert!(prompt.contains("memory_update"));
     assert!(prompt.contains("Use `read` and `bash`"));

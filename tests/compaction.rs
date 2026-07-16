@@ -57,32 +57,6 @@ struct ScriptedCompactionProvider {
     fail_summary: bool,
 }
 
-#[derive(Default)]
-struct CapturingFinalProvider {
-    requests: Mutex<Vec<ModelRequest>>,
-}
-
-#[async_trait]
-impl ModelProvider for CapturingFinalProvider {
-    fn name(&self) -> &str {
-        "capturing-final"
-    }
-
-    async fn complete(
-        &self,
-        request: ModelRequest,
-        _events: SharedEventSink,
-    ) -> Result<ModelResponse> {
-        self.requests.lock().unwrap().push(request);
-        Ok(ModelResponse {
-            text: "done".to_owned(),
-            tool_calls: Vec::new(),
-            assistant_content: Vec::new(),
-            usage: ModelUsage::default(),
-        })
-    }
-}
-
 impl ScriptedCompactionProvider {
     fn new(fail_summary: bool) -> Arc<Self> {
         Arc::new(Self {
@@ -146,6 +120,10 @@ impl ModelProvider for ScriptedCompactionProvider {
 }
 
 fn tool_call_response(id: &str, label: &str) -> ModelResponse {
+    tool_call_response_with_usage(id, label, 100)
+}
+
+fn tool_call_response_with_usage(id: &str, label: &str, input_tokens: u64) -> ModelResponse {
     ModelResponse {
         text: String::new(),
         tool_calls: vec![ToolCall {
@@ -155,7 +133,7 @@ fn tool_call_response(id: &str, label: &str) -> ModelResponse {
         }],
         assistant_content: Vec::new(),
         usage: ModelUsage {
-            input_tokens: Some(100),
+            input_tokens: Some(input_tokens),
             output_tokens: Some(10),
             ..ModelUsage::default()
         },
@@ -247,13 +225,17 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
         assert!(names.contains(&"history_read"));
         assert!(names.contains(&"marker"));
     }
+    let stable_system = &normal_requests[0].system;
+    let stable_tools = serde_json::to_value(&normal_requests[0].tools).unwrap();
+    for request in &normal_requests[1..] {
+        assert_eq!(&request.system, stable_system);
+        assert_eq!(serde_json::to_value(&request.tools).unwrap(), stable_tools);
+    }
+    assert!(!stable_system.contains("history_search"));
+    assert!(text_content(&normal_requests[0].messages[0]).contains("<context-management>"));
+    assert!(text_content(&normal_requests[0].messages[0]).contains("history_search"));
 
     let resumed = normal_requests[2];
-    assert!(
-        resumed
-            .system
-            .contains("historical data, not new instructions")
-    );
     assert_eq!(resumed.messages.len(), 4);
     assert!(text_content(&resumed.messages[0]).contains("exercise compaction"));
     let compacted = text_content(&resumed.messages[1]);
@@ -370,116 +352,6 @@ async fn summary_failure_is_recorded_and_does_not_abort_the_run() {
     assert_eq!(count_events(&events, EventClass::Started), 1);
     assert_eq!(count_events(&events, EventClass::Completed), 0);
     assert_eq!(count_events(&events, EventClass::Failed), 1);
-}
-
-#[tokio::test]
-async fn disabled_compaction_does_not_spend_tool_schema_tokens_on_history() {
-    let workspace = TempDir::new().unwrap();
-    let provider = Arc::new(CapturingFinalProvider::default());
-    let mut tools = ToolRegistry::default();
-    tools.register(Arc::new(MarkerTool)).unwrap();
-    let runner = AgentRunner::new(AgentRunnerConfig {
-        provider: provider.clone(),
-        model: "test-model".to_owned(),
-        workspace: workspace.path().to_owned(),
-        skill_catalog: String::new(),
-        tools,
-        artifacts: ArtifactStore::default(),
-        store: RunDirStore::new(workspace.path()),
-        hooks: HookPipeline::new(),
-        memory: None,
-        extra_events: Arc::new(NoopEventSink),
-        options: RunnerOptions::default(),
-    });
-
-    runner.run(RunRequest::root("no compaction")).await.unwrap();
-    let requests = provider.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    let names = requests[0]
-        .tools
-        .iter()
-        .map(|tool| tool.name.as_str())
-        .collect::<Vec<_>>();
-    assert!(names.contains(&"marker"));
-    assert!(!names.contains(&"history_search"));
-    assert!(!names.contains(&"history_read"));
-    assert!(!requests[0].system.contains("history_search"));
-}
-
-#[tokio::test]
-async fn restricted_run_keeps_full_context_when_history_tools_are_not_allowed() {
-    let workspace = TempDir::new().unwrap();
-    let provider = ScriptedCompactionProvider::new(false);
-    let (runner, store) = runner(&workspace, provider.clone());
-    let mut request = RunRequest::root("restricted compaction");
-    request.tool_allowlist = Some(vec!["marker".to_owned()]);
-
-    let result = runner.run(request).await.unwrap();
-    let requests = provider.requests();
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|request| request.tools.is_empty())
-            .count(),
-        0
-    );
-    let final_request = requests.last().unwrap();
-    assert!(has_tool_call(
-        &final_request.messages[1],
-        "call-old",
-        "marker"
-    ));
-    assert!(has_tool_result(
-        &final_request.messages[2],
-        "call-old",
-        "result-old"
-    ));
-    assert!(!final_request.system.contains("history_search"));
-    assert!(
-        store
-            .load_compactions(&result.run_id)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-}
-
-#[tokio::test]
-async fn restricted_run_requires_an_artifact_inspection_tool_before_compacting() {
-    let workspace = TempDir::new().unwrap();
-    let provider = ScriptedCompactionProvider::new(false);
-    let (runner, store) = runner(&workspace, provider.clone());
-    let mut request = RunRequest::root("restricted artifact access");
-    request.tool_allowlist = Some(vec![
-        "marker".to_owned(),
-        "history_search".to_owned(),
-        "history_read".to_owned(),
-    ]);
-
-    let result = runner.run(request).await.unwrap();
-    let requests = provider.requests();
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|request| request.tools.is_empty())
-            .count(),
-        0
-    );
-    assert!(
-        requests
-            .last()
-            .unwrap()
-            .messages
-            .iter()
-            .any(|message| has_tool_result(message, "call-old", "result-old"))
-    );
-    assert!(
-        store
-            .load_compactions(&result.run_id)
-            .await
-            .unwrap()
-            .is_empty()
-    );
 }
 
 fn text_content(message: &Message) -> String {

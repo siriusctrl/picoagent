@@ -46,7 +46,8 @@ Initial adapters:
 
 Every model-callable action implements `Tool`. Built-ins, skills, MCP, memory
 updates, and background control share the same registry. The registry is sorted
-so tool schema order remains deterministic across requests.
+and frozen before the first normal provider call so tool schema order and
+membership remain deterministic across requests.
 
 This registry is the capability router: it maps a model-returned tool name to
 one implementation and one schema. It does not decide what to do or create a
@@ -59,6 +60,15 @@ model-facing description is compile-time Markdown beside the implementation;
 their name, input schema, argument validation, and execution stay together in
 Rust. Tools coupled to task supervision, memory, skills, or MCP remain owned by
 those subsystems and adapt into the same registry.
+
+Root, delegating/leaf GeneralTask, and MemoryMaintenance have explicit
+capability sets. Each normal profile registers `history_search` and
+`history_read` before its first call regardless of whether automatic compaction
+is configured. A GeneralTask's delegating or leaf variant is selected from its
+remaining depth before the run starts. Memory and delegation tools depend on
+the selected profile and configured memory; optional `web_search` and MCP tools
+depend on startup configuration. The selected schemas do not appear or
+disappear during one run.
 
 ### Run storage
 
@@ -119,9 +129,12 @@ prefix and first exact message kept. The active request contains the initial
 runtime message, the newest checkpoint summary, and the exact recent suffix.
 
 The trigger is deliberately based on provider-reported usage. If a provider
-does not report input tokens, automatic compaction does not run. A checkpoint
-summary is produced through an additional tool-free call to the same provider
-and model; picoagent does not implement provider/server-side compaction.
+does not report input tokens, automatic compaction does not run. Configuring
+`trigger_tokens` controls checkpoint creation only; the normal system prompt and
+history-tool schemas are already present and remain unchanged. A checkpoint
+summary is produced through an additional tool-free request profile using the
+same provider and model; picoagent does not implement provider/server-side
+compaction.
 
 `history_search` and `history_read` expose a read-only `TrajectoryReader`
 boundary. The local implementation searches only messages outside the active
@@ -144,8 +157,8 @@ per history query. Artifact contents remain streamed and bounded. If run sizes
 outgrow this simple backend, an indexed local or remote `TrajectoryReader` can
 replace it without changing the model-facing tools.
 
-Capability-restricted runs compact only when both history tools and at least
-one generic artifact inspection tool (`read` or `bash`) remain available,
+A normal profile compacts only when both history tools and at least one generic
+artifact inspection tool (`read` or `bash`) remain available,
 preserving exact recovery as part of the compaction contract.
 
 ### Skills and instructions
@@ -153,17 +166,18 @@ preserving exact recovery as part of the compaction contract.
 The system prompt contains only stable built-in instructions loaded from
 compile-time Markdown under `prompts/agents/`. Rust owns prompt precedence,
 section ordering, dynamic values, and the `runtime_reminder` envelope. The first
-user message carries that reminder with the workspace `AGENTS.md` and sorted
-skill metadata, followed by the original request. A skill body enters the
-conversation only after the model calls `load_skill`.
+user message carries that reminder with compacted-history recovery guidance,
+the workspace `AGENTS.md`, and sorted skill metadata, followed by the original
+request. A skill body enters the conversation only after the model calls
+`load_skill`.
 
 ### Memory
 
-Memory is durable knowledge about the user and projects. The runtime reminder
-exposes two ordinary Markdown locations; `read` and `bash` inspect them.
-`memory_update` invokes the general-task profile to make semantic changes, and
-an external cron or job scheduler can invoke model-driven consolidation. See
-[memory.md](memory.md).
+Memory is durable knowledge about the user and projects. An ordinary agent's
+runtime reminder exposes two Markdown locations; `read` and `bash` inspect them.
+`memory_update` invokes the focused MemoryMaintenance profile to make semantic
+changes, and an external cron or job scheduler can invoke the same profile for
+model-driven consolidation. See [memory.md](memory.md).
 
 ### Subagents
 
@@ -182,16 +196,22 @@ all background executions have a separate hard timeout.
 
 ## Prompt And Cache Shape
 
-The built-in system prompt and sorted tool schemas stay in deterministic order.
-Project instructions, skill metadata, memory paths, and delegated instructions
-form a deterministic runtime reminder at the start of each run. Both the
-reminder and tool registry are frozen for that run. The durable trajectory
-remains append-only; before a model call, an optional compaction checkpoint can
-replace its older active prefix with one summary while retaining the exact
-recent suffix. Large outputs become immutable artifacts with bounded previews.
-These choices bound request growth while keeping raw evidence inspectable and
-making provider KV-cache reuse possible without making cache behavior part of
-the core API.
+Normal agent calls use one invariant built-in system prompt and one sorted,
+frozen tool-schema set. The history schemas are included from the first call;
+automatic compaction never mutates this prefix. Project instructions,
+compacted-history guidance, skill metadata, memory paths, and delegated
+instructions form a deterministic runtime reminder at the start of each run.
+The reminder is frozen for that run. Optional schemas and a GeneralTask's
+delegating/leaf variant are selected before the run starts; MemoryMaintenance
+has its own narrow toolset. Summary calls intentionally use a separate
+tool-free profile.
+
+The durable trajectory remains append-only; before a normal model call, an
+optional compaction checkpoint can replace its older active prefix with one
+summary while retaining the exact recent suffix. Large outputs become immutable
+artifacts with bounded previews. These choices bound request growth while
+keeping raw evidence inspectable and making provider KV-cache reuse possible
+without making cache behavior part of the core API.
 
 ### Hooks
 

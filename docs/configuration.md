@@ -92,13 +92,16 @@ summary_max_output_tokens = 4096
 history_search_max_matches = 50
 ```
 
-`trigger_tokens` enables local compaction and must be greater than zero. The
-summary and history-search limits must also be positive. The trigger depends on
-the active provider reporting input-token usage; a provider that omits it
-cannot trigger automatic compaction. When the tracked context reaches the
-threshold, picoagent uses the same provider and model for an additional,
-tool-free summary request. A failed summary leaves the existing context or
-checkpoint in use and is recorded as a compaction failure event.
+`trigger_tokens` enables automatic checkpoint creation and must be greater than
+zero. It does not enable tools or change the normal system prompt: every normal
+agent profile receives `history_search` and `history_read` from its first
+provider call even when the setting is omitted. The summary and history-search
+limits must also be positive. The trigger depends on the active provider
+reporting input-token usage; a provider that omits it cannot trigger automatic
+compaction. When the tracked context reaches the threshold, picoagent uses the
+same provider and model for an additional, tool-free summary request. A failed
+summary leaves the existing context or checkpoint in use and is recorded as a
+compaction failure event.
 
 `keep_recent_tokens` is the approximate size of the exact message suffix kept
 beside the summary. It uses a provider-neutral estimate for choosing completed
@@ -107,9 +110,17 @@ text that provider adapters do not replay is excluded; replayable opaque
 provider items remain included.
 `summary_max_output_tokens` limits the summary request. Compaction requests are
 additional provider calls and do not consume a normal agent `max_steps` slot.
-Runs whose tool allowlist removes either history tool, or removes both `read`
-and `bash`, keep their full context instead of compacting without an
-exact-recovery path.
+A fixed profile without both history tools and at least one of `read` or `bash`
+would keep its full context instead of compacting without an exact-recovery
+path.
+
+Root, a delegating or leaf GeneralTask, and MemoryMaintenance each assemble a
+sorted tool registry and freeze it before their first normal provider call. A
+GeneralTask's variant is selected from the remaining delegation depth before
+its run starts. The compaction summary profile deliberately has no tools.
+Memory/delegation capabilities depend on configured memory and the selected
+depth variant; optional `web_search` and MCP schemas depend on startup
+configuration. None changes during the run.
 
 `history_search_max_matches` is a positive, per-query cap for newest-first
 regex matches over messages removed from the active context. It is not an

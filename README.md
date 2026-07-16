@@ -76,12 +76,14 @@ pico inspect <run-id>
 
 ## Prompt Layout
 
-Picoagent keeps its built-in system prompt independent of the workspace. At the
-start of each run, the first user message contains a synthetic
-`<runtime-reminder>` block before the original request. The reminder snapshots
-the workspace path, `AGENTS.md`, discovered skill metadata, memory locations,
-and any delegated-task instructions. Tool schemas and this reminder are frozen
-for that run; configuration or file changes take effect on the next run.
+Picoagent keeps its built-in system prompt independent of the workspace and
+unchanged across normal agent calls. At the start of each run, the first user
+message contains a synthetic `<runtime-reminder>` block before the original
+request. The reminder snapshots the workspace path, compacted-history recovery
+guidance, `AGENTS.md`, discovered skill metadata, memory locations, and any
+delegated-task instructions that apply to the profile. Tool schemas are sorted,
+and both the schemas and reminder are frozen for that run; configuration or
+file changes take effect on the next run.
 
 The reminder is stored as separate `runtime_reminder` content in
 `messages.jsonl`, while `run.json` retains the original user prompt.
@@ -183,8 +185,8 @@ MCP, hook, and memory settings.
 
 ## Context Compaction And History
 
-Local compaction is disabled by default. Enable it with a threshold appropriate
-to the model's context window:
+Automatic local checkpoint creation is disabled by default. Enable it with a
+threshold appropriate to the model's context window:
 
 ```toml
 [compaction]
@@ -202,6 +204,12 @@ append-only. Providers that do not report input-token usage do not trigger
 automatic compaction. Start/completion/failure records remain in `events.jsonl`.
 Diagnostic reasoning text that an adapter does not replay is excluded from the
 between-call estimate.
+
+The normal agent receives the `history_search` and `history_read` schemas from
+its first provider request whether or not `trigger_tokens` is configured.
+Changing the threshold controls checkpoint creation only; it does not change
+the normal system prompt or tool schemas. Before anything has been compacted,
+the history tools simply have no compacted prefix to search or read.
 
 Two read-only tools recover exact details omitted from the active request:
 
@@ -224,8 +232,10 @@ JSONL itself is too large, its complete bounded result is saved as an artifact
 and can be inspected with `read` or `bash`/`rg`. Query-limit omissions are not
 present in that artifact.
 
-Capability-restricted runs compact only when both history tools and at least
-one artifact inspection tool (`read` or `bash`) remain available.
+Each assembled agent profile has a sorted, frozen toolset. A profile compacts only
+when both history tools and at least one artifact inspection tool (`read` or
+`bash`) are present. Checkpoint summaries use a separate, tool-free request
+profile rather than changing a normal agent registry.
 
 This release implements local model-generated checkpoints only. It does not use
 OpenAI or another provider's server-side compaction API.
@@ -251,7 +261,15 @@ The launch built-ins are intentionally small:
 - `read`: bounded UTF-8 reads for a known path
 - `write`: full-file creation/replacement or an atomic list of targeted edits
 - `bash`: local discovery, `rg`, tests, builds, and other Bash commands
+- `history_search`: regex search over the compacted trajectory prefix
+- `history_read`: a bounded message window around a returned history ref
 - `web_search`: optional Brave-backed public web search
+
+Root and depth-eligible GeneralTask capabilities such as memory and delegation
+tools are selected before the run starts; a leaf GeneralTask and
+MemoryMaintenance have narrower fixed sets. `web_search` and MCP tools depend
+on startup configuration. The resulting schemas are sorted and frozen before
+the run's first normal provider call.
 
 `write` requires every edit target to identify one non-overlapping region in
 the original file. It tries exact matching first, then a conservative whole-line
@@ -300,15 +318,16 @@ in their own run directories.
 
 Memory is durable knowledge about the user and projects, not the current
 conversation. It is ordinary Markdown at two locations which are included in
-the initial runtime reminder:
+an ordinary agent's initial runtime reminder:
 
 - `$PICO_HOME/memory/user/` for cross-project user knowledge
 - `<workspace>/.pico/memory/project/` for project-specific knowledge
 
 The model uses `read` and `bash` to inspect memory—there are no special memory
 search/read tools. `memory_update` delegates semantic editing to the configured
-general-task model and returns its summary. Call it directly to wait, or wrap it
-with `spawn` to let the update run in the background.
+general-task model under the focused MemoryMaintenance profile and returns its
+summary. Call it directly to wait, or wrap it with `spawn` to let the update run
+in the background.
 
 ```bash
 pico memory consolidate

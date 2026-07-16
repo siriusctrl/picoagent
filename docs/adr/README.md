@@ -16,9 +16,11 @@ straightforward feature additions do not need an ADR.
 
 1. Create `NNNN-short-title.md` using the next four-digit number.
 2. Start with `Proposed`; change it to `Accepted` when the decision is adopted.
-3. Treat accepted ADRs as historical records. Fixing typos is fine, but changed
-   decisions require a new ADR marked `Supersedes: ADR NNNN`; mark the old ADR
-   `Superseded by ADR NNNN`.
+3. Treat accepted ADRs as historical records. Fixing typos is fine, but a
+   replaced decision requires a new ADR marked `Supersedes: ADR NNNN`; mark the
+   old ADR `Superseded by ADR NNNN`. For a narrowly scoped change, use
+   `Refines: ADR NNNN (scope)`, leave the old record accepted, and add an
+   explicit forward note without rewriting its original decision.
 4. Add the record to the index below and link it from the relevant contract or
    `docs/design-choices.md` summary.
 
@@ -30,6 +32,7 @@ Use these sections:
 - Status: Proposed | Accepted | Rejected | Superseded
 - Date: YYYY-MM-DD
 - Supersedes: ADR NNNN (when applicable)
+- Refines: ADR NNNN (scope, when applicable)
 
 ## Context
 ## Decision
@@ -46,3 +49,5 @@ Use these sections:
   owners](0002-compile-time-prompt-assets-and-tool-ownership.md)
 - [ADR 0003: Add local compaction without rewriting the
   trajectory](0003-append-only-local-compaction-and-history-retrieval.md)
+- [ADR 0004: Keep the normal agent prefix and core history tools
+  stable](0004-stable-agent-prefix-and-core-history-tools.md)

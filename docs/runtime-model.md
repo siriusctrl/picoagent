@@ -12,8 +12,9 @@ boundary.
 For each model step:
 
 1. append newly completed background results to the current messages;
-2. if enabled and the provider-reported usage threshold is reached, summarize
-   an older completed-message prefix into a compaction checkpoint;
+2. if checkpointing is enabled and the provider-reported usage threshold is
+   reached, use a separate tool-free request to summarize an older
+   completed-message prefix into a compaction checkpoint;
 3. assemble the active context and send sorted tool schemas to the provider;
 4. stream visible text and explicitly returned reasoning as separate events
    while collecting the complete response;
@@ -25,15 +26,18 @@ For each model step:
 
 ## Compaction And History
 
-Automatic local compaction is off unless `compaction.trigger_tokens` is set. It
-can trigger only after the provider reports input-token usage. Between calls,
-picoagent estimates only content the adapters replay, excluding diagnostic
-reasoning text. The summary call uses the same provider and model, no tools, and
-a separate output limit; it does not consume a normal model-step slot. A
+Automatic local compaction is off unless `compaction.trigger_tokens` is set.
+That option controls checkpoint creation only: every normal agent profile has
+both history tool schemas from its first call, and neither its system prompt nor
+toolset changes when a checkpoint appears. Compaction can trigger only after
+the provider reports input-token usage. Between calls, picoagent estimates only
+content the adapters replay, excluding diagnostic reasoning text. The summary
+call uses the same provider and model with a separate system prompt, no tools,
+and a separate output limit; it does not consume a normal model-step slot. A
 summary failure emits a lifecycle event and leaves the prior/full context in
-use. If a run-level tool allowlist excludes either history tool or both generic
-artifact inspection tools (`read` and `bash`), that run also keeps the full
-context rather than compacting without exact retrieval.
+use. A fixed profile lacking either history tool or both generic artifact
+inspection tools (`read` and `bash`) would keep the full context instead of
+compacting without exact retrieval.
 
 Compaction does not mutate `messages.jsonl`. It appends a checkpoint to
 `compactions.jsonl`, then assembles later model requests from the initial
@@ -77,12 +81,19 @@ Reasoning is not included in `final.md`.
 
 ## Prompt Stability
 
-The built-in system prompt is workspace-independent and compiled from a
-Markdown asset. Sorted tool schemas form the other stable request prefix and
-are frozen for the run. The first user message begins with a
-`runtime_reminder` content block containing the workspace snapshot: path,
-`AGENTS.md`, sorted skill metadata, memory paths, and optional delegated
-instructions. The original user request follows after a blank line.
+The normal agent's built-in system prompt is workspace-independent, compiled
+from a Markdown asset, and invariant across its calls. Sorted tool schemas form
+the other stable request prefix and are frozen before the first call. Core
+history schemas are included regardless of `trigger_tokens`. Root and a
+depth-eligible GeneralTask may include memory and delegation schemas; each
+GeneralTask is assigned a delegating or leaf variant before it starts. Optional
+web and MCP schemas depend on startup configuration. MemoryMaintenance uses a
+narrow fixed profile. Compaction summaries use a separate tool-free profile.
+
+The first user message begins with a `runtime_reminder` content block containing
+the workspace snapshot: path, compacted-history recovery guidance, `AGENTS.md`,
+sorted skill metadata, memory paths, and optional delegated instructions. The
+original user request follows after a blank line.
 
 Tool output, background results, and later complete messages append at the
 durable conversation tail. Files or configuration changed during a run are

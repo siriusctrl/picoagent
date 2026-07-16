@@ -178,14 +178,13 @@ impl TaskManager {
                     },
                 ))
                 .await;
-            let request = RunRequest {
+            let request = RunRequest::general_task(
                 prompt,
-                parent_run_id: Some(manager.parent_run_id.clone()),
-                depth: manager.parent_depth + 1,
-                additional_instructions: Some(GENERAL_TASK_INSTRUCTIONS.trim().to_owned()),
-                tool_allowlist: None,
-                use_general_task_profile: true,
-            };
+                manager.parent_run_id.clone(),
+                manager.parent_depth + 1,
+                GENERAL_TASK_INSTRUCTIONS.trim().to_owned(),
+                manager.child_can_delegate,
+            );
             let outcome = tokio::time::timeout(
                 timeout,
                 manager.runner.run_with_id(request, child_run_id.clone()),

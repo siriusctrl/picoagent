@@ -3,6 +3,12 @@
 - Status: Accepted
 - Date: 2026-07-15
 
+ADR 0004 refines only this record's prompt and history-tool placement: recovery
+guidance now lives in the initial runtime reminder, normal profiles register the
+history tools before their first call, and fixed profiles replace a generic
+run-level allowlist. The append-only checkpoint, retrieval, and persistence
+decisions below remain accepted.
+
 ## Context
 
 Long tool-using runs need to reduce the messages sent on later model calls, but
@@ -92,6 +98,7 @@ directories now and can support another storage backend later.
 
 ## Related Documents
 
+- [ADR 0004: Stable agent prefix and core history tools](0004-stable-agent-prefix-and-core-history-tools.md)
 - [Architecture](../architecture.md)
 - [Runtime model](../runtime-model.md)
 - [Configuration](../configuration.md)

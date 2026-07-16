@@ -54,6 +54,16 @@ navigation, invariants, verification, and handoff.
   identity is a contract violation.
 - Keep prompt prefixes deterministic: stable section order, sorted tools and
   skills, and dynamic memory/tool results near the tail.
+- Keep the normal agent system prompt invariant. Put compacted-history recovery
+  guidance in the initial runtime reminder, not in a conditionally changing
+  system prompt.
+- Register `history_search` and `history_read` before the first normal provider
+  call regardless of `compaction.trigger_tokens`. That setting controls
+  checkpoint creation only; sorted tool schemas stay frozen per run.
+- Keep Root, delegating/leaf GeneralTask, and MemoryMaintenance as explicit
+  capability profiles, and keep compaction summary calls on a separate
+  tool-free request profile. Select the GeneralTask variant from remaining
+  depth before its run starts; do not add or remove schemas during a run.
 - Keep stable model-facing prose in compile-time Markdown assets. Keep prompt
   assembly, tool schemas, argument validation, and execution contracts in Rust.
 - Memory is durable user/project knowledge outside the live transcript. Inspect

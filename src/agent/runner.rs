@@ -20,6 +20,7 @@ use super::{
     context::{build_runtime_reminder, build_system_prompt},
     task::{BackgroundTaskRecord, SpawnTool, TaskManager, TaskManagerConfig, WaitTool},
     tool_execution::DirectToolRuntime,
+    types::RunProfile,
 };
 
 pub use super::types::{AgentRunnerConfig, RunRequest, RunResult, RunnerOptions};
@@ -101,8 +102,15 @@ impl AgentRunner {
     }
 
     fn profile<'a>(&'a self, request: &RunRequest) -> (&'a str, usize, Option<u32>) {
-        if request.use_general_task_profile {
-            (
+        match request.profile {
+            RunProfile::Root => (
+                &self.model,
+                self.options.max_steps,
+                self.options.max_output_tokens,
+            ),
+            RunProfile::GeneralTaskDelegating
+            | RunProfile::GeneralTaskLeaf
+            | RunProfile::MemoryMaintenance => (
                 self.options
                     .general_task
                     .model
@@ -110,13 +118,7 @@ impl AgentRunner {
                     .unwrap_or(&self.model),
                 self.options.general_task.max_steps,
                 self.options.general_task.max_output_tokens,
-            )
-        } else {
-            (
-                &self.model,
-                self.options.max_steps,
-                self.options.max_output_tokens,
-            )
+            ),
         }
     }
 
@@ -145,22 +147,22 @@ impl AgentRunner {
             )
             .await?;
 
-        let artifact_inspection_enabled = ["read", "bash"].iter().any(|name| {
-            self.base_tools.get(name).is_some() && allowed(&request.tool_allowlist, name)
-        });
-        let compaction_enabled = self
-            .options
-            .compaction
-            .trigger_tokens
-            .is_some_and(|tokens| tokens > 0)
-            && allowed(&request.tool_allowlist, "history_search")
-            && allowed(&request.tool_allowlist, "history_read")
-            && artifact_inspection_enabled;
-        let system = build_system_prompt(compaction_enabled);
+        let may_delegate = match request.profile {
+            RunProfile::Root => request.depth < self.options.max_subagent_depth,
+            RunProfile::GeneralTaskDelegating => true,
+            RunProfile::GeneralTaskLeaf | RunProfile::MemoryMaintenance => false,
+        };
+        let system = build_system_prompt();
+        let reminder_memory = if request.profile == RunProfile::MemoryMaintenance {
+            None
+        } else {
+            self.memory.as_ref()
+        };
         let runtime_reminder = build_runtime_reminder(
             &self.workspace,
             &self.skill_catalog,
-            self.memory.as_ref(),
+            reminder_memory,
+            may_delegate && self.memory.is_some(),
             request.additional_instructions.as_deref(),
         )?;
         let user_message = Message {
@@ -177,25 +179,35 @@ impl AgentRunner {
         let user_record = self.store.append_message(&run_id, &user_message).await?;
         let mut trajectory = vec![user_record];
         let mut registry = self.base_tools.clone();
-        if compaction_enabled {
-            register_history_tools(
-                &mut registry,
-                Arc::new(LocalTrajectoryReader::with_local_artifacts(
-                    Arc::new(self.store.clone()),
-                    self.workspace.clone(),
-                )),
-                self.options.compaction.history_search_max_matches,
-            )?;
+        register_history_tools(
+            &mut registry,
+            Arc::new(LocalTrajectoryReader::with_local_artifacts(
+                Arc::new(self.store.clone()),
+                self.workspace.clone(),
+            )),
+            self.options.compaction.history_search_max_matches,
+        )?;
+        if request.profile == RunProfile::MemoryMaintenance {
+            registry.retain(&[
+                "read".to_owned(),
+                "write".to_owned(),
+                "bash".to_owned(),
+                "history_search".to_owned(),
+                "history_read".to_owned(),
+            ]);
         }
-        if let Some(allowlist) = &request.tool_allowlist {
-            registry.retain(allowlist);
-        }
+        let automatic_compaction_enabled = self
+            .options
+            .compaction
+            .trigger_tokens
+            .is_some_and(|tokens| tokens > 0)
+            && registry.get("history_search").is_some()
+            && registry.get("history_read").is_some()
+            && ["read", "bash"]
+                .iter()
+                .any(|name| registry.get(name).is_some());
 
-        let may_delegate = request.depth < self.options.max_subagent_depth;
-        if may_delegate
-            && allowed(&request.tool_allowlist, "memory_update")
-            && let Some(memory) = &self.memory
-        {
+        if may_delegate && let Some(memory) = &self.memory {
             registry.register(Arc::new(MemoryUpdateTool::new(
                 self.clone(),
                 memory.clone(),
@@ -208,10 +220,7 @@ impl AgentRunner {
         let tool_preview_budget = Arc::new(tokio::sync::Mutex::new(
             self.artifacts.policy().max_inline_bytes_per_run,
         ));
-        let task_manager = if may_delegate
-            && (allowed(&request.tool_allowlist, "spawn")
-                || allowed(&request.tool_allowlist, "wait"))
-        {
+        let task_manager = if may_delegate {
             let manager = TaskManager::new(TaskManagerConfig {
                 runner: self.clone(),
                 tools: registry.clone(),
@@ -221,6 +230,7 @@ impl AgentRunner {
                 workspace: self.workspace.clone(),
                 parent_run_id: run_id.clone(),
                 parent_depth: request.depth,
+                child_can_delegate: request.depth + 1 < self.options.max_subagent_depth,
                 events: events.clone(),
                 hooks: self.hooks.clone(),
                 max_parallel_tasks: self.options.max_parallel_tasks,
@@ -228,12 +238,8 @@ impl AgentRunner {
                 default_wait_timeout_seconds: self.options.task_wait_timeout_seconds,
                 max_execution_timeout_seconds: self.options.task_max_timeout_seconds,
             });
-            if allowed(&request.tool_allowlist, "spawn") {
-                registry.register(Arc::new(SpawnTool::new(manager.clone())))?;
-            }
-            if allowed(&request.tool_allowlist, "wait") {
-                registry.register(Arc::new(WaitTool::new(manager.clone())))?;
-            }
+            registry.register(Arc::new(SpawnTool::new(manager.clone())))?;
+            registry.register(Arc::new(WaitTool::new(manager.clone())))?;
             Some(manager)
         } else {
             None
@@ -248,6 +254,10 @@ impl AgentRunner {
             run_id: &run_id,
             timeout_seconds: self.options.direct_tool_timeout_seconds,
         };
+        // Freeze the model-facing schema set once per run. Tool execution keeps
+        // using the registry, but every normal model request receives the exact
+        // same sorted schema prefix.
+        let tool_specs = registry.specs();
         let outcome: Result<RunResult> = async {
             let mut latest_checkpoint = self.store.load_latest_compaction(&run_id).await?;
             let mut context_tokens: Option<u64> = None;
@@ -262,7 +272,7 @@ impl AgentRunner {
                     }
                 }
 
-                if compaction_enabled
+                if automatic_compaction_enabled
                     && let Some(checkpoint) = maybe_compact(CompactionAttempt {
                         provider: &self.provider,
                         model: &model,
@@ -295,7 +305,7 @@ impl AgentRunner {
                             model: model.clone(),
                             system: system.clone(),
                             messages: active_messages,
-                            tools: registry.specs(),
+                            tools: tool_specs.clone(),
                             max_output_tokens,
                         },
                         events.clone(),
@@ -417,12 +427,6 @@ impl AgentRunner {
             ))
             .await
     }
-}
-
-fn allowed(allowlist: &Option<Vec<String>>, name: &str) -> bool {
-    allowlist
-        .as_ref()
-        .is_none_or(|items| items.iter().any(|item| item == name))
 }
 
 async fn append_background_results(

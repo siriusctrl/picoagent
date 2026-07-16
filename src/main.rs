@@ -339,16 +339,7 @@ async fn memory_command(
                 workspace,
                 pico_home,
                 config,
-                RunRequest {
-                    prompt,
-                    parent_run_id: None,
-                    depth: 0,
-                    additional_instructions: Some(
-                        MEMORY_CONSOLIDATION_INSTRUCTIONS.trim().to_owned(),
-                    ),
-                    tool_allowlist: Some(vec!["read".into(), "write".into(), "bash".into()]),
-                    use_general_task_profile: true,
-                },
+                RunRequest::memory_maintenance(prompt, MEMORY_CONSOLIDATION_INSTRUCTIONS.trim()),
                 OutputFormat::Text,
             )
             .await?;

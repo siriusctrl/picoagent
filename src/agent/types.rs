@@ -68,12 +68,19 @@ impl Default for RunnerOptions {
 
 #[derive(Debug, Clone)]
 pub struct RunRequest {
-    pub prompt: String,
-    pub parent_run_id: Option<String>,
-    pub depth: usize,
-    pub additional_instructions: Option<String>,
-    pub tool_allowlist: Option<Vec<String>>,
-    pub use_general_task_profile: bool,
+    pub(crate) prompt: String,
+    pub(crate) parent_run_id: Option<String>,
+    pub(crate) depth: usize,
+    pub(crate) additional_instructions: Option<String>,
+    pub(crate) profile: RunProfile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunProfile {
+    Root,
+    GeneralTaskDelegating,
+    GeneralTaskLeaf,
+    MemoryMaintenance,
 }
 
 impl RunRequest {
@@ -83,8 +90,55 @@ impl RunRequest {
             parent_run_id: None,
             depth: 0,
             additional_instructions: None,
-            tool_allowlist: None,
-            use_general_task_profile: false,
+            profile: RunProfile::Root,
+        }
+    }
+
+    pub(crate) fn general_task(
+        prompt: impl Into<String>,
+        parent_run_id: String,
+        depth: usize,
+        additional_instructions: String,
+        can_delegate: bool,
+    ) -> Self {
+        Self {
+            prompt: prompt.into(),
+            parent_run_id: Some(parent_run_id),
+            depth,
+            additional_instructions: Some(additional_instructions),
+            profile: if can_delegate {
+                RunProfile::GeneralTaskDelegating
+            } else {
+                RunProfile::GeneralTaskLeaf
+            },
+        }
+    }
+
+    pub(crate) fn memory_maintenance_child(
+        prompt: impl Into<String>,
+        parent_run_id: String,
+        depth: usize,
+        additional_instructions: String,
+    ) -> Self {
+        Self {
+            prompt: prompt.into(),
+            parent_run_id: Some(parent_run_id),
+            depth,
+            additional_instructions: Some(additional_instructions),
+            profile: RunProfile::MemoryMaintenance,
+        }
+    }
+
+    pub fn memory_maintenance(
+        prompt: impl Into<String>,
+        additional_instructions: impl Into<String>,
+    ) -> Self {
+        Self {
+            prompt: prompt.into(),
+            parent_run_id: None,
+            depth: 0,
+            additional_instructions: Some(additional_instructions.into()),
+            profile: RunProfile::MemoryMaintenance,
         }
     }
 }

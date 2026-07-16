@@ -46,9 +46,14 @@ impl MemoryPaths {
         }
     }
 
-    pub fn runtime_reminder_section(&self) -> String {
+    pub fn runtime_reminder_section(&self, can_update: bool) -> String {
+        let guidance = if can_update {
+            "Use `memory_update` when durable knowledge should be added, corrected, merged, or removed; do not edit memory directly during the main task."
+        } else {
+            "This profile has no `memory_update` capability. Treat these memory files as read-only during this run; do not modify them directly."
+        };
         format!(
-            "user: {}\nproject: {}\n\nUse `read` and `bash` to inspect these ordinary Markdown files. Use `memory_update` when durable knowledge should be added, corrected, merged, or removed; do not edit memory directly during the main task.",
+            "user: {}\nproject: {}\n\nUse `read` and `bash` to inspect these ordinary Markdown files. {guidance}",
             self.user.display(),
             self.project.display()
         )
@@ -195,16 +200,12 @@ impl Tool for MemoryUpdateTool {
         let result = self
             .runner
             .run_with_id(
-                RunRequest {
+                RunRequest::memory_maintenance_child(
                     prompt,
-                    parent_run_id: Some(self.parent_run_id.clone()),
-                    depth: self.parent_depth + 1,
-                    additional_instructions: Some(
-                        MEMORY_MAINTENANCE_INSTRUCTIONS.trim().to_owned(),
-                    ),
-                    tool_allowlist: Some(vec!["read".into(), "write".into(), "bash".into()]),
-                    use_general_task_profile: true,
-                },
+                    self.parent_run_id.clone(),
+                    self.parent_depth + 1,
+                    MEMORY_MAINTENANCE_INSTRUCTIONS.trim().to_owned(),
+                ),
                 child_run_id.clone(),
             )
             .await;

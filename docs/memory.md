@@ -10,8 +10,8 @@ live context window, transcript persistence, or a run summary.
 
 Both locations contain ordinary human-editable Markdown. Picoagent does not
 define a database schema, vector index, or dedicated memory read/search API.
-The run's initial runtime reminder names the resolved paths; the model uses
-`read` for known files and `bash` with `rg` for discovery.
+An ordinary agent run's initial runtime reminder names the resolved paths; the
+model uses `read` for known files and `bash` with `rg` for discovery.
 
 Project rules that every agent must obey belong in `AGENTS.md`. Memory records
 user preferences, historical explanations, prior decisions, and evolving
@@ -21,11 +21,14 @@ an explicit repository change.
 ## Updates
 
 `memory_update` is the only memory-specific model tool. Its arguments are a
-scope and a semantic instruction. The tool forks the configured `general-task`
-profile, restricts it to `read`, `write`, and `bash`, and asks it to inspect the
-existing Markdown before making the smallest useful change. The child decides
-whether information should be added, corrected, merged, or removed; Rust only
-handles paths, execution, timeouts, and persistence.
+scope and a semantic instruction. The tool forks the focused
+MemoryMaintenance profile, restricts it to `read`, `write`, `bash`,
+`history_search`, and `history_read`, and asks it to inspect the existing
+Markdown before making the smallest useful change. The history tools recover
+only that child run's compacted conversation; they are not a separate memory
+index. The child decides whether information should be added, corrected,
+merged, or removed; Rust only handles paths, execution, timeouts, and
+persistence.
 
 A direct `memory_update` call is synchronous. The model can call
 `spawn(kind="tool", tool="memory_update", ...)` when the update is independent
@@ -37,11 +40,11 @@ turn transcripts into noisy memory without model judgment.
 
 ## Consolidation
 
-`pico memory consolidate` launches the same general-task profile with access to
-the chosen memory directories. It performs semantic consolidation: it may
-merge related facts, remove stale duplication, preserve provenance, and rewrite
-the Markdown for clarity. The harness does no similarity scoring or domain
-judgment.
+`pico memory consolidate` launches the same MemoryMaintenance profile with
+access to the chosen memory directories. It performs semantic consolidation:
+it may merge related facts, remove stale duplication, preserve provenance, and
+rewrite the Markdown for clarity. The harness does no similarity scoring or
+domain judgment.
 
 Use an external cron, systemd timer, or cloud scheduler:
 
@@ -54,8 +57,10 @@ projection, but vector search is not required for the launch runtime.
 
 ## Prompt And Persistence Behavior
 
-Memory contents are not injected wholesale. Only the two paths and usage rules
-are in the initial runtime reminder; selected reads and update summaries appear
-near the conversation tail. Each maintenance child has its own run directory,
+Memory contents are not injected wholesale. Ordinary agent reminders contain
+only the paths plus either update-delegation guidance or a read-only rule when
+that profile lacks `memory_update`. A MemoryMaintenance run omits that generic
+reminder; its task prompt names the designated path and directs targeted reads
+and writes instead. Each maintenance child has its own run directory,
 transcript, events, artifacts, and parent id, so memory changes remain auditable
 without inflating the parent context.
