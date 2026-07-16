@@ -242,11 +242,10 @@ pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
         .iter()
         .map(|content| match content {
             MessageContent::RuntimeReminder { text } | MessageContent::Text { text } => text.len(),
-            // Visible reasoning is diagnostic trajectory data. Provider adapters
-            // either omit it from continuation or preserve the replayable opaque
-            // item separately, so counting it would compact high-reasoning runs
-            // much earlier than their actual next request.
-            MessageContent::Reasoning { .. } => 0,
+            // Compatible Chat endpoints replay explicit reasoning in the
+            // separate reasoning_content field, so it contributes to the next
+            // request even though it is not visible assistant text.
+            MessageContent::Reasoning { text } => text.len(),
             MessageContent::ToolCall {
                 id,
                 name,
@@ -652,20 +651,20 @@ mod tests {
     }
 
     #[test]
-    fn context_estimate_ignores_diagnostic_reasoning_but_keeps_replayable_content() {
+    fn context_estimate_counts_replayed_reasoning_and_provider_items() {
         let reasoning_only = Message {
             role: Role::Assistant,
             content: vec![MessageContent::Reasoning {
                 text: "hidden chain of thought".repeat(100),
             }],
         };
-        assert_eq!(estimate_message_tokens(&reasoning_only), 0);
+        assert!(estimate_message_tokens(&reasoning_only) > 0);
 
         let replayable = Message {
             role: Role::Assistant,
             content: vec![
                 MessageContent::Reasoning {
-                    text: "not replayed".repeat(100),
+                    text: "replayed separately".repeat(100),
                 },
                 MessageContent::Text {
                     text: "visible".to_owned(),

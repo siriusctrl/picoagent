@@ -7,6 +7,33 @@ running, completed, or failed. The implementation does not resume inside a
 provider stream or shell command; the last complete message is the durable
 boundary.
 
+## Durable Messages
+
+`run.json` declares `message_format` as `openai-chat-compatible`.
+`messages.jsonl` contains one complete OpenAI Chat-compatible message per line:
+user messages have `role` and `content`; assistant messages have `role`,
+`content`, optional `tool_calls`, and optional compatible-endpoint
+`reasoning_content`; tool messages have `role`, `tool_call_id`, and `content`.
+The runtime reminder is ordinary text inside the initial user `content`, so the
+message file contains no `runtime_reminder` JSON type.
+
+`reasoning_content` records reasoning text explicitly returned by a compatible
+endpoint. It is a common endpoint extension, not an official OpenAI Chat
+Completions field, and is absent when the provider does not return it. Later
+compatible Chat requests replay it separately from visible assistant `content`.
+
+Each message has one corresponding line in `message_metadata.jsonl`. The
+sidecar holds the stable ref, sequence, timestamp, exact-message SHA-256,
+provider-neutral content layout, tool-error state, opaque provider items, and a
+second SHA-256 covering all reconstruction metadata. The two logs are created
+and directory-synced with the run. The Chat line is synced first and the
+metadata line is synced last as its commit marker. Reads, recovery, and appends
+take one per-run file lock, including across independently opened stores.
+Readers expose only paired records whose hashes and layouts validate. A lone
+final Chat message is treated as an interrupted append; metadata ahead of the
+message log or corruption in a committed pair is an error. This pre-release
+contract does not include a decoder for the previous private message envelope.
+
 ## Loop
 
 For each model step:
@@ -30,19 +57,21 @@ Automatic local compaction is off unless `compaction.trigger_tokens` is set.
 That option controls checkpoint creation only: every normal agent profile has
 both history tool schemas from its first call, and neither its system prompt nor
 toolset changes when a checkpoint appears. Compaction can trigger only after
-the provider reports input-token usage. Between calls, picoagent estimates only
-content the adapters replay, excluding diagnostic reasoning text. The summary
-call uses the same provider and model with a separate system prompt, no tools,
-and a separate output limit; it does not consume a normal model-step slot. A
+the provider reports input-token usage. Between calls, picoagent estimates the
+content adapters replay, including compatible Chat `reasoning_content` and
+opaque provider continuation items. The summary call uses the same provider and
+model with a separate system prompt, no tools, and a separate output limit; it
+does not consume a normal model-step slot. A
 summary failure emits a lifecycle event and leaves the prior/full context in
 use. A fixed profile lacking either history tool or both generic artifact
 inspection tools (`read` and `bash`) would keep the full context instead of
 compacting without exact retrieval.
 
-Compaction does not mutate `messages.jsonl`. It appends a checkpoint to
-`compactions.jsonl`, then assembles later model requests from the initial
-runtime message, latest summary, and exact recent messages. The raw trajectory
-therefore remains the source for read-only recovery:
+Compaction does not mutate committed pairs in `messages.jsonl` and
+`message_metadata.jsonl`. It appends a checkpoint to `compactions.jsonl`, then
+assembles later model requests from the initial runtime message, latest summary,
+and exact recent messages. The raw trajectory therefore remains the source for
+read-only recovery:
 
 - `history_search` uses one Rust regex and returns newest matches only from the
   compacted prefix, including matches in linked full textual artifacts;
@@ -75,7 +104,7 @@ reasoning deltas are separate transient `model_reasoning_delta` events, so live
 sinks can choose whether to render them. `RunDirStore` does not write either
 per-chunk event to `events.jsonl`; that file retains lifecycle, tool, artifact,
 usage, and failure events for inspection and debugging. Only the complete
-assistant message, including any separate reasoning block, enters
+assistant message, including optional `reasoning_content`, enters
 `messages.jsonl`, preventing partial or duplicated content after a crash.
 Reasoning is not included in `final.md`.
 
@@ -90,10 +119,11 @@ GeneralTask is assigned a delegating or leaf variant before it starts. Optional
 web and MCP schemas depend on startup configuration. MemoryMaintenance uses a
 narrow fixed profile. Compaction summaries use a separate tool-free profile.
 
-The first user message begins with a `runtime_reminder` content block containing
+The first user message begins with a `<runtime-reminder>` text block containing
 the workspace snapshot: path, compacted-history recovery guidance, `AGENTS.md`,
 sorted skill metadata, memory paths, and optional delegated instructions. The
-original user request follows after a blank line.
+original user request follows after a blank line in the same ordinary Chat
+`content` string.
 
 Tool output, background results, and later complete messages append at the
 durable conversation tail. Files or configuration changed during a run are

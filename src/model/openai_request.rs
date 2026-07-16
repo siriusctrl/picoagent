@@ -1,6 +1,9 @@
 use serde_json::{Value, json};
 
-use super::{Message, MessageContent, ModelRequest, Role, ToolSpec, common::content_text};
+use super::{
+    Message, MessageContent, ModelRequest, Role, ToolSpec, common::content_text,
+    openai_chat::project_chat_message,
+};
 
 pub(crate) fn responses_body(request: &ModelRequest, reasoning_effort: Option<&str>) -> Value {
     let mut body = json!({
@@ -30,7 +33,12 @@ pub(crate) fn chat_body(request: &ModelRequest, reasoning_effort: Option<&str>) 
     if !request.system.is_empty() {
         messages.push(json!({"role": "system", "content": request.system}));
     }
-    messages.extend(request.messages.iter().map(chat_message));
+    messages.extend(
+        request
+            .messages
+            .iter()
+            .map(|message| json!(project_chat_message(message))),
+    );
     let mut body = json!({
         "model": request.model,
         "messages": messages,
@@ -121,49 +129,6 @@ fn responses_input(messages: &[Message]) -> Value {
         }
     }
     Value::Array(input)
-}
-
-fn chat_message(message: &Message) -> Value {
-    match &message.role {
-        Role::User => json!({"role": "user", "content": content_text(&message.content)}),
-        Role::Assistant => {
-            let calls: Vec<_> = message
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    MessageContent::ToolCall {
-                        id,
-                        name,
-                        arguments,
-                    } => Some(json!({
-                        "id": id,
-                        "type": "function",
-                        "function": {"name": name, "arguments": arguments.to_string()}
-                    })),
-                    MessageContent::BackgroundTaskResult { .. } => None,
-                    _ => None,
-                })
-                .collect();
-            json!({
-                "role": "assistant",
-                "content": content_text(&message.content),
-                "tool_calls": calls
-            })
-        }
-        Role::Tool => {
-            let (call_id, content) = message
-                .content
-                .iter()
-                .find_map(|block| match block {
-                    MessageContent::ToolResult {
-                        call_id, content, ..
-                    } => Some((call_id.as_str(), content.as_str())),
-                    _ => None,
-                })
-                .unwrap_or(("", ""));
-            json!({"role": "tool", "tool_call_id": call_id, "content": content})
-        }
-    }
 }
 
 fn chat_tools(tools: &[ToolSpec]) -> Value {
@@ -275,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_keeps_reasoning_out_of_visible_continuation_context() {
+    fn chat_keeps_reasoning_separate_from_visible_continuation_context() {
         let message = Message {
             role: Role::Assistant,
             content: vec![
@@ -293,8 +258,8 @@ mod tests {
             ],
         };
 
-        let value = chat_message(&message);
-        assert!(value.get("reasoning_content").is_none());
+        let value = json!(project_chat_message(&message));
+        assert_eq!(value["reasoning_content"], "inspect first");
         assert_eq!(value["content"], "checked");
         assert_eq!(value["tool_calls"][0]["id"], "call_1");
     }

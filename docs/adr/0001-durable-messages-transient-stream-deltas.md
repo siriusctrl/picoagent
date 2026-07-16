@@ -3,6 +3,11 @@
 - Status: Accepted
 - Date: 2026-07-14
 
+ADR 0005 refines only the physical encoding of these completed messages:
+`messages.jsonl` now contains Chat-compatible lines, while stable identity and
+provider-neutral reconstruction state live in `message_metadata.jsonl`. The
+completed-message boundary and transient-delta decisions below remain accepted.
+
 ## Context
 
 Picoagent needs a portable, searchable trajectory for inspection and future
@@ -50,6 +55,7 @@ events remain useful for operational inspection and debugging.
 
 ## Related Documents
 
+- [ADR 0005: Chat-compatible message log](0005-openai-chat-compatible-message-log.md)
 - [Runtime model](../runtime-model.md)
 - [Architecture](../architecture.md)
 - [Design choices](../design-choices.md)

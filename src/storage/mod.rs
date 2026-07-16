@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -12,9 +12,12 @@ use tokio::{fs::OpenOptions, io::AsyncWriteExt, sync::Mutex};
 
 use crate::events::{EventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink};
 
+mod message_log;
 mod trajectory;
 
 pub use trajectory::CompactionCheckpoint;
+
+pub const MESSAGE_FORMAT: &str = "openai-chat-compatible";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -34,6 +37,7 @@ pub struct RunRecord {
     pub prompt: String,
     pub provider: String,
     pub model: String,
+    pub message_format: String,
     pub cwd: PathBuf,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -57,6 +61,7 @@ impl RunRecord {
             prompt: prompt.into(),
             provider: provider.into(),
             model: model.into(),
+            message_format: MESSAGE_FORMAT.to_owned(),
             cwd,
             created_at: now,
             updated_at: now,
@@ -69,6 +74,7 @@ pub struct RunPaths {
     pub directory: PathBuf,
     pub metadata: PathBuf,
     pub messages: PathBuf,
+    pub message_metadata: PathBuf,
     pub compactions: PathBuf,
     pub events: PathBuf,
     pub final_output: PathBuf,
@@ -78,7 +84,14 @@ pub struct RunPaths {
 #[derive(Clone)]
 pub struct RunDirStore {
     workspace: PathBuf,
-    write_lock: Arc<Mutex<HashMap<String, u64>>>,
+    write_lock: Arc<Mutex<HashMap<String, MessageCursor>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MessageCursor {
+    next_seq: u64,
+    messages_len: u64,
+    metadata_len: u64,
 }
 
 impl RunDirStore {
@@ -102,6 +115,7 @@ impl RunDirStore {
         RunPaths {
             metadata: directory.join("run.json"),
             messages: directory.join("messages.jsonl"),
+            message_metadata: directory.join("message_metadata.jsonl"),
             compactions: directory.join("compactions.jsonl"),
             events: directory.join("events.jsonl"),
             final_output: directory.join("final.md"),
@@ -113,14 +127,29 @@ impl RunDirStore {
     pub async fn create_run(&self, run: &RunRecord) -> Result<RunPaths> {
         let mut sequences = self.write_lock.lock().await;
         let paths = self.paths(&run.id);
+        if run.message_format != MESSAGE_FORMAT {
+            bail!(
+                "unsupported message format {}; expected {MESSAGE_FORMAT}",
+                run.message_format
+            );
+        }
         if paths.metadata.exists() {
             bail!("run `{}` already exists", run.id);
         }
         tokio::fs::create_dir_all(&paths.artifacts)
             .await
             .with_context(|| format!("create run directory {}", paths.directory.display()))?;
+        sync_directory_chain(&paths.directory, &self.workspace).await?;
+        message_log::initialize(&paths.directory, &paths.messages, &paths.message_metadata).await?;
         write_json_atomic(&paths.metadata, run).await?;
-        sequences.insert(run.id.clone(), 1);
+        sequences.insert(
+            run.id.clone(),
+            MessageCursor {
+                next_seq: 1,
+                messages_len: 0,
+                metadata_len: 0,
+            },
+        );
         Ok(paths)
     }
 
@@ -202,12 +231,86 @@ async fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
 async fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value).context("serialize JSON")?;
     let temporary = path.with_extension("json.tmp");
-    tokio::fs::write(&temporary, bytes)
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)
+        .await
+        .with_context(|| format!("open {} for atomic write", temporary.display()))?;
+    file.write_all(&bytes)
         .await
         .with_context(|| format!("write {}", temporary.display()))?;
+    file.flush().await?;
+    file.sync_all()
+        .await
+        .with_context(|| format!("sync {}", temporary.display()))?;
+    drop(file);
     tokio::fs::rename(&temporary, path)
         .await
-        .with_context(|| format!("replace {}", path.display()))
+        .with_context(|| format!("replace {}", path.display()))?;
+    sync_parent_directory(path).await
+}
+
+#[cfg(unix)]
+async fn sync_parent_directory(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .with_context(|| format!("{} has no parent directory", path.display()))?
+        .to_owned();
+    tokio::task::spawn_blocking(move || {
+        let directory = std::fs::File::open(&parent)
+            .with_context(|| format!("open {} for directory sync", parent.display()))?;
+        directory
+            .sync_all()
+            .with_context(|| format!("sync directory {}", parent.display()))
+    })
+    .await
+    .context("join directory sync task")?
+}
+
+#[cfg(not(unix))]
+async fn sync_parent_directory(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn sync_directory_chain(path: &Path, through: &Path) -> Result<()> {
+    let mut current = tokio::fs::canonicalize(path)
+        .await
+        .with_context(|| format!("resolve directory {}", path.display()))?;
+    let through = tokio::fs::canonicalize(through)
+        .await
+        .with_context(|| format!("resolve workspace {}", through.display()))?;
+    tokio::task::spawn_blocking(move || {
+        loop {
+            let directory = std::fs::File::open(&current)
+                .with_context(|| format!("open {} for directory sync", current.display()))?;
+            directory
+                .sync_all()
+                .with_context(|| format!("sync directory {}", current.display()))?;
+            if current == through {
+                return Ok(());
+            }
+            ensure!(
+                current.starts_with(&through),
+                "run directory {} is outside workspace {}",
+                current.display(),
+                through.display()
+            );
+            current = current
+                .parent()
+                .with_context(|| format!("{} has no parent directory", current.display()))?
+                .to_owned();
+        }
+    })
+    .await
+    .context("join directory hierarchy sync task")?
+}
+
+#[cfg(not(unix))]
+async fn sync_directory_chain(_path: &Path, _through: &Path) -> Result<()> {
+    Ok(())
 }
 
 fn safe_component(value: &str) -> String {

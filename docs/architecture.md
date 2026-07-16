@@ -78,13 +78,38 @@ compaction checkpoints, structured events, the final answer, artifacts, and
 background task records. This is what persistence means in the launch runtime:
 a cloud worker can retain or inspect a job without a database.
 
+The durable message contract is `openai-chat-compatible`. Every
+`messages.jsonl` line is one Chat-shaped user, assistant, or tool message;
+runtime reminder text is part of the first user message's `content`, not a
+custom JSON variant. Assistant reasoning explicitly returned by a compatible
+endpoint uses the optional `reasoning_content` extension. This extension is not
+part of the official OpenAI Chat Completions schema.
+
+Picoagent-only state lives in the paired `message_metadata.jsonl` sidecar. Each
+line carries the stable message id, sequence, timestamp, SHA-256 of the exact
+Chat JSON, the layout needed to recover provider-neutral content, and a second
+SHA-256 over that reconstruction metadata. Tool-error state and opaque provider
+continuation items also remain there rather than adding private fields to the
+Chat message. `run.json` identifies the format as `openai-chat-compatible`.
+
 Only complete messages are resumable. Stream deltas are emitted to live sinks
 but omitted from the persisted `events.jsonl` and are never appended as partial
 conversation messages.
 
-Message and compaction loaders tolerate only a torn final JSONL record; a later
-append removes that partial tail first. Malformed completed records still fail
-loading so corruption is not silently skipped.
+Writing a message syncs its Chat line first, then syncs its metadata line. The
+metadata line is the commit marker: loading exposes only paired, hash-valid
+records. A lone final Chat line is an interrupted append and is removed before
+the next append; metadata ahead of the message log, mismatched hashes, and
+malformed completed records fail loading. Compaction JSONL independently
+tolerates only a torn final record. The current pre-release format intentionally
+does not load runs written by the earlier private message envelope.
+
+Both message files are created and directory-synced when the run is created.
+Reads, recovery, and paired appends hold a per-run file lock, so two
+`RunDirStore` instances cannot observe or produce half-interleaved commits. A
+cached next sequence is trusted only when both durable file lengths still match;
+it is removed before cancellable I/O and restored only after the metadata commit
+has synced.
 
 The persisted run state is intentionally coarse:
 
@@ -123,7 +148,8 @@ pages. See [artifacts.md](artifacts.md).
 ### Context compaction and trajectory retrieval
 
 Local compaction changes request assembly, not the durable trajectory.
-`messages.jsonl` retains every completed message with a stable ref and sequence;
+`messages.jsonl` and its metadata sidecar retain every committed completed
+message with a stable ref and sequence;
 `compactions.jsonl` appends summary checkpoints that identify the covered
 prefix and first exact message kept. The active request contains the initial
 runtime message, the newest checkpoint summary, and the exact recent suffix.
@@ -165,11 +191,11 @@ preserving exact recovery as part of the compaction contract.
 
 The system prompt contains only stable built-in instructions loaded from
 compile-time Markdown under `prompts/agents/`. Rust owns prompt precedence,
-section ordering, dynamic values, and the `runtime_reminder` envelope. The first
-user message carries that reminder with compacted-history recovery guidance,
-the workspace `AGENTS.md`, and sorted skill metadata, followed by the original
-request. A skill body enters the conversation only after the model calls
-`load_skill`.
+section ordering, dynamic values, and runtime-reminder framing. The first user
+message's ordinary text `content` carries a `<runtime-reminder>` block with
+compacted-history recovery guidance, the workspace `AGENTS.md`, and sorted
+skill metadata, followed by the original request. A skill body enters the
+conversation only after the model calls `load_skill`.
 
 ### Memory
 

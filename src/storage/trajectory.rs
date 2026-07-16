@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -11,7 +11,7 @@ use crate::{
     trajectory::{CompactedHistory, CompactedHistorySource, TrajectoryMessage},
 };
 
-use super::{RunDirStore, append_json_line, ensure_run_exists};
+use super::{MESSAGE_FORMAT, RunDirStore, append_json_line, ensure_run_exists, message_log};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactionCheckpoint {
@@ -31,46 +31,6 @@ pub struct CompactionCheckpoint {
     pub compacted_message_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredMessage {
-    #[serde(default, rename = "version")]
-    _version: u32,
-    #[serde(default)]
-    message_id: Option<String>,
-    #[serde(default)]
-    seq: Option<u64>,
-    #[serde(default)]
-    created_at: Option<DateTime<Utc>>,
-    #[serde(flatten)]
-    message: Message,
-}
-
-impl From<&TrajectoryMessage> for StoredMessage {
-    fn from(record: &TrajectoryMessage) -> Self {
-        Self {
-            _version: 1,
-            message_id: Some(record.message_ref.clone()),
-            seq: Some(record.seq),
-            created_at: Some(record.created_at),
-            message: record.message.clone(),
-        }
-    }
-}
-
-impl StoredMessage {
-    fn into_trajectory(self, fallback_seq: u64) -> TrajectoryMessage {
-        let seq = self.seq.unwrap_or(fallback_seq);
-        TrajectoryMessage {
-            message_ref: self
-                .message_id
-                .unwrap_or_else(|| format!("legacy_{fallback_seq:08}")),
-            seq,
-            created_at: self.created_at.unwrap_or(DateTime::<Utc>::UNIX_EPOCH),
-            message: self.message,
-        }
-    }
-}
-
 impl RunDirStore {
     pub async fn append_message(
         &self,
@@ -78,13 +38,32 @@ impl RunDirStore {
         message: &Message,
     ) -> Result<TrajectoryMessage> {
         let mut sequences = self.write_lock.lock().await;
+        // Invalidate the fast path before any cancellable I/O. If this future is
+        // dropped during either half of the commit, the next append must inspect
+        // and repair the files instead of trusting a stale sequence cursor.
+        let cached = sequences.remove(run_id);
         let paths = self.paths(run_id);
         ensure_run_exists(&paths).await?;
-        let next = match sequences.get(run_id).copied() {
-            Some(next) => next,
-            None => prepare_jsonl_append::<StoredMessage>(&paths.messages)
-                .await?
-                .saturating_add(1),
+        let _log_lock = message_log::exclusive_lock(&paths.directory).await?;
+        let lengths = message_log::lengths(&paths.messages, &paths.message_metadata).await?;
+        let next = match cached {
+            Some(cursor)
+                if cursor.messages_len == lengths.messages
+                    && cursor.metadata_len == lengths.metadata =>
+            {
+                cursor.next_seq
+            }
+            _ => {
+                let run = self.load_run(run_id).await?;
+                ensure!(
+                    run.message_format == MESSAGE_FORMAT,
+                    "run {run_id} uses unsupported message format {}",
+                    run.message_format
+                );
+                message_log::prepare_append(&paths.messages, &paths.message_metadata)
+                    .await?
+                    .saturating_add(1)
+            }
         };
         let record = TrajectoryMessage {
             message_ref: format!("msg_{}", ulid::Ulid::new()),
@@ -92,8 +71,16 @@ impl RunDirStore {
             created_at: Utc::now(),
             message: message.clone(),
         };
-        append_json_line(&paths.messages, &StoredMessage::from(&record)).await?;
-        sequences.insert(run_id.to_owned(), next.saturating_add(1));
+        message_log::append(&paths.messages, &paths.message_metadata, &record).await?;
+        let lengths = message_log::lengths(&paths.messages, &paths.message_metadata).await?;
+        sequences.insert(
+            run_id.to_owned(),
+            super::MessageCursor {
+                next_seq: next.saturating_add(1),
+                messages_len: lengths.messages,
+                metadata_len: lengths.metadata,
+            },
+        );
         Ok(record)
     }
 
@@ -119,15 +106,19 @@ impl RunDirStore {
     }
 
     pub async fn load_trajectory(&self, run_id: &str) -> Result<Vec<TrajectoryMessage>> {
-        let path = self.paths(run_id).messages;
-        Ok(
-            read_jsonl::<StoredMessage>(&path, "stored trajectory message")
-                .await?
-                .into_iter()
-                .enumerate()
-                .map(|(index, stored)| stored.into_trajectory(index as u64 + 1))
-                .collect(),
-        )
+        let mut sequences = self.write_lock.lock().await;
+        // A read may discover an orphan or corruption without repairing it.
+        // Never let a later append fast-path around that validation result.
+        sequences.remove(run_id);
+        let paths = self.paths(run_id);
+        let run = self.load_run(run_id).await?;
+        ensure!(
+            run.message_format == MESSAGE_FORMAT,
+            "run {run_id} uses unsupported message format {}",
+            run.message_format
+        );
+        let _log_lock = message_log::exclusive_lock(&paths.directory).await?;
+        message_log::load(&paths.messages, &paths.message_metadata).await
     }
 
     pub async fn load_compactions(&self, run_id: &str) -> Result<Vec<CompactionCheckpoint>> {

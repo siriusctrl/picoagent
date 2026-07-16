@@ -9,6 +9,12 @@ history tools before their first call, and fixed profiles replace a generic
 run-level allowlist. The append-only checkpoint, retrieval, and persistence
 decisions below remain accepted.
 
+ADR 0005 further refines the trajectory's physical layout: Chat-compatible
+message lines are paired with `message_metadata.jsonl`, where stable refs,
+sequence numbers, integrity hashes, and reconstruction layout now live. The
+committed trajectory remains append-only and is still the source for compaction
+and exact recovery.
+
 ## Context
 
 Long tool-using runs need to reduce the messages sent on later model calls, but
@@ -99,6 +105,7 @@ directories now and can support another storage backend later.
 ## Related Documents
 
 - [ADR 0004: Stable agent prefix and core history tools](0004-stable-agent-prefix-and-core-history-tools.md)
+- [ADR 0005: Chat-compatible message log](0005-openai-chat-compatible-message-log.md)
 - [Architecture](../architecture.md)
 - [Runtime model](../runtime-model.md)
 - [Configuration](../configuration.md)

@@ -99,14 +99,14 @@ async fn responses_streams_text_and_usage() {
 }
 
 #[tokio::test]
-async fn chat_stream_reassembles_fragmented_tool_arguments() {
+async fn chat_stream_reassembles_fragmented_tool_arguments_and_supplies_missing_id() {
     let server = MockServer::start().await;
     let body = concat!(
         "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"inspect \"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"content\":\"\"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"first\"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"content\":\"checking \"}}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"pa\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"pa\"}}]}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"th\\\":\\\"README.md\\\"}\"}}]}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
         "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":8,\"completion_tokens_details\":{\"reasoning_tokens\":7}}}\n\n",
@@ -139,7 +139,7 @@ async fn chat_stream_reassembles_fragmented_tool_arguments() {
         .expect("response should parse");
 
     assert_eq!(response.tool_calls.len(), 1);
-    assert_eq!(response.tool_calls[0].id, "call_1");
+    assert!(response.tool_calls[0].id.starts_with("call_"));
     assert_eq!(response.tool_calls[0].name, "read");
     assert_eq!(response.tool_calls[0].arguments["path"], "README.md");
     assert_eq!(response.text, "checking ");
@@ -154,11 +154,46 @@ async fn chat_stream_reassembles_fragmented_tool_arguments() {
     ));
     assert!(matches!(
         &response.assistant_content[2],
-        picoagent::model::MessageContent::ToolCall { id, .. } if id == "call_1"
+        picoagent::model::MessageContent::ToolCall { id, .. } if id == &response.tool_calls[0].id
     ));
     let recorded = events.0.lock().expect("recording lock poisoned");
     assert_eq!(recorded.reasoning, ["inspect ", "first"]);
     assert_eq!(recorded.text, ["checking "]);
+}
+
+#[tokio::test]
+async fn chat_stream_preserves_provider_tool_call_id() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_provider_1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+
+    let options = OpenAiCompatibleOptions::new(
+        format!("{}/v1", server.uri()),
+        "test-key",
+        OpenAiProtocol::ChatCompletions,
+    );
+    let response = OpenAiCompatibleProvider::with_options(options)
+        .complete(request(), Arc::new(NoopEventSink))
+        .await
+        .expect("response should parse");
+
+    assert_eq!(response.tool_calls[0].id, "call_provider_1");
+    assert!(matches!(
+        &response.assistant_content[0],
+        picoagent::model::MessageContent::ToolCall { id, .. } if id == "call_provider_1"
+    ));
 }
 
 #[tokio::test]

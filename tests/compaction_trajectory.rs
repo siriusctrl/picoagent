@@ -440,7 +440,7 @@ async fn write_trajectory_capture(
             "run_id": request.run_id,
             "model": request.model,
             "system": request.system,
-            "messages": request.messages,
+            "provider_neutral_messages": request.messages,
             "tools": request.tools,
             "max_output_tokens": request.max_output_tokens,
         });
@@ -474,7 +474,7 @@ async fn write_trajectory_capture(
         "summary_request_number": 3,
         "first_post_compaction_request_number": 4,
         "evidence": {
-            "scope": "Captured provider-neutral ModelRequest snapshots; this is not proof of live provider KV-cache reuse.",
+            "scope": "Captured internal ModelRequest snapshots under provider_neutral_messages; durable messages.jsonl is the Chat-compatible projection. This is not proof of live provider KV-cache reuse.",
             "usage_and_cache_numbers": "Deterministic values emitted by the scripted test provider, not live provider measurements."
         },
         "same_system": normal_requests.iter().all(|request| &request.system == system),
@@ -483,6 +483,7 @@ async fn write_trajectory_capture(
         "run_files": [
             "run.json",
             "messages.jsonl",
+            "message_metadata.jsonl",
             "compactions.jsonl",
             "events.jsonl",
             "final.md",

@@ -61,19 +61,25 @@ pub(crate) struct ToolCallBuilder {
 
 impl ToolCallBuilder {
     pub fn finish(self) -> Result<ToolCall> {
-        let arguments = if self.arguments.trim().is_empty() {
+        let Self {
+            id,
+            name,
+            arguments,
+        } = self;
+        let arguments = if arguments.trim().is_empty() {
             serde_json::json!({})
         } else {
-            serde_json::from_str(&self.arguments).with_context(|| {
-                format!(
-                    "model returned invalid JSON arguments for tool `{}`",
-                    self.name
-                )
+            serde_json::from_str(&arguments).with_context(|| {
+                format!("model returned invalid JSON arguments for tool `{name}`")
             })?
         };
         Ok(ToolCall {
-            id: self.id,
-            name: self.name,
+            id: if id.trim().is_empty() {
+                format!("call_{}", ulid::Ulid::new())
+            } else {
+                id
+            },
+            name,
             arguments,
         })
     }
@@ -149,4 +155,36 @@ pub(crate) fn join_url(base_url: &str, endpoint: &str) -> String {
         base_url.trim_end_matches('/'),
         endpoint.trim_start_matches('/')
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_call_builder_preserves_provider_ids() {
+        let call = ToolCallBuilder {
+            id: "provider-call".into(),
+            name: "read".into(),
+            arguments: "{}".into(),
+        }
+        .finish()
+        .unwrap();
+
+        assert_eq!(call.id, "provider-call");
+    }
+
+    #[test]
+    fn tool_call_builder_supplies_an_id_when_a_compatible_endpoint_omits_it() {
+        let call = ToolCallBuilder {
+            id: String::new(),
+            name: "read".into(),
+            arguments: "{}".into(),
+        }
+        .finish()
+        .unwrap();
+
+        assert!(call.id.starts_with("call_"));
+        assert!(call.id.len() > "call_".len());
+    }
 }

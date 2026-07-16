@@ -19,8 +19,9 @@ navigation, invariants, verification, and handoff.
   at compile time; dynamic prompt assembly remains in `src/agent/context.rs`.
 - `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,
   and project-local artifact paths.
-- `src/storage/`: self-contained run directories, message/event JSONL, status,
-  compaction checkpoints, and final-result persistence.
+- `src/storage/`: self-contained run directories, Chat-compatible message JSONL
+  with paired local metadata, event JSONL, status, compaction checkpoints, and
+  final-result persistence.
 - `src/trajectory.rs` and `src/trajectory/`: provider-neutral compacted-history
   search/read contracts plus the local message and artifact reader.
 - `src/skills/`: Agent Skills discovery and progressive `SKILL.md` loading.
@@ -46,6 +47,13 @@ navigation, invariants, verification, and handoff.
   same `Tool` contract and cannot silently replace built-ins.
 - Treat completed messages as the resumable boundary. Stream deltas are events,
   not durable conversation messages.
+- Keep `messages.jsonl` in the declared `openai-chat-compatible` shape. Store
+  ids, sequence, timestamps, exact-message and reconstruction-metadata hashes,
+  tool-error state, and opaque provider items in the paired
+  `message_metadata.jsonl`; metadata commits the already-synced message line.
+- Serialize message-log reads, recovery, and paired appends with the per-run
+  file lock. In-memory cursors are only a fast path and must be invalidated
+  before cancellable writes or whenever durable file lengths change.
 - Spill large tool results to `.pico/runs/<run-id>/artifacts/`; preserve the full
   result and return a bounded head/tail preview plus an immutable artifact ref.
 - Enforce both the per-result inline threshold and the cumulative per-run preview
@@ -108,7 +116,7 @@ fragmented tool arguments, error responses, and authentication refresh behavior.
 
 For runtime or artifact changes, also run a headless smoke task with the echo
 provider and inspect the generated run directory, `messages.jsonl`,
-`events.jsonl`, final output, and artifact metadata.
+`message_metadata.jsonl`, `events.jsonl`, final output, and artifact metadata.
 
 For prompt or tool-description asset changes, verify `cargo package --list`
 contains every referenced Markdown file in addition to compiling all targets.

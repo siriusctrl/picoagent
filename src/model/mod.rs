@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::events::SharedEventSink;
 
 mod common;
+pub(crate) mod openai_chat;
 mod openai_oauth_credentials;
 mod openai_oauth_device;
 mod openai_request;
@@ -43,7 +44,7 @@ pub enum MessageContent {
         text: String,
     },
     /// Reasoning text explicitly returned by a compatible provider.
-    /// Stored for trajectory inspection, not mixed into visible context.
+    /// Replayed separately from visible assistant content when supported.
     Reasoning {
         text: String,
     },

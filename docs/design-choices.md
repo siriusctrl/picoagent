@@ -33,6 +33,29 @@ decision context and rejected alternatives.
 Revisit when cross-run queries, multi-worker ownership, or server-side pagination
 become concrete requirements.
 
+## Chat-Compatible Message Log
+
+`messages.jsonl` is directly inspectable as `openai-chat-compatible` messages,
+without picoagent ids or content variants mixed into the JSON. The initial
+runtime reminder is text in the first user message. Explicit compatible-endpoint
+reasoning uses the optional `reasoning_content` extension; it is not an official
+OpenAI Chat field.
+
+Stable refs, sequence and time, exact-message and reconstruction-metadata
+hashes, internal layout, tool-error state, and opaque provider continuation
+items live in a paired `message_metadata.jsonl` sidecar. Writing metadata last
+gives each pair a simple commit boundary while preserving enough information to
+reconstruct the provider-neutral runtime message. Per-run file locking keeps
+independent store instances from interleaving the two halves of a commit.
+
+Rejected: a picoagent-specific envelope in the message log, private fields on
+Chat messages, duplicating all message text in metadata, and preserving a
+legacy decoder before any released run depends on it. The unversioned
+`openai-chat-compatible` name describes the contract; an actually incompatible
+future representation must use a distinct format name rather than reserving a
+speculative `v1` suffix. See
+[ADR 0005](adr/0005-openai-chat-compatible-message-log.md).
+
 ## Append-Only Local Compaction
 
 Compaction reduces the active model request without changing the raw evidence:

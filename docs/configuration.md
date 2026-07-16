@@ -48,13 +48,19 @@ the existing `max_tokens` request field is preserved for compatibility with
 older OpenAI-compatible endpoints.
 
 For compatible Chat streams, `delta.reasoning_content` is captured separately
-from `delta.content`, persisted as `"type": "reasoning"` message content, and
-excluded from subsequent conversation context. This follows Qwen's multi-turn
-contract and keeps trajectory data separate from the visible assistant answer.
-Empty deltas are ignored. If usage includes
+from `delta.content`, persisted as the optional `reasoning_content` field on the
+complete assistant line in `messages.jsonl`, and replayed in that separate field
+on later compatible Chat requests. It is never concatenated into visible
+assistant `content`. `reasoning_content` is an OpenAI-compatible endpoint
+extension, not an official OpenAI Chat Completions message field. Empty deltas
+are ignored. If usage includes
 `completion_tokens_details.reasoning_tokens`, that count is written to the
 `model_completed` event. Responses usage reports the equivalent count under
 `output_tokens_details.reasoning_tokens`.
+
+Some compatible endpoints omit the required id from a streamed tool call.
+Picoagent assigns a unique `call_<ULID>` id at the provider boundary so the
+assistant call and its tool result retain an unambiguous Chat identity.
 
 This behavior only records fields the provider actually sends. OpenAI
 Responses reasoning continuation items remain provider-owned items; the
@@ -105,9 +111,8 @@ compaction failure event.
 
 `keep_recent_tokens` is the approximate size of the exact message suffix kept
 beside the summary. It uses a provider-neutral estimate for choosing completed
-message boundaries and keeps a tool call with its result. Diagnostic reasoning
-text that provider adapters do not replay is excluded; replayable opaque
-provider items remain included.
+message boundaries and keeps a tool call with its result. Compatible Chat
+`reasoning_content` and replayable opaque provider items are included.
 `summary_max_output_tokens` limits the summary request. Compaction requests are
 additional provider calls and do not consume a normal agent `max_steps` slot.
 A fixed profile without both history tools and at least one of `read` or `bash`

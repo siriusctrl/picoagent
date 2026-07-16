@@ -61,6 +61,7 @@ Runtime output is stored beneath the current project:
 .pico/runs/<run-id>/
   run.json
   messages.jsonl
+  message_metadata.jsonl
   compactions.jsonl  # created after the first checkpoint
   events.jsonl
   final.md
@@ -85,12 +86,20 @@ delegated-task instructions that apply to the profile. Tool schemas are sorted,
 and both the schemas and reminder are frozen for that run; configuration or
 file changes take effect on the next run.
 
-The reminder is stored as separate `runtime_reminder` content in
-`messages.jsonl`, while `run.json` retains the original user prompt.
+`messages.jsonl` uses the `openai-chat-compatible` format: each line is one
+complete Chat message with ordinary `role` and `content` fields. The runtime
+reminder is text at the beginning of the first user message, not a custom JSON
+content type. Assistant tool calls use the Chat `tool_calls` shape, and tool
+results use `role: "tool"`, `tool_call_id`, and `content`.
 
-Every completed message also receives a stable `message_id` and sequence number
-in `messages.jsonl`. Compaction never rewrites or deletes this raw trajectory;
-its checkpoints are appended separately to `compactions.jsonl` when enabled.
+Local fields do not alter those messages. Stable `message_id`, sequence,
+timestamp, exact-message and reconstruction-metadata hashes, internal content
+layout, tool-error state, and any opaque provider continuation items are stored
+in the paired `message_metadata.jsonl` sidecar. `run.json` declares
+`"message_format": "openai-chat-compatible"` and retains the original user
+prompt. The metadata line is written last and commits its corresponding message;
+compaction never rewrites or deletes committed trajectory records. Its
+checkpoints are appended separately to `compactions.jsonl` when enabled.
 
 Stable agent instructions are maintained as compile-time Markdown assets under
 `prompts/agents/`. Standalone base tool descriptions live beside their Rust
@@ -154,7 +163,8 @@ When Chat Completions reasoning is configured, `max_output_tokens` is sent as
 `max_completion_tokens`, as required by reasoning-capable Chat endpoints.
 
 If a Chat Completions stream explicitly returns `delta.reasoning_content`,
-picoagent stores it as a separate `reasoning` block in `messages.jsonl` and
+picoagent stores it in the assistant message's optional `reasoning_content`
+field in `messages.jsonl` and
 emits transient `model_reasoning_delta` events to live event sinks. Per-chunk
 text and reasoning events are not written to `events.jsonl`; the complete
 assistant message is the durable trajectory. Reasoning token counts are
@@ -166,9 +176,14 @@ that the provider does not return.
 Inspect the persisted reasoning for a run with:
 
 ```bash
-jq -c '.content[]? | select(.type == "reasoning")' .pico/runs/<run-id>/messages.jsonl
+jq -c 'select(.role == "assistant" and has("reasoning_content")) | {role, reasoning_content}' .pico/runs/<run-id>/messages.jsonl
 jq -c '.' .pico/runs/<run-id>/events.jsonl
 ```
+
+`reasoning_content` is an OpenAI-compatible endpoint extension, not an official
+OpenAI Chat Completions message field. Picoagent writes it only when the
+endpoint explicitly returns reasoning text, and replays it as the same separate
+field on later requests to that compatible Chat endpoint.
 
 ### Anthropic-compatible
 
@@ -202,8 +217,8 @@ call summarizes the older completed-message prefix. Later requests contain the
 checkpoint summary plus the exact recent suffix, while `messages.jsonl` remains
 append-only. Providers that do not report input-token usage do not trigger
 automatic compaction. Start/completion/failure records remain in `events.jsonl`.
-Diagnostic reasoning text that an adapter does not replay is excluded from the
-between-call estimate.
+Compatible Chat `reasoning_content` and replayable opaque provider items are
+included in the between-call estimate.
 
 The normal agent receives the `history_search` and `history_read` schemas from
 its first provider request whether or not `trigger_tokens` is configured.

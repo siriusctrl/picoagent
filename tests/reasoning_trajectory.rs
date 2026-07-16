@@ -102,6 +102,45 @@ async fn chat_reasoning_is_persisted_as_a_separate_trajectory_channel() {
     assert!(user_content.ends_with("</runtime-reminder>\n\ntest reasoning"));
 
     let paths = store.paths(&result.run_id);
+    let persisted: Vec<Value> = tokio::fs::read_to_string(&paths.messages)
+        .await
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(persisted.len(), 2);
+    assert_eq!(
+        persisted[0].as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["content", "role"]
+    );
+    assert_eq!(persisted[0]["role"], "user");
+    assert_eq!(persisted[0]["content"], user_content);
+    assert!(!persisted[0].to_string().contains("runtime_reminder"));
+    assert_eq!(
+        persisted[1],
+        json!({
+            "role": "assistant",
+            "content": "PICO_REASONING_OK",
+            "reasoning_content": "inspect first"
+        })
+    );
+    for message in &persisted {
+        assert!(message.get("message_id").is_none());
+        assert!(message.get("seq").is_none());
+        assert!(message.get("created_at").is_none());
+    }
+
+    let metadata: Vec<Value> = tokio::fs::read_to_string(&paths.message_metadata)
+        .await
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(metadata.len(), 2);
+    assert_eq!(metadata[0]["seq"], 1);
+    assert_eq!(metadata[1]["seq"], 2);
+    assert!(metadata.iter().all(|entry| entry["message_id"].is_string()));
+
     let events = tokio::fs::read_to_string(paths.events).await.unwrap();
     let events: Vec<Value> = events
         .lines()

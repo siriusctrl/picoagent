@@ -51,3 +51,5 @@ Use these sections:
   trajectory](0003-append-only-local-compaction-and-history-retrieval.md)
 - [ADR 0004: Keep the normal agent prefix and core history tools
   stable](0004-stable-agent-prefix-and-core-history-tools.md)
+- [ADR 0005: Persist Chat-compatible messages with a metadata
+  sidecar](0005-openai-chat-compatible-message-log.md)
