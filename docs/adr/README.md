@@ -53,3 +53,5 @@ Use these sections:
   stable](0004-stable-agent-prefix-and-core-history-tools.md)
 - [ADR 0005: Persist Chat-compatible messages with a metadata
   sidecar](0005-openai-chat-compatible-message-log.md)
+- [ADR 0006: Resume at complete-message boundaries and keep child coordination
+  separate](0006-complete-message-resume-and-durable-child-coordination.md)

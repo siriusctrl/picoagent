@@ -108,11 +108,10 @@ impl WaitTool {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WaitArgs {
     #[serde(default)]
     task_ids: Vec<String>,
-    #[serde(default)]
-    timeout_seconds: Option<u64>,
 }
 
 #[async_trait]
@@ -124,8 +123,7 @@ impl Tool for WaitTool {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "task_ids": { "type": "array", "items": { "type": "string" }, "description": "Task ids to join; empty means all" },
-                    "timeout_seconds": { "type": "integer", "minimum": 1, "description": "Maximum time to wait in this call" }
+                    "task_ids": { "type": "array", "items": { "type": "string" }, "description": "Task ids to join; empty means all" }
                 },
                 "additionalProperties": false
             }),
@@ -134,10 +132,7 @@ impl Tool for WaitTool {
 
     async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
         let args: WaitArgs = serde_json::from_value(arguments).context("invalid wait arguments")?;
-        let records = self
-            .manager
-            .wait(&args.task_ids, args.timeout_seconds)
-            .await?;
+        let records = self.manager.wait(&args.task_ids).await?;
         let output = records
             .iter()
             .map(|record| {
@@ -146,9 +141,12 @@ impl Tool for WaitTool {
                     "kind": record.kind,
                     "name": record.name,
                     "status": record.status(),
-                    "result": record.result,
-                    "error": record.error,
                     "child_run_id": record.child_run_id,
+                    "message": if record.state.is_terminal() {
+                        "Terminal result will be delivered as a background-result message."
+                    } else {
+                        "Task is still running."
+                    },
                 })
             })
             .collect::<Vec<_>>();

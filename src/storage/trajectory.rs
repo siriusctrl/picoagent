@@ -1,15 +1,11 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{fs::OpenOptions, io::AsyncWriteExt};
 
-use crate::{
-    model::Message,
-    trajectory::{CompactedHistory, CompactedHistorySource, TrajectoryMessage},
-};
+use crate::{model::Message, trajectory::TrajectoryMessage};
 
 use super::{MESSAGE_FORMAT, RunDirStore, append_json_line, ensure_run_exists, message_log};
 
@@ -132,13 +128,12 @@ impl RunDirStore {
     ) -> Result<Option<CompactionCheckpoint>> {
         Ok(self.load_compactions(run_id).await?.pop())
     }
-}
 
-#[async_trait]
-impl CompactedHistorySource for RunDirStore {
-    async fn load_compacted_history(&self, run_id: &str) -> Result<CompactedHistory> {
+    /// Loads only the completed prefix hidden by the latest compaction.
+    /// Messages still present in the active model context are never returned.
+    pub async fn load_compacted_history(&self, run_id: &str) -> Result<Vec<TrajectoryMessage>> {
         let Some(checkpoint) = self.load_latest_compaction(run_id).await? else {
-            return Ok(CompactedHistory::default());
+            return Ok(Vec::new());
         };
         let messages = self.load_trajectory(run_id).await?;
         let Some(first_kept) = messages
@@ -151,14 +146,11 @@ impl CompactedHistorySource for RunDirStore {
                 checkpoint.first_kept_message_ref
             );
         };
-        let compacted = messages
+        Ok(messages
             .into_iter()
             .skip(1)
             .take(first_kept.saturating_sub(1))
-            .collect();
-        Ok(CompactedHistory {
-            messages: compacted,
-        })
+            .collect())
     }
 }
 

@@ -1,13 +1,19 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
 use picoagent::{
     events::{EventSink, NoopEventSink, RuntimeEvent, RuntimeEventKind},
     model::{
-        AnthropicCompatibleProvider, Message, ModelProvider, ModelRequest, OAuthCredentials,
-        OpenAiCompatibleOptions, OpenAiCompatibleProvider, OpenAiOAuthOptions, OpenAiOAuthProvider,
-        OpenAiProtocol, Role,
+        AnthropicCompatibleOptions, AnthropicCompatibleProvider, Message, ModelProvider,
+        ModelRequest, OAuthCredentials, OpenAiCompatibleOptions, OpenAiCompatibleProvider,
+        OpenAiOAuthOptions, OpenAiOAuthProvider, OpenAiProtocol, Role,
     },
 };
 use wiremock::{
@@ -88,7 +94,7 @@ async fn responses_streams_text_and_usage() {
         .await
         .expect("response should parse");
 
-    assert_eq!(response.text, "hello world");
+    assert_eq!(response.text(), "hello world");
     assert_eq!(response.usage.input_tokens, Some(12));
     assert_eq!(response.usage.output_tokens, Some(2));
     assert_eq!(response.usage.cached_input_tokens, Some(8));
@@ -138,23 +144,24 @@ async fn chat_stream_reassembles_fragmented_tool_arguments_and_supplies_missing_
         .await
         .expect("response should parse");
 
-    assert_eq!(response.tool_calls.len(), 1);
-    assert!(response.tool_calls[0].id.starts_with("call_"));
-    assert_eq!(response.tool_calls[0].name, "read");
-    assert_eq!(response.tool_calls[0].arguments["path"], "README.md");
-    assert_eq!(response.text, "checking ");
+    let tool_calls = response.tool_calls();
+    assert_eq!(tool_calls.len(), 1);
+    assert!(tool_calls[0].id.starts_with("call_"));
+    assert_eq!(tool_calls[0].name, "read");
+    assert_eq!(tool_calls[0].arguments["path"], "README.md");
+    assert_eq!(response.text(), "checking ");
     assert_eq!(response.usage.reasoning_tokens, Some(7));
     assert!(matches!(
-        &response.assistant_content[0],
+        &response.assistant.content[0],
         picoagent::model::MessageContent::Reasoning { text } if text == "inspect first"
     ));
     assert!(matches!(
-        &response.assistant_content[1],
+        &response.assistant.content[1],
         picoagent::model::MessageContent::Text { text } if text == "checking "
     ));
     assert!(matches!(
-        &response.assistant_content[2],
-        picoagent::model::MessageContent::ToolCall { id, .. } if id == &response.tool_calls[0].id
+        &response.assistant.content[2],
+        picoagent::model::MessageContent::ToolCall { id, .. } if id == &tool_calls[0].id
     ));
     let recorded = events.0.lock().expect("recording lock poisoned");
     assert_eq!(recorded.reasoning, ["inspect ", "first"]);
@@ -189,9 +196,9 @@ async fn chat_stream_preserves_provider_tool_call_id() {
         .await
         .expect("response should parse");
 
-    assert_eq!(response.tool_calls[0].id, "call_provider_1");
+    assert_eq!(response.tool_calls()[0].id, "call_provider_1");
     assert!(matches!(
-        &response.assistant_content[0],
+        &response.assistant.content[0],
         picoagent::model::MessageContent::ToolCall { id, .. } if id == "call_provider_1"
     ));
 }
@@ -233,9 +240,9 @@ async fn anthropic_stream_reassembles_fragmented_tool_input() {
         .await
         .expect("response should parse");
 
-    assert_eq!(response.text, "checking");
-    assert_eq!(response.tool_calls[0].name, "bash");
-    assert_eq!(response.tool_calls[0].arguments["command"], "cargo test");
+    assert_eq!(response.text(), "checking");
+    assert_eq!(response.tool_calls()[0].name, "bash");
+    assert_eq!(response.tool_calls()[0].arguments["command"], "cargo test");
     assert_eq!(response.usage.input_tokens, Some(9));
     assert_eq!(response.usage.output_tokens, Some(7));
     assert_eq!(response.usage.cached_input_tokens, Some(3));
@@ -254,7 +261,8 @@ async fn provider_errors_include_http_status_and_body() {
         format!("{}/v1", server.uri()),
         "test-key",
         OpenAiProtocol::Responses,
-    );
+    )
+    .with_rate_limit_retry(0, Duration::ZERO);
     let error = provider
         .complete(request(), Arc::new(NoopEventSink))
         .await
@@ -263,6 +271,137 @@ async fn provider_errors_include_http_status_and_body() {
 
     assert!(error.contains("429"), "{error}");
     assert!(error.contains("rate limited"), "{error}");
+}
+
+#[tokio::test]
+async fn openai_compatible_retries_initial_rate_limits() {
+    let server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let responder_attempts = attempts.clone();
+    let success = concat!(
+        "event: response.output_text.delta\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{}}\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(move |_: &wiremock::Request| {
+            if responder_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(429).set_body_string("rate limited")
+            } else {
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(success)
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let provider = OpenAiCompatibleProvider::new(
+        format!("{}/v1", server.uri()),
+        "test-key",
+        OpenAiProtocol::Responses,
+    )
+    .with_rate_limit_retry(1, Duration::ZERO);
+    let response = provider
+        .complete(request(), Arc::new(NoopEventSink))
+        .await
+        .unwrap();
+
+    assert_eq!(response.text(), "ok");
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn openai_compatible_does_not_retry_a_non_429_body_that_mentions_429() {
+    let server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let responder_attempts = attempts.clone();
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(move |_: &wiremock::Request| {
+            responder_attempts.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(500).set_body_string("upstream returned HTTP 429")
+        })
+        .mount(&server)
+        .await;
+
+    let provider = OpenAiCompatibleProvider::new(
+        format!("{}/v1", server.uri()),
+        "test-key",
+        OpenAiProtocol::Responses,
+    )
+    .with_rate_limit_retry(1, Duration::ZERO);
+    let error = provider
+        .complete(request(), Arc::new(NoopEventSink))
+        .await
+        .expect_err("HTTP 500 must not be retried as a rate limit");
+
+    assert!(error.to_string().contains("HTTP 500"));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn provider_resume_fingerprints_are_stable_wire_identities_without_credentials() {
+    let compatible_a = OpenAiCompatibleProvider::new(
+        "https://example.test/v1/",
+        "secret-a",
+        OpenAiProtocol::Responses,
+    );
+    let compatible_b = OpenAiCompatibleProvider::new(
+        "https://example.test/v1",
+        "secret-b",
+        OpenAiProtocol::Responses,
+    );
+    let chat = OpenAiCompatibleProvider::new(
+        "https://example.test/v1",
+        "secret-a",
+        OpenAiProtocol::ChatCompletions,
+    );
+    let reasoning = OpenAiCompatibleProvider::new(
+        "https://example.test/v1",
+        "secret-a",
+        OpenAiProtocol::Responses,
+    )
+    .with_reasoning_effort("high");
+
+    let fingerprint = compatible_a.resume_fingerprint();
+    assert_eq!(fingerprint, compatible_b.resume_fingerprint());
+    assert_ne!(fingerprint, chat.resume_fingerprint());
+    assert_ne!(fingerprint, reasoning.resume_fingerprint());
+    assert!(!fingerprint.contains("secret-a"));
+    assert!(!fingerprint.contains("secret-b"));
+
+    let anthropic_a =
+        AnthropicCompatibleProvider::new("https://anthropic.example/v1/", "anthropic-secret-a");
+    let anthropic_b =
+        AnthropicCompatibleProvider::new("https://anthropic.example/v1", "anthropic-secret-b");
+    assert_eq!(
+        anthropic_a.resume_fingerprint(),
+        anthropic_b.resume_fingerprint()
+    );
+    let mut older_anthropic_options =
+        AnthropicCompatibleOptions::new("https://anthropic.example/v1", "anthropic-secret-a");
+    older_anthropic_options.anthropic_version = "2022-01-01".to_owned();
+    let older_anthropic = AnthropicCompatibleProvider::with_options(older_anthropic_options);
+    assert_ne!(
+        anthropic_a.resume_fingerprint(),
+        older_anthropic.resume_fingerprint()
+    );
+
+    let first_home = tempfile::tempdir().unwrap();
+    let second_home = tempfile::tempdir().unwrap();
+    let oauth_a = OpenAiOAuthProvider::new(
+        "https://oauth.example/v1/",
+        first_home.path().join("auth.json"),
+    );
+    let oauth_b = OpenAiOAuthProvider::new(
+        "https://oauth.example/v1",
+        second_home.path().join("auth.json"),
+    );
+    assert_eq!(oauth_a.resume_fingerprint(), oauth_b.resume_fingerprint());
 }
 
 #[tokio::test]
@@ -414,7 +553,7 @@ async fn oauth_refreshes_once_after_unauthorized_and_retries() {
         .complete(request(), Arc::new(NoopEventSink))
         .await
         .unwrap();
-    assert_eq!(response.text, "ok");
+    assert_eq!(response.text(), "ok");
     let stored: OAuthCredentials =
         serde_json::from_slice(&tokio::fs::read(auth_path).await.unwrap()).unwrap();
     assert_eq!(stored.access_token, "fresh-token");

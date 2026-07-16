@@ -75,6 +75,20 @@ Inspect a previous result:
 pico inspect <run-id>
 ```
 
+Resume an interrupted or failed run from its last complete message:
+
+```bash
+pico resume <run-id>
+```
+
+Resume never replays a direct tool call whose result was not durably recorded.
+It appends an error result saying the outcome and side effects are unknown, then
+lets the model inspect the workspace before deciding what to do. Background
+ordinary tools are likewise marked `interrupted`; child-agent runs keep their
+own transcripts. Durable GeneralTask children created by `spawn` continue when
+their parent is resumed; resume the parent run rather than invoking `pico
+resume` on a child id directly.
+
 ## Prompt Layout
 
 Picoagent keeps its built-in system prompt independent of the workspace and
@@ -115,6 +129,9 @@ Configuration is loaded from the first existing path:
 3. `$HOME/.pico/config.toml`
 4. built-in echo defaults
 
+Config files are not merged, and unknown fields are rejected so misspelled
+settings fail at startup.
+
 ### OpenAI OAuth
 
 ```toml
@@ -148,10 +165,9 @@ reasoning_effort = "medium" # optional; provider/model-specific
 `api_key` accepts either a literal key or a whole environment reference such as
 `${OPENAI_API_KEY}`. Keep a literal key in the user config at
 `$HOME/.pico/config.toml` with restrictive file permissions rather than in a
-workspace file that may be shared. The legacy `api_key_env = "OPENAI_API_KEY"`
-form remains accepted for migration, but must not be combined with `api_key`.
-If both fields are omitted, picoagent retains the legacy `OPENAI_API_KEY`
-fallback.
+workspace file that may be shared. If `api_key` is omitted, picoagent reads
+`OPENAI_API_KEY`. The removed OpenAI-compatible `api_key_env` field is rejected;
+write `api_key = "${OPENAI_API_KEY}"` instead.
 
 `reasoning_effort` is optional. Picoagent sends it as `reasoning_effort` for
 Chat Completions and as `reasoning.effort` for Responses. If omitted, the
@@ -161,6 +177,10 @@ model.
 
 When Chat Completions reasoning is configured, `max_output_tokens` is sent as
 `max_completion_tokens`, as required by reasoning-capable Chat endpoints.
+
+The OpenAI-compatible adapter retries an initial HTTP 429 up to three times
+with bounded exponential backoff. Parent and child requests also share the
+runtime model-concurrency limit described below.
 
 If a Chat Completions stream explicitly returns `delta.reasoning_content`,
 picoagent stores it in the assistant message's optional `reasoning_content`
@@ -242,10 +262,10 @@ database or service.
 
 Neither tool has a cursor. `history_search_max_matches` limits a query to its
 newest matches; if reached, older matches are omitted and the model must refine
-the regex. This is distinct from artifact preview truncation: if the returned
-JSONL itself is too large, its complete bounded result is saved as an artifact
-and can be inspected with `read` or `bash`/`rg`. Query-limit omissions are not
-present in that artifact.
+the regex. This is distinct from artifact preview truncation: if the bounded
+JSON/JSONL tool result is too large, its complete returned content is saved as
+an artifact and can be inspected with `read` or `bash`/`rg`. Query-limit
+omissions are not present in that artifact.
 
 Each assembled agent profile has a sorted, frozen toolset. A profile compacts only
 when both history tools and at least one artifact inspection tool (`read` or
@@ -326,8 +346,20 @@ child:
 - receives its own model/step/output budget profile
 - cannot spawn another child at the default depth limit
 
+Parent and child model requests share `runtime.max_parallel_model_calls`, which
+defaults to one for compatibility with rate-limited endpoints. Background tool
+capacity remains independently controlled by `runtime.max_parallel_tasks`.
+`runtime.model_request_timeout_seconds` (default 300) prevents a stalled model
+request from holding a run or the shared model slot forever.
+
 Only child results return to the parent context; full child transcripts remain
-in their own run directories.
+in their own run directories. The parent stores only coordination state under
+`tasks/`. On parent resume, terminal-result delivery is derived from the parent
+transcript, while queued/running child runs continue from their own last
+complete messages. This recovery guarantee applies to durable GeneralTask task
+records. A synchronous MemoryMaintenance child used inside `memory_update` is
+part of that direct tool call: if interrupted, the parent records an unknown
+tool outcome and does not replay or separately resume the maintenance child.
 
 ## Long-Term Memory
 

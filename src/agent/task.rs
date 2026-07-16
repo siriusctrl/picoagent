@@ -1,7 +1,11 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::{Arc, Mutex as StdMutex},
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use tokio::sync::{Mutex, Notify, Semaphore};
 use ulid::Ulid;
 
@@ -13,15 +17,21 @@ use crate::{
     tools::ToolRegistry,
 };
 
-use super::runner::AgentRunner;
+use super::{runner::AgentRunner, tool_execution::ToolExecutor};
 
 mod execution;
 mod lifecycle;
 mod record;
+mod recovery;
 mod tools;
 
+use record::TaskRecordStore;
 pub use record::{BackgroundTaskRecord, BackgroundTaskState};
+pub use recovery::RecoverableSubagent;
 pub use tools::{SpawnTool, WaitTool};
+
+pub(super) const GENERAL_TASK_INSTRUCTIONS: &str =
+    include_str!("../../prompts/agents/general-task.md");
 
 pub struct TaskManager {
     runner: Arc<AgentRunner>,
@@ -36,7 +46,9 @@ pub struct TaskManager {
     events: SharedEventSink,
     hooks: HookPipeline,
     records: Mutex<BTreeMap<String, BackgroundTaskRecord>>,
-    handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    delivered: Mutex<BTreeSet<String>>,
+    task_store: TaskRecordStore,
+    handles: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
     notify: Notify,
     slots: Arc<Semaphore>,
     default_execution_timeout: Duration,
@@ -64,6 +76,21 @@ pub struct TaskManagerConfig {
 
 impl TaskManager {
     pub fn new(config: TaskManagerConfig) -> Arc<Self> {
+        Self::from_config(config, BTreeMap::new(), BTreeSet::new())
+    }
+
+    fn from_config(
+        config: TaskManagerConfig,
+        records: BTreeMap<String, BackgroundTaskRecord>,
+        delivered: BTreeSet<String>,
+    ) -> Arc<Self> {
+        let task_store = TaskRecordStore::new(
+            config
+                .store
+                .paths(&config.parent_run_id)
+                .directory
+                .join("tasks"),
+        );
         Arc::new(Self {
             runner: config.runner,
             tools: config.tools,
@@ -76,8 +103,10 @@ impl TaskManager {
             child_can_delegate: config.child_can_delegate,
             events: config.events,
             hooks: config.hooks,
-            records: Mutex::new(BTreeMap::new()),
-            handles: Mutex::new(Vec::new()),
+            records: Mutex::new(records),
+            delivered: Mutex::new(delivered),
+            task_store,
+            handles: StdMutex::new(Vec::new()),
             notify: Notify::new(),
             slots: Arc::new(Semaphore::new(config.max_parallel_tasks.max(1))),
             default_execution_timeout: Duration::from_secs(
@@ -88,27 +117,34 @@ impl TaskManager {
         })
     }
 
-    async fn create_task(
+    async fn create_tool_task(
         self: &Arc<Self>,
-        kind: &str,
         name: String,
-        child_run_id: Option<String>,
+        timeout_seconds: u64,
     ) -> Result<String> {
         let task_id = Ulid::new().to_string();
-        let now = Utc::now();
-        let record = BackgroundTaskRecord {
-            version: 1,
-            id: task_id.clone(),
-            kind: kind.to_owned(),
-            name,
-            state: BackgroundTaskState::Queued,
-            delivered: false,
-            result: None,
-            error: None,
+        let record = BackgroundTaskRecord::queued_tool(task_id.clone(), name, timeout_seconds);
+        let mut records = self.records.lock().await;
+        self.persist(&record).await?;
+        records.insert(task_id.clone(), record);
+        Ok(task_id)
+    }
+
+    async fn create_agent_task(
+        self: &Arc<Self>,
+        profile: String,
+        child_run_id: String,
+        prompt: String,
+        timeout_seconds: u64,
+    ) -> Result<String> {
+        let task_id = Ulid::new().to_string();
+        let record = BackgroundTaskRecord::queued_agent(
+            task_id.clone(),
+            profile,
             child_run_id,
-            created_at: now,
-            updated_at: now,
-        };
+            prompt,
+            timeout_seconds,
+        );
         let mut records = self.records.lock().await;
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);
@@ -122,7 +158,11 @@ impl TaskManager {
         .await
     }
 
-    async fn complete(&self, task_id: &str, result: String) -> Result<BackgroundTaskRecord> {
+    async fn complete(&self, task_id: &str, output: ToolOutput) -> Result<BackgroundTaskRecord> {
+        let result = record::BackgroundTaskOutput {
+            content: output.model_content(),
+            metadata: output.result_metadata(),
+        };
         self.update(task_id, |record| {
             record.state = BackgroundTaskState::Completed;
             record.result = Some(result);
@@ -143,7 +183,6 @@ impl TaskManager {
         if let Some(record) = records.get_mut(task_id) {
             record.state = BackgroundTaskState::Failed;
             record.error = Some(error);
-            record.updated_at = Utc::now();
         }
         drop(records);
         self.notify.notify_one();
@@ -152,6 +191,22 @@ impl TaskManager {
     async fn time_out(&self, task_id: &str) -> Result<BackgroundTaskRecord> {
         self.update(task_id, |record| {
             record.state = BackgroundTaskState::TimedOut
+        })
+        .await
+    }
+
+    async fn interrupt(&self, task_id: &str, error: String) -> Result<BackgroundTaskRecord> {
+        self.update(task_id, |record| {
+            record.state = BackgroundTaskState::Interrupted;
+            record.error = Some(error);
+        })
+        .await
+    }
+
+    async fn cancel(&self, task_id: &str, reason: String) -> Result<BackgroundTaskRecord> {
+        self.update(task_id, |record| {
+            record.state = BackgroundTaskState::Cancelled;
+            record.error = Some(reason);
         })
         .await
     }
@@ -167,7 +222,6 @@ impl TaskManager {
             .cloned()
             .with_context(|| format!("unknown background task `{task_id}`"))?;
         update(&mut record);
-        record.updated_at = Utc::now();
         self.persist(&record).await?;
         records.insert(task_id.to_owned(), record.clone());
         drop(records);
@@ -178,17 +232,7 @@ impl TaskManager {
     }
 
     async fn persist(&self, record: &BackgroundTaskRecord) -> Result<()> {
-        let directory = self
-            .store
-            .paths(&self.parent_run_id)
-            .directory
-            .join("tasks");
-        tokio::fs::create_dir_all(&directory).await?;
-        let path = directory.join(format!("{}.json", record.id));
-        let temporary = directory.join(format!("{}.json.tmp", record.id));
-        tokio::fs::write(&temporary, serde_json::to_vec_pretty(record)?).await?;
-        tokio::fs::rename(&temporary, &path).await?;
-        Ok(())
+        self.task_store.write(record).await
     }
 
     fn execution_timeout(&self, requested_seconds: Option<u64>) -> Duration {
@@ -198,18 +242,24 @@ impl TaskManager {
             .min(self.max_execution_timeout)
     }
 
+    fn tool_executor(&self) -> ToolExecutor<'_> {
+        ToolExecutor::new(
+            &self.tools,
+            &self.hooks,
+            &self.artifacts,
+            &self.preview_budget,
+            &self.events,
+            &self.workspace,
+            &self.parent_run_id,
+        )
+    }
+
     async fn persist_output(
         &self,
         context: &crate::tools::ToolContext,
         output: crate::tools::RawToolOutput,
     ) -> Result<ToolOutput> {
-        let mut budget = self.preview_budget.lock().await;
-        let output = self
-            .artifacts
-            .persist_output_with_budget(context, output, *budget)
-            .await?;
-        *budget = budget.saturating_sub(output.preview.len());
-        Ok(output)
+        self.tool_executor().persist_output(context, output).await
     }
 
     async fn get(&self, task_id: &str) -> Result<BackgroundTaskRecord> {
@@ -221,21 +271,12 @@ impl TaskManager {
             .with_context(|| format!("unknown background task `{task_id}`"))
     }
 
-    pub async fn wait(
-        &self,
-        task_ids: &[String],
-        timeout_seconds: Option<u64>,
-    ) -> Result<Vec<BackgroundTaskRecord>> {
-        let timeout = Duration::from_secs(
-            timeout_seconds
-                .unwrap_or(self.default_wait_timeout.as_secs())
-                .max(1),
-        );
-        let deadline = tokio::time::Instant::now() + timeout;
+    pub async fn wait(&self, task_ids: &[String]) -> Result<Vec<BackgroundTaskRecord>> {
+        let deadline = tokio::time::Instant::now() + self.default_wait_timeout;
         loop {
             let records = self.select(task_ids).await?;
             if records.iter().all(|record| record.state.is_terminal()) {
-                return self.deliver(records).await;
+                return Ok(records);
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero()
@@ -243,7 +284,7 @@ impl TaskManager {
                     .await
                     .is_err()
             {
-                return self.deliver(records).await;
+                return Ok(records);
             }
         }
     }
@@ -264,56 +305,49 @@ impl TaskManager {
             .collect()
     }
 
-    async fn deliver(
-        &self,
-        records: Vec<BackgroundTaskRecord>,
-    ) -> Result<Vec<BackgroundTaskRecord>> {
-        if records.is_empty() {
-            return Ok(Vec::new());
+    /// Mark terminal records delivered only after the caller has durably
+    /// appended their `BackgroundTaskResult` messages. This marker is an
+    /// in-memory fast path; recovery derives truth from the parent transcript.
+    pub async fn mark_delivered(&self, records: &[BackgroundTaskRecord]) -> Result<()> {
+        let mut delivered = self.delivered.lock().await;
+        for record in records.iter().filter(|record| record.state.is_terminal()) {
+            if delivered.insert(record.id.clone()) {
+                self.events
+                    .emit(&RuntimeEvent::new(
+                        &self.parent_run_id,
+                        RuntimeEventKind::BackgroundTaskDelivered {
+                            task_id: record.id.clone(),
+                        },
+                    ))
+                    .await?;
+            }
         }
-        let ids = records
-            .iter()
-            .filter(|record| record.state.is_terminal() && !record.delivered)
-            .map(|record| record.id.clone())
-            .collect::<Vec<_>>();
-        for task_id in ids {
-            let record = self
-                .update(&task_id, |record| record.delivered = true)
-                .await?;
-            self.events
-                .emit(&RuntimeEvent::new(
-                    &self.parent_run_id,
-                    RuntimeEventKind::BackgroundTaskDelivered { task_id: record.id },
-                ))
-                .await?;
-        }
-        self.select(
-            &records
-                .iter()
-                .map(|record| record.id.clone())
-                .collect::<Vec<_>>(),
-        )
-        .await
+        Ok(())
     }
 
     pub async fn drain_completed(&self) -> Result<Vec<BackgroundTaskRecord>> {
+        let delivered = self.delivered.lock().await.clone();
         let records = self.select(&[]).await?;
-        let ready = records
+        Ok(records
             .into_iter()
-            .filter(|record| record.state.is_terminal() && !record.delivered)
-            .collect::<Vec<_>>();
-        self.deliver(ready).await
+            .filter(|record| record.state.is_terminal() && !delivered.contains(&record.id))
+            .collect())
     }
 
     pub async fn settle_before_finish(&self) -> Result<Vec<BackgroundTaskRecord>> {
         let records = self.select(&[]).await?;
         let ready = records
             .iter()
-            .filter(|record| record.state.is_terminal() && !record.delivered)
+            .filter(|record| record.state.is_terminal())
             .cloned()
             .collect::<Vec<_>>();
+        let delivered = self.delivered.lock().await.clone();
+        let ready = ready
+            .into_iter()
+            .filter(|record| !delivered.contains(&record.id))
+            .collect::<Vec<_>>();
         if !ready.is_empty() {
-            return self.deliver(ready).await;
+            return Ok(ready);
         }
         if records.iter().any(|record| !record.state.is_terminal()) {
             return self.wait_all().await;
@@ -322,75 +356,42 @@ impl TaskManager {
         Ok(Vec::new())
     }
 
-    async fn track(&self, handle: tokio::task::JoinHandle<()>) {
-        self.handles.lock().await.push(handle);
+    fn track(&self, handle: tokio::task::JoinHandle<()>) {
+        self.handles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(handle);
     }
 
     async fn join_all(&self) {
-        let handles = self.handles.lock().await.drain(..).collect::<Vec<_>>();
+        let handles = self.take_handles();
         for handle in handles {
             let _ = handle.await;
         }
     }
 
-    pub async fn abort_and_settle(&self, reason: &str) {
-        let handles = self.handles.lock().await.drain(..).collect::<Vec<_>>();
-        for handle in &handles {
-            handle.abort();
-        }
-        for handle in handles {
-            let _ = handle.await;
-        }
-        let pending = self
-            .select(&[])
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|record| !record.state.is_terminal())
-            .collect::<Vec<_>>();
-        for record in pending {
-            if let Some(child_run_id) = &record.child_run_id
-                && let Ok(run) = self.store.load_run(child_run_id).await
-                && matches!(
-                    run.state,
-                    crate::storage::RunState::Queued | crate::storage::RunState::Running
-                )
-            {
-                let _ = self
-                    .store
-                    .update_state(child_run_id, crate::storage::RunState::Failed)
-                    .await;
-            }
-            if self.fail(&record.id, reason.to_owned()).await.is_ok() {
-                let _ = self
-                    .events
-                    .emit(&RuntimeEvent::new(
-                        &self.parent_run_id,
-                        RuntimeEventKind::BackgroundTaskFailed {
-                            task_id: record.id,
-                            name: record.name,
-                            error: reason.to_owned(),
-                        },
-                    ))
-                    .await;
-            }
-        }
+    fn take_handles(&self) -> Vec<tokio::task::JoinHandle<()>> {
+        self.handles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect()
     }
 
     pub async fn wait_all(&self) -> Result<Vec<BackgroundTaskRecord>> {
         loop {
             let records = self.select(&[]).await?;
             if records.iter().all(|record| record.state.is_terminal()) {
-                return self
-                    .deliver(
-                        records
-                            .into_iter()
-                            .filter(|record| !record.delivered)
-                            .collect(),
-                    )
-                    .await;
+                let delivered = self.delivered.lock().await.clone();
+                return Ok(records
+                    .into_iter()
+                    .filter(|record| !delivered.contains(&record.id))
+                    .collect());
             }
             self.notify.notified().await;
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

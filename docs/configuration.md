@@ -3,6 +3,8 @@
 Picoagent reads TOML from an explicit `--config` path, the workspace
 `.pico/config.toml`, or the user `$HOME/.pico/config.toml`. Workspace and user
 files are alternatives in the launch runtime; they are not merged.
+Unknown fields are rejected so misspelled settings fail at startup instead of
+silently falling back to defaults.
 
 ## Provider
 
@@ -30,10 +32,9 @@ reasoning_effort = "medium" # optional; provider/model-specific
 as `${OPENAI_API_KEY}`. Environment references are resolved when the runtime is
 assembled. Keep literal credentials in `$HOME/.pico/config.toml` with
 restrictive file permissions rather than in a workspace config that may be
-shared. The legacy `api_key_env = "OPENAI_API_KEY"` form is still accepted for
-migration. Configuring both `api_key` and `api_key_env` is an error.
-If both are omitted, the runtime retains the legacy behavior of reading
-`OPENAI_API_KEY`.
+shared. If `api_key` is omitted, picoagent reads `OPENAI_API_KEY`. The removed
+OpenAI-compatible `api_key_env` field is rejected; use
+`api_key = "${OPENAI_API_KEY}"` for an explicit environment reference.
 
 `reasoning_effort` is passed through as a string because OpenAI-compatible
 providers and models support different levels. Picoagent maps it to
@@ -82,11 +83,32 @@ api_key_env = "ANTHROPIC_API_KEY"
 max_steps = 32
 max_subagent_depth = 1
 max_parallel_tasks = 4
+max_parallel_model_calls = 1
+model_request_timeout_seconds = 300
 max_output_tokens = 8192
 ```
 
 `max_steps` counts model calls, not individual tool calls. Child runs receive
-their own step budget.
+their own step budget. If the last allowed response waits for already-running
+background work, picoagent permits exactly one extra call so the model can see
+those terminal results; it cannot use that exception repeatedly.
+`max_parallel_model_calls` is shared by a parent and all of its child runs; the
+conservative default of one supports endpoints with a single-request
+concurrency limit, while higher-capacity deployments may raise it.
+`model_request_timeout_seconds` bounds each normal or compaction request;
+an expired normal request fails the run, while an expired compaction request
+leaves the current context unchanged. Step counts, both parallel capacities,
+configured output token limits, model request timeouts, and task timeouts must
+be greater than zero. The default task execution timeout must not exceed its
+configured maximum.
+
+The OpenAI-compatible adapter additionally retries initial HTTP 429 responses
+up to three times with bounded exponential backoff. It does not retry a partial
+stream or non-rate-limit provider error. A resumable run records a non-secret
+fingerprint of wire-critical provider settings. Changing the compatible
+endpoint, Chat/Responses protocol, reasoning effort, OAuth inference endpoint,
+or Anthropic version requires a new run rather than replaying provider state
+against a different protocol.
 
 ## Compaction And History Retrieval
 
@@ -154,10 +176,21 @@ max_steps = 8
 max_output_tokens = 4096
 ```
 
-Execution timeouts are hard bounds. A `wait` timeout only stops waiting; it does
-not cancel the task. The runtime also enforces `max_parallel_tasks` across
-background tools and child agents in one parent run. On Unix, `bash` commands
-run in a dedicated process group so cancellation also terminates descendants.
+Background task deadlines include slot queueing plus the tool hooks/tool
+execution/successful tool-output capture or the child run itself. Committing the
+terminal task state and preserving a bounded error or child result is short
+durable cleanup after that execution outcome. Each `wait` call uses
+`default_wait_timeout_seconds`; the model cannot override it and can call
+`wait` again when necessary. This timeout only stops waiting and does not cancel
+the task. It must be strictly less than `direct_tool_timeout_seconds`, so the
+wait operation returns before its enclosing tool-call deadline. The runtime
+also enforces `max_parallel_tasks` across background tools and child agents in
+one parent run. On Unix, `bash` commands run in a dedicated process group so
+cancellation also terminates descendants.
+
+Failed background tool and child results use the same artifact threshold and
+preview budget as successful results, so a large error is preserved without
+being injected into the parent context in full.
 
 ## Artifacts
 
@@ -229,4 +262,7 @@ tool_before = []
 tool_after = []
 ```
 
-Hooks inherit picoagent's host permissions. A nonzero hook exit fails the run.
+Hooks inherit picoagent's host permissions. A nonzero `run_start`,
+`tool_before`, or `tool_after` exit fails that operation. `run_end` is a
+best-effort post-commit notification: its failure is logged but cannot turn a
+completed run back into a resumable failed run and replay earlier hook effects.

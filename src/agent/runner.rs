@@ -1,29 +1,38 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
-use ulid::Ulid;
+use sha2::{Digest, Sha256};
 
 use crate::{
     artifact::ArtifactStore,
-    events::{CompositeEventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
+    events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::{HookEvent, HookPipeline},
     memory::{MemoryPaths, MemoryUpdateTool},
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role},
-    storage::{RunDirStore, RunRecord, RunState},
+    storage::{RunDirStore, RunState},
     tools::{ToolRegistry, register_history_tools},
-    trajectory::{LocalTrajectoryReader, TrajectoryMessage},
+    trajectory::LocalTrajectoryReader,
 };
 
 use super::{
     compaction::{CompactionAttempt, build_active_context, estimate_message_tokens, maybe_compact},
     context::{build_runtime_reminder, build_system_prompt},
-    task::{BackgroundTaskRecord, SpawnTool, TaskManager, TaskManagerConfig, WaitTool},
+    task::{SpawnTool, TaskManager, TaskManagerConfig, WaitTool},
     tool_execution::DirectToolRuntime,
     types::RunProfile,
 };
 
 pub use super::types::{AgentRunnerConfig, RunRequest, RunResult, RunnerOptions};
+
+mod lifecycle;
+mod recovery;
+
+use lifecycle::RunMode;
+use recovery::{
+    append_background_results, append_interrupted_tool_results, remaining_preview_budget,
+    resumable_final_text,
+};
 
 pub struct AgentRunner {
     provider: Arc<dyn ModelProvider>,
@@ -37,10 +46,14 @@ pub struct AgentRunner {
     memory: Option<MemoryPaths>,
     extra_events: SharedEventSink,
     options: RunnerOptions,
+    model_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl AgentRunner {
     pub fn new(config: AgentRunnerConfig) -> Arc<Self> {
+        let model_slots = Arc::new(tokio::sync::Semaphore::new(
+            config.options.max_parallel_model_calls.max(1),
+        ));
         Arc::new(Self {
             provider: config.provider,
             model: config.model,
@@ -53,6 +66,7 @@ impl AgentRunner {
             memory: config.memory,
             extra_events: config.extra_events,
             options: config.options,
+            model_slots,
         })
     }
 
@@ -60,131 +74,88 @@ impl AgentRunner {
         &self.store
     }
 
-    pub async fn run(self: &Arc<Self>, request: RunRequest) -> Result<RunResult> {
-        self.run_with_id(request, Ulid::new().to_string()).await
-    }
-
-    pub(crate) async fn run_with_id(
-        self: &Arc<Self>,
-        request: RunRequest,
-        run_id: String,
-    ) -> Result<RunResult> {
-        let (model, _, _) = self.profile(&request);
-        let record = RunRecord::new(
-            &run_id,
-            &request.prompt,
-            self.provider.name(),
-            model,
-            self.workspace.clone(),
-            request.parent_run_id.clone(),
-        );
-        self.store.create_run(&record).await?;
-
-        let events: SharedEventSink = Arc::new(CompositeEventSink::new(vec![
-            self.store.event_sink(),
-            self.extra_events.clone(),
-        ]));
-        let outcome = self
-            .run_created(request, run_id.clone(), events.clone())
-            .await;
-        if let Err(error) = &outcome {
-            let _ = self.store.update_state(&run_id, RunState::Failed).await;
-            let _ = events
-                .emit(&RuntimeEvent::new(
-                    &run_id,
-                    RuntimeEventKind::RunFailed {
-                        error: format!("{error:#}"),
-                    },
-                ))
-                .await;
-        }
-        outcome
-    }
-
-    fn profile<'a>(&'a self, request: &RunRequest) -> (&'a str, usize, Option<u32>) {
-        match request.profile {
-            RunProfile::Root => (
-                &self.model,
-                self.options.max_steps,
-                self.options.max_output_tokens,
-            ),
-            RunProfile::GeneralTaskDelegating
-            | RunProfile::GeneralTaskLeaf
-            | RunProfile::MemoryMaintenance => (
-                self.options
-                    .general_task
-                    .model
-                    .as_deref()
-                    .unwrap_or(&self.model),
-                self.options.general_task.max_steps,
-                self.options.general_task.max_output_tokens,
-            ),
-        }
-    }
-
-    async fn run_created(
+    async fn run_loop(
         self: &Arc<Self>,
         request: RunRequest,
         run_id: String,
         events: SharedEventSink,
+        mode: RunMode,
     ) -> Result<RunResult> {
-        let (model, max_steps, max_output_tokens) = self.profile(&request);
-        let model = model.to_owned();
+        let plan = self.plan(&request);
+        let model = plan.model.clone();
+        let max_steps = plan.max_steps;
+        let max_output_tokens = plan.max_output_tokens;
         self.store.update_state(&run_id, RunState::Running).await?;
-        events
-            .emit(&RuntimeEvent::new(
-                &run_id,
-                RuntimeEventKind::RunStarted {
-                    prompt: request.prompt.clone(),
-                },
-            ))
-            .await?;
-        self.hooks
-            .run(
-                HookEvent::RunStart,
-                json!({ "run_id": run_id, "prompt": request.prompt, "depth": request.depth }),
-                &self.workspace,
-            )
-            .await?;
-
-        let may_delegate = match request.profile {
-            RunProfile::Root => request.depth < self.options.max_subagent_depth,
-            RunProfile::GeneralTaskDelegating => true,
-            RunProfile::GeneralTaskLeaf | RunProfile::MemoryMaintenance => false,
+        let (mut trajectory, needs_initial_message) = match mode {
+            RunMode::New => {
+                events
+                    .emit(&RuntimeEvent::new(
+                        &run_id,
+                        RuntimeEventKind::RunStarted {
+                            prompt: request.prompt.clone(),
+                        },
+                    ))
+                    .await?;
+                self.hooks
+                    .run(
+                        HookEvent::RunStart,
+                        json!({ "run_id": run_id, "prompt": request.prompt, "depth": request.depth }),
+                        &self.workspace,
+                    )
+                    .await?;
+                (Vec::new(), true)
+            }
+            RunMode::Resume => {
+                let trajectory = self.store.load_trajectory(&run_id).await?;
+                let needs_initial_message = trajectory.is_empty();
+                events
+                    .emit(&RuntimeEvent::new(
+                        &run_id,
+                        RuntimeEventKind::RunResumed {
+                            completed_messages: trajectory.len(),
+                        },
+                    ))
+                    .await?;
+                (trajectory, needs_initial_message)
+            }
         };
+
         let system = build_system_prompt();
         let reminder_memory = if request.profile == RunProfile::MemoryMaintenance {
             None
         } else {
             self.memory.as_ref()
         };
-        let runtime_reminder = build_runtime_reminder(
-            &self.workspace,
-            &self.skill_catalog,
-            reminder_memory,
-            may_delegate && self.memory.is_some(),
-            request.additional_instructions.as_deref(),
-        )?;
-        let user_message = Message {
-            role: Role::User,
-            content: vec![
-                MessageContent::RuntimeReminder {
-                    text: runtime_reminder,
-                },
-                MessageContent::Text {
-                    text: request.prompt.clone(),
-                },
-            ],
-        };
-        let user_record = self.store.append_message(&run_id, &user_message).await?;
-        let mut trajectory = vec![user_record];
+        if needs_initial_message {
+            let skill_catalog = if request.profile == RunProfile::MemoryMaintenance {
+                ""
+            } else {
+                &self.skill_catalog
+            };
+            let runtime_reminder = build_runtime_reminder(
+                &self.workspace,
+                skill_catalog,
+                reminder_memory,
+                plan.may_update_memory,
+                request.additional_instructions.as_deref(),
+            )?;
+            let user_message = Message {
+                role: Role::User,
+                content: vec![
+                    MessageContent::RuntimeReminder {
+                        text: runtime_reminder,
+                    },
+                    MessageContent::Text {
+                        text: request.prompt.clone(),
+                    },
+                ],
+            };
+            trajectory.push(self.store.append_message(&run_id, &user_message).await?);
+        }
         let mut registry = self.base_tools.clone();
         register_history_tools(
             &mut registry,
-            Arc::new(LocalTrajectoryReader::with_local_artifacts(
-                Arc::new(self.store.clone()),
-                self.workspace.clone(),
-            )),
+            Arc::new(LocalTrajectoryReader::new(self.store.clone())),
             self.options.compaction.history_search_max_matches,
         )?;
         if request.profile == RunProfile::MemoryMaintenance {
@@ -200,14 +171,11 @@ impl AgentRunner {
             .options
             .compaction
             .trigger_tokens
-            .is_some_and(|tokens| tokens > 0)
-            && registry.get("history_search").is_some()
-            && registry.get("history_read").is_some()
-            && ["read", "bash"]
-                .iter()
-                .any(|name| registry.get(name).is_some());
+            .is_some_and(|tokens| tokens > 0);
 
-        if may_delegate && let Some(memory) = &self.memory {
+        if plan.may_update_memory
+            && let Some(memory) = &self.memory
+        {
             registry.register(Arc::new(MemoryUpdateTool::new(
                 self.clone(),
                 memory.clone(),
@@ -217,11 +185,12 @@ impl AgentRunner {
             )))?;
         }
 
-        let tool_preview_budget = Arc::new(tokio::sync::Mutex::new(
+        let tool_preview_budget = Arc::new(tokio::sync::Mutex::new(remaining_preview_budget(
             self.artifacts.policy().max_inline_bytes_per_run,
-        ));
-        let task_manager = if may_delegate {
-            let manager = TaskManager::new(TaskManagerConfig {
+            &trajectory,
+        )));
+        let (task_manager, recoverable_subagents) = if plan.may_delegate {
+            let task_config = TaskManagerConfig {
                 runner: self.clone(),
                 tools: registry.clone(),
                 artifacts: self.artifacts.clone(),
@@ -237,13 +206,21 @@ impl AgentRunner {
                 default_execution_timeout_seconds: self.options.task_execution_timeout_seconds,
                 default_wait_timeout_seconds: self.options.task_wait_timeout_seconds,
                 max_execution_timeout_seconds: self.options.task_max_timeout_seconds,
-            });
+            };
+            let (manager, recoverable) = if mode == RunMode::Resume {
+                TaskManager::restore(task_config).await?
+            } else {
+                (TaskManager::new(task_config), Vec::new())
+            };
             registry.register(Arc::new(SpawnTool::new(manager.clone())))?;
             registry.register(Arc::new(WaitTool::new(manager.clone())))?;
-            Some(manager)
+            (Some(manager), recoverable)
         } else {
-            None
+            (None, Vec::new())
         };
+        let mut task_guard = task_manager
+            .as_ref()
+            .map(|manager| manager.cancellation_guard());
         let direct_tools = DirectToolRuntime {
             registry: &registry,
             hooks: &self.hooks,
@@ -258,15 +235,62 @@ impl AgentRunner {
         // using the registry, but every normal model request receives the exact
         // same sorted schema prefix.
         let tool_specs = registry.specs();
+        let tool_schema_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&tool_specs)?));
+        self.store
+            .verify_tool_schema(&run_id, &tool_schema_sha256)
+            .await?;
+        if let Some(manager) = &task_manager {
+            for task in recoverable_subagents {
+                manager.resume_agent_task(task).await?;
+            }
+        }
         let outcome: Result<RunResult> = async {
             let mut latest_checkpoint = self.store.load_latest_compaction(&run_id).await?;
             let mut context_tokens: Option<u64> = None;
-            for step in 1..=max_steps {
+            let completed_steps = trajectory
+                .iter()
+                .filter(|record| record.message.role == Role::Assistant)
+                .count();
+            let mut step_limit = max_steps;
+            if mode == RunMode::Resume {
+                let interrupted_preview_bytes =
+                    append_interrupted_tool_results(&self.store, &run_id, &mut trajectory).await?;
+                let mut remaining = tool_preview_budget.lock().await;
+                *remaining = remaining.saturating_sub(interrupted_preview_bytes);
+                drop(remaining);
+                if let Some(final_text) = resumable_final_text(&trajectory) {
+                    let ready = if let Some(manager) = &task_manager {
+                        manager.settle_before_finish().await?
+                    } else {
+                        Vec::new()
+                    };
+                    if ready.is_empty() {
+                        self.finish_success(&run_id, &final_text, events.clone())
+                            .await?;
+                        return Ok(RunResult {
+                            run_id: run_id.clone(),
+                            final_output: final_text,
+                        });
+                    }
+                    append_background_results(&self.store, &run_id, &mut trajectory, &ready)
+                        .await?;
+                    if let Some(manager) = &task_manager {
+                        manager.mark_delivered(&ready).await?;
+                    }
+                    if completed_steps >= max_steps {
+                        step_limit = max_steps.saturating_add(1);
+                    }
+                }
+            }
+
+            let mut step = completed_steps.saturating_add(1);
+            while step <= step_limit {
                 if let Some(manager) = &task_manager {
                     let ready = manager.drain_completed().await?;
                     let added =
-                        append_background_results(&self.store, &run_id, &mut trajectory, ready)
+                        append_background_results(&self.store, &run_id, &mut trajectory, &ready)
                             .await?;
+                    manager.mark_delivered(&ready).await?;
                     if let Some(tokens) = &mut context_tokens {
                         *tokens = tokens.saturating_add(added);
                     }
@@ -283,6 +307,8 @@ impl AgentRunner {
                         options: &self.options.compaction,
                         store: &self.store,
                         events: &events,
+                        model_slots: &self.model_slots,
+                        timeout_seconds: self.options.model_request_timeout_seconds,
                     })
                     .await?
                 {
@@ -297,9 +323,14 @@ impl AgentRunner {
                         RuntimeEventKind::ModelStarted { step },
                     ))
                     .await?;
-                let response = self
-                    .provider
-                    .complete(
+                let model_permit = self
+                    .model_slots
+                    .acquire()
+                    .await
+                    .context("model concurrency limiter closed")?;
+                let response = tokio::time::timeout(
+                    Duration::from_secs(self.options.model_request_timeout_seconds),
+                    self.provider.complete(
                         ModelRequest {
                             run_id: run_id.clone(),
                             model: model.clone(),
@@ -309,9 +340,20 @@ impl AgentRunner {
                             max_output_tokens,
                         },
                         events.clone(),
-                    )
-                    .await
+                    ),
+                )
+                .await;
+                drop(model_permit);
+                let response = response
+                    .with_context(|| {
+                        format!(
+                            "{} model call exceeded {} seconds",
+                            self.provider.name(),
+                            self.options.model_request_timeout_seconds
+                        )
+                    })?
                     .with_context(|| format!("{} model call failed", self.provider.name()))?;
+                response.validate_completed()?;
                 events
                     .emit(&RuntimeEvent::new(
                         &run_id,
@@ -324,28 +366,9 @@ impl AgentRunner {
                         },
                     ))
                     .await?;
-                let assistant_content = if response.assistant_content.is_empty() {
-                    let mut content = Vec::new();
-                    if !response.text.is_empty() {
-                        content.push(MessageContent::Text {
-                            text: response.text.clone(),
-                        });
-                    }
-                    content.extend(response.tool_calls.iter().map(|call| {
-                        MessageContent::ToolCall {
-                            id: call.id.clone(),
-                            name: call.name.clone(),
-                            arguments: call.arguments.clone(),
-                        }
-                    }));
-                    content
-                } else {
-                    response.assistant_content.clone()
-                };
-                let assistant_message = Message {
-                    role: Role::Assistant,
-                    content: assistant_content,
-                };
+                let final_text = response.text();
+                let tool_calls = response.tool_calls();
+                let assistant_message = response.assistant;
                 context_tokens = response.usage.input_tokens.map(|tokens| {
                     tokens.saturating_add(estimate_message_tokens(&assistant_message))
                 });
@@ -355,7 +378,7 @@ impl AgentRunner {
                     .await?;
                 trajectory.push(assistant_record);
 
-                if response.tool_calls.is_empty() {
+                if tool_calls.is_empty() {
                     if let Some(manager) = &task_manager {
                         let ready = manager.settle_before_finish().await?;
                         if !ready.is_empty() {
@@ -363,24 +386,29 @@ impl AgentRunner {
                                 &self.store,
                                 &run_id,
                                 &mut trajectory,
-                                ready,
+                                &ready,
                             )
                             .await?;
+                            manager.mark_delivered(&ready).await?;
                             if let Some(tokens) = &mut context_tokens {
                                 *tokens = tokens.saturating_add(added);
                             }
+                            if step == max_steps {
+                                step_limit = max_steps.saturating_add(1);
+                            }
+                            step = step.saturating_add(1);
                             continue;
                         }
                     }
-                    self.finish_success(&run_id, &response.text, events.clone())
+                    self.finish_success(&run_id, &final_text, events.clone())
                         .await?;
                     return Ok(RunResult {
                         run_id: run_id.clone(),
-                        final_output: response.text,
+                        final_output: final_text,
                     });
                 }
 
-                for call in response.tool_calls {
+                for call in tool_calls {
                     let tool_message = direct_tools.execute(call).await?;
                     let record = self.store.append_message(&run_id, &tool_message).await?;
                     if let Some(tokens) = &mut context_tokens {
@@ -388,6 +416,7 @@ impl AgentRunner {
                     }
                     trajectory.push(record);
                 }
+                step = step.saturating_add(1);
             }
 
             bail!("run exceeded the maximum of {max_steps} model steps")
@@ -400,57 +429,9 @@ impl AgentRunner {
                 .abort_and_settle("parent run ended before background task completion")
                 .await;
         }
+        if let Some(guard) = &mut task_guard {
+            guard.disarm();
+        }
         outcome
     }
-
-    async fn finish_success(
-        &self,
-        run_id: &str,
-        final_output: &str,
-        events: SharedEventSink,
-    ) -> Result<()> {
-        self.store.write_final(run_id, final_output).await?;
-        self.hooks
-            .run(
-                HookEvent::RunEnd,
-                json!({ "run_id": run_id, "final_output": final_output }),
-                &self.workspace,
-            )
-            .await?;
-        self.store.update_state(run_id, RunState::Completed).await?;
-        events
-            .emit(&RuntimeEvent::new(
-                run_id,
-                RuntimeEventKind::RunCompleted {
-                    final_output: final_output.to_owned(),
-                },
-            ))
-            .await
-    }
-}
-
-async fn append_background_results(
-    store: &RunDirStore,
-    run_id: &str,
-    trajectory: &mut Vec<TrajectoryMessage>,
-    records: Vec<BackgroundTaskRecord>,
-) -> Result<u64> {
-    let mut estimated_tokens = 0_u64;
-    for record in records {
-        let status = record.status().to_owned();
-        let content = record.model_content();
-        let message = Message {
-            role: Role::User,
-            content: vec![MessageContent::BackgroundTaskResult {
-                task_id: record.id,
-                name: record.name,
-                status,
-                content,
-            }],
-        };
-        let trajectory_record = store.append_message(run_id, &message).await?;
-        estimated_tokens = estimated_tokens.saturating_add(estimate_message_tokens(&message));
-        trajectory.push(trajectory_record);
-    }
-    Ok(estimated_tokens)
 }

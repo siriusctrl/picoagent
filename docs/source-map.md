@@ -1,14 +1,18 @@
 # Source Map
 
-- `src/agent/runner.rs`: the only model/tool loop and run lifecycle.
+- `src/agent/runner.rs`: the only model/tool loop.
+- `src/agent/runner/lifecycle.rs`: run creation, profiles, and finalization.
+- `src/agent/runner/recovery.rs`: resume validation and durable result injection.
 - `src/agent/compaction.rs`: local checkpoint planning, summary calls, and
   active-context assembly.
-- `src/agent/tool_execution.rs`: direct tool hooks, timeout, events, and artifact envelope.
+- `src/agent/tool_execution.rs`: shared direct/background ordinary-tool hooks,
+  events, timeouts, and artifact-backed output persistence.
 - `src/agent/types.rs`: runner configuration, request, and result contracts.
-- `src/agent/task.rs`: background task records, persistence, and delivery state.
+- `src/agent/task.rs`: background task coordination and delivery state.
 - `src/agent/task/execution.rs`: background tool and child-run execution.
-- `src/agent/task/lifecycle.rs`: background tool hooks, events, and failure commit.
+- `src/agent/task/lifecycle.rs`: failed/timed-out task state and events.
 - `src/agent/task/record.rs`: persisted background task state and model envelope.
+- `src/agent/task/recovery.rs`: task reload, child reconciliation, and cancellation.
 - `src/agent/task/tools.rs`: model-facing `spawn` and `wait` schemas.
 - `src/agent/context.rs`: deterministic prompt framing and dynamic reminder assembly.
 - `prompts/agents/`: compile-time agent instruction assets.

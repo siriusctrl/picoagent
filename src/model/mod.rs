@@ -1,9 +1,10 @@
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
-use crate::events::SharedEventSink;
+use crate::{artifact::ResultMetadata, events::SharedEventSink};
 
 mod common;
 pub(crate) mod openai_chat;
@@ -57,6 +58,7 @@ pub enum MessageContent {
         call_id: String,
         content: String,
         is_error: bool,
+        metadata: ResultMetadata,
     },
     /// Provider-owned continuation material, such as encrypted OpenAI reasoning.
     ProviderItem {
@@ -68,6 +70,7 @@ pub enum MessageContent {
         name: String,
         status: String,
         content: String,
+        metadata: ResultMetadata,
     },
 }
 
@@ -83,6 +86,42 @@ impl Message {
             role,
             content: vec![MessageContent::Text { text: text.into() }],
         }
+    }
+
+    pub fn assistant(content: Vec<MessageContent>) -> Self {
+        Self {
+            role: Role::Assistant,
+            content,
+        }
+    }
+
+    pub fn visible_text(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|block| match block {
+                MessageContent::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub fn tool_calls(&self) -> Vec<ToolCall> {
+        self.content
+            .iter()
+            .filter_map(|block| match block {
+                MessageContent::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } => Some(ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                }),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -120,21 +159,107 @@ pub struct ModelRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelResponse {
-    pub text: String,
-    pub tool_calls: Vec<ToolCall>,
-    /// Ordered assistant content used for exact provider continuation replay.
-    /// Providers without opaque continuation items may leave this empty.
-    pub assistant_content: Vec<MessageContent>,
+    /// The one completed assistant message returned by the provider.
+    ///
+    /// Content ordering is provider-significant: opaque continuation items,
+    /// visible text, reasoning, and tool calls must remain in wire order.
+    pub assistant: Message,
     pub usage: ModelUsage,
+}
+
+impl ModelResponse {
+    pub fn new(assistant: Message, usage: ModelUsage) -> Self {
+        assert_eq!(
+            assistant.role,
+            Role::Assistant,
+            "a completed model response must contain an assistant message"
+        );
+        Self { assistant, usage }
+    }
+
+    /// Validate responses assembled outside [`ModelResponse::new`].
+    ///
+    /// The runner should call this once after every provider completion so a
+    /// custom provider cannot persist a user or tool message as model output.
+    pub fn validate_completed(&self) -> Result<()> {
+        ensure!(
+            self.assistant.role == Role::Assistant,
+            "model provider returned a completed response with role `{:?}`; expected `assistant`",
+            self.assistant.role
+        );
+        Ok(())
+    }
+
+    pub fn text(&self) -> String {
+        self.assistant.visible_text()
+    }
+
+    pub fn tool_calls(&self) -> Vec<ToolCall> {
+        self.assistant.tool_calls()
+    }
 }
 
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
     fn name(&self) -> &str;
 
+    /// Stable, non-secret identity for provider settings that affect request
+    /// and continuation wire formats. Runs should persist this value and
+    /// require an exact match before resume.
+    fn resume_fingerprint(&self) -> String {
+        stable_resume_fingerprint(self.name(), &[])
+    }
+
     async fn complete(
         &self,
         request: ModelRequest,
         events: SharedEventSink,
     ) -> Result<ModelResponse>;
+}
+
+pub(crate) fn stable_resume_fingerprint(provider: &str, fields: &[(&str, &str)]) -> String {
+    let payload = serde_json::to_vec(&("picoagent-provider-resume-v1", provider, fields))
+        .expect("provider resume fingerprint fields must serialize");
+    format!("sha256:{:x}", Sha256::digest(payload))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_response_validation_rejects_non_assistant_messages() {
+        let response = ModelResponse {
+            assistant: Message::text(Role::User, "not an assistant response"),
+            usage: ModelUsage::default(),
+        };
+
+        let error = response.validate_completed().unwrap_err().to_string();
+        assert!(error.contains("expected `assistant`"), "{error}");
+    }
+
+    #[test]
+    fn visible_text_matches_chat_projection_for_multiple_text_blocks() {
+        let message = Message::assistant(vec![
+            MessageContent::Text {
+                text: "first".to_owned(),
+            },
+            MessageContent::Reasoning {
+                text: "between".to_owned(),
+            },
+            MessageContent::Text {
+                text: "second".to_owned(),
+            },
+        ]);
+
+        assert_eq!(message.visible_text(), "first\nsecond");
+    }
+
+    #[test]
+    fn default_resume_fingerprint_is_stable_and_provider_specific() {
+        let first = stable_resume_fingerprint("one", &[]);
+        assert_eq!(first, stable_resume_fingerprint("one", &[]));
+        assert_ne!(first, stable_resume_fingerprint("two", &[]));
+        assert!(first.starts_with("sha256:"));
+    }
 }

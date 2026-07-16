@@ -22,6 +22,12 @@ pub(crate) enum Command {
         #[arg(long, value_enum, default_value = "text")]
         output: OutputFormat,
     },
+    /// Continue an interrupted or failed run from its last complete message.
+    Resume {
+        run_id: String,
+        #[arg(long, value_enum, default_value = "text")]
+        output: OutputFormat,
+    },
     /// Print persisted metadata and the final output for a run.
     Inspect { run_id: String },
     /// Authenticate an OpenAI OAuth provider with the device-code flow.

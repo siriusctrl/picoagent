@@ -1,13 +1,13 @@
-use std::fmt;
+use std::{fmt, time::Duration};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use reqwest::{Client, RequestBuilder};
+use reqwest::{Client, RequestBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::{
     ModelProvider, ModelRequest, ModelResponse,
-    common::join_url,
+    common::{http_status, join_url},
     openai_request::{chat_body, responses_body},
     openai_stream,
 };
@@ -58,6 +58,8 @@ pub struct OpenAiCompatibleProvider {
     client: Client,
     options: OpenAiCompatibleOptions,
     reasoning_effort: Option<String>,
+    rate_limit_retries: usize,
+    rate_limit_backoff: Duration,
 }
 
 impl OpenAiCompatibleProvider {
@@ -74,6 +76,8 @@ impl OpenAiCompatibleProvider {
             client: Client::new(),
             options,
             reasoning_effort: None,
+            rate_limit_retries: 3,
+            rate_limit_backoff: Duration::from_secs(2),
         }
     }
 
@@ -82,11 +86,19 @@ impl OpenAiCompatibleProvider {
             client,
             options,
             reasoning_effort: None,
+            rate_limit_retries: 3,
+            rate_limit_backoff: Duration::from_secs(2),
         }
     }
 
     pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
         self.reasoning_effort = Some(effort.into());
+        self
+    }
+
+    pub fn with_rate_limit_retry(mut self, retries: usize, base_delay: Duration) -> Self {
+        self.rate_limit_retries = retries;
+        self.rate_limit_backoff = base_delay;
         self
     }
 }
@@ -97,28 +109,59 @@ impl ModelProvider for OpenAiCompatibleProvider {
         "openai-compatible"
     }
 
+    fn resume_fingerprint(&self) -> String {
+        let protocol = match self.options.protocol {
+            OpenAiProtocol::Responses => "responses",
+            OpenAiProtocol::ChatCompletions => "chat-completions",
+        };
+        super::stable_resume_fingerprint(
+            self.name(),
+            &[
+                ("base_url", self.options.base_url.trim_end_matches('/')),
+                ("protocol", protocol),
+                (
+                    "reasoning_effort",
+                    self.reasoning_effort.as_deref().unwrap_or(""),
+                ),
+            ],
+        )
+    }
+
     async fn complete(
         &self,
         request: ModelRequest,
         events: SharedEventSink,
     ) -> Result<ModelResponse> {
-        let builder = match self.options.protocol {
-            OpenAiProtocol::Responses => self
-                .client
-                .post(join_url(&self.options.base_url, "responses"))
-                .json(&responses_body(&request, self.reasoning_effort.as_deref())),
-            OpenAiProtocol::ChatCompletions => self
-                .client
-                .post(join_url(&self.options.base_url, "chat/completions"))
-                .json(&chat_body(&request, self.reasoning_effort.as_deref())),
-        };
-        openai_stream::complete_request(
-            bearer(builder, &self.options.api_key),
-            self.options.protocol,
-            &request.run_id,
-            events,
-        )
-        .await
+        for attempt in 0..=self.rate_limit_retries {
+            let builder = match self.options.protocol {
+                OpenAiProtocol::Responses => self
+                    .client
+                    .post(join_url(&self.options.base_url, "responses"))
+                    .json(&responses_body(&request, self.reasoning_effort.as_deref())),
+                OpenAiProtocol::ChatCompletions => self
+                    .client
+                    .post(join_url(&self.options.base_url, "chat/completions"))
+                    .json(&chat_body(&request, self.reasoning_effort.as_deref())),
+            };
+            let result = openai_stream::complete_request(
+                bearer(builder, &self.options.api_key),
+                self.options.protocol,
+                &request.run_id,
+                events.clone(),
+            )
+            .await;
+            match result {
+                Err(error)
+                    if attempt < self.rate_limit_retries
+                        && http_status(&error) == Some(StatusCode::TOO_MANY_REQUESTS) =>
+                {
+                    let multiplier = 1_u32.checked_shl(attempt as u32).unwrap_or(u32::MAX);
+                    tokio::time::sleep(self.rate_limit_backoff.saturating_mul(multiplier)).await;
+                }
+                result => return result,
+            }
+        }
+        unreachable!("rate-limit retry loop always returns")
     }
 }
 

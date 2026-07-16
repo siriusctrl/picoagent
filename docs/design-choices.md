@@ -20,7 +20,7 @@ the Rust library and event stream without owning agent behavior.
 
 The launch runtime uses one self-contained directory per run instead of SQLite
 or an event-sourced service. Complete messages and metadata are enough for
-inspection and provide the boundary for a future bounded resume command; object
+inspection and form the boundary for the bounded `pico resume` command; object
 storage can archive the directory as a unit.
 
 The persisted event log contains lifecycle and debugging records, not streaming
@@ -32,6 +32,21 @@ decision context and rejected alternatives.
 
 Revisit when cross-run queries, multi-worker ownership, or server-side pagination
 become concrete requirements.
+
+## Completed-Message Resume
+
+Main runs and durable GeneralTask children resume from committed complete
+messages. A run-level lease
+prevents concurrent advancement. Missing direct-tool results become explicit
+`interrupted` error results rather than replaying potentially side-effecting
+work. Durable task records coordinate parent and child state, while each child
+keeps its own transcript and result delivery is derived from the parent log.
+The parent is the recovery entrypoint; synchronous MemoryMaintenance children
+remain direct-tool work and are not independently resumed.
+
+Rejected: replaying incomplete tools, copying child messages into task JSON,
+and maintaining a second durable `delivered` boolean. See
+[ADR 0006](adr/0006-complete-message-resume-and-durable-child-coordination.md).
 
 ## Chat-Compatible Message Log
 

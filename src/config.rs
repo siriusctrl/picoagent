@@ -7,10 +7,12 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+pub use crate::model::OpenAiProtocol;
+
 const DEFAULT_OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     pub provider: ProviderConfig,
     pub runtime: RuntimeConfig,
@@ -25,7 +27,7 @@ pub struct AppConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CompactionConfig {
     /// Provider-reported input-token threshold that enables automatic compaction.
     /// `None` keeps compaction disabled because provider context windows vary.
@@ -47,7 +49,7 @@ impl Default for CompactionConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ProviderConfig {
     OpenaiOauth {
         model: String,
@@ -61,9 +63,7 @@ pub enum ProviderConfig {
         base_url: String,
         #[serde(default, skip_serializing)]
         api_key: Option<String>,
-        #[serde(default)]
-        api_key_env: Option<String>,
-        #[serde(default)]
+        #[serde(default = "default_openai_protocol")]
         protocol: OpenAiProtocol,
         #[serde(default)]
         reasoning_effort: Option<String>,
@@ -99,7 +99,6 @@ impl fmt::Debug for ProviderConfig {
                 model,
                 base_url,
                 api_key,
-                api_key_env,
                 protocol,
                 reasoning_effort,
             } => formatter
@@ -107,7 +106,6 @@ impl fmt::Debug for ProviderConfig {
                 .field("model", model)
                 .field("base_url", base_url)
                 .field("api_key", &api_key.as_ref().map(|_| "[REDACTED]"))
-                .field("api_key_env", api_key_env)
                 .field("protocol", protocol)
                 .field("reasoning_effort", reasoning_effort)
                 .finish(),
@@ -150,25 +148,19 @@ impl ProviderConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum OpenAiProtocol {
-    Responses,
-    #[default]
-    ChatCompletions,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub max_steps: usize,
     pub max_subagent_depth: usize,
     pub max_parallel_tasks: usize,
+    pub max_parallel_model_calls: usize,
+    pub model_request_timeout_seconds: u64,
     pub max_output_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TaskConfig {
     pub default_execution_timeout_seconds: u64,
     pub default_wait_timeout_seconds: u64,
@@ -188,13 +180,13 @@ impl Default for TaskConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AgentProfilesConfig {
     pub general_task: GeneralTaskConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct GeneralTaskConfig {
     pub model: Option<String>,
     pub max_steps: usize,
@@ -217,13 +209,15 @@ impl Default for RuntimeConfig {
             max_steps: 32,
             max_subagent_depth: 1,
             max_parallel_tasks: 4,
+            max_parallel_model_calls: 1,
+            model_request_timeout_seconds: 300,
             max_output_tokens: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ArtifactConfig {
     pub inline_bytes: usize,
     pub max_inline_bytes_per_run: usize,
@@ -243,7 +237,7 @@ impl Default for ArtifactConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct MemoryConfig {
     pub enabled: bool,
     pub global_root: Option<PathBuf>,
@@ -259,7 +253,7 @@ impl Default for MemoryConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct WebSearchConfig {
     pub enabled: bool,
     pub endpoint: String,
@@ -279,6 +273,7 @@ impl Default for WebSearchConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpServerConfig {
     pub command: String,
     #[serde(default)]
@@ -288,7 +283,7 @@ pub struct McpServerConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct HookConfig {
     pub run_start: Vec<String>,
     pub run_end: Vec<String>,
@@ -318,6 +313,59 @@ impl AppConfig {
     }
 
     fn validate(&self) -> Result<()> {
+        if self.runtime.max_steps == 0 {
+            bail!("`runtime.max_steps` must be greater than zero")
+        }
+        if self.runtime.max_parallel_tasks == 0 {
+            bail!("`runtime.max_parallel_tasks` must be greater than zero")
+        }
+        if self.runtime.max_parallel_model_calls == 0 {
+            bail!("`runtime.max_parallel_model_calls` must be greater than zero")
+        }
+        if self.runtime.model_request_timeout_seconds == 0 {
+            bail!("`runtime.model_request_timeout_seconds` must be greater than zero")
+        }
+        if self.runtime.max_output_tokens == Some(0) {
+            bail!("`runtime.max_output_tokens` must be greater than zero")
+        }
+        if self.agents.general_task.max_steps == 0 {
+            bail!("`agents.general_task.max_steps` must be greater than zero")
+        }
+        if self.agents.general_task.max_output_tokens == Some(0) {
+            bail!("`agents.general_task.max_output_tokens` must be greater than zero")
+        }
+        for (name, value) in [
+            (
+                "tasks.default_execution_timeout_seconds",
+                self.tasks.default_execution_timeout_seconds,
+            ),
+            (
+                "tasks.default_wait_timeout_seconds",
+                self.tasks.default_wait_timeout_seconds,
+            ),
+            (
+                "tasks.max_execution_timeout_seconds",
+                self.tasks.max_execution_timeout_seconds,
+            ),
+            (
+                "tasks.direct_tool_timeout_seconds",
+                self.tasks.direct_tool_timeout_seconds,
+            ),
+        ] {
+            if value == 0 {
+                bail!("`{name}` must be greater than zero")
+            }
+        }
+        if self.tasks.default_execution_timeout_seconds > self.tasks.max_execution_timeout_seconds {
+            bail!(
+                "`tasks.default_execution_timeout_seconds` must not exceed `tasks.max_execution_timeout_seconds`"
+            )
+        }
+        if self.tasks.default_wait_timeout_seconds >= self.tasks.direct_tool_timeout_seconds {
+            bail!(
+                "`tasks.default_wait_timeout_seconds` must be strictly less than `tasks.direct_tool_timeout_seconds`"
+            )
+        }
         if self.compaction.trigger_tokens == Some(0) {
             bail!("`compaction.trigger_tokens` must be greater than zero")
         }
@@ -354,19 +402,15 @@ pub fn resolve_env_reference(value: &str) -> Result<String> {
     }
 }
 
-pub fn resolve_openai_api_key(api_key: Option<&str>, api_key_env: Option<&str>) -> Result<String> {
-    match (api_key, api_key_env) {
-        (Some(_), Some(_)) => {
-            bail!("set only one of `provider.api_key` or deprecated `provider.api_key_env`")
-        }
-        (Some(value), None) => resolve_env_reference(value),
-        (None, Some("")) => bail!("`provider.api_key_env` must include a variable name"),
-        (None, Some(name)) => {
-            env::var(name).with_context(|| format!("missing provider credential `{name}`"))
-        }
-        (None, None) => env::var(DEFAULT_OPENAI_API_KEY_ENV)
+pub fn resolve_openai_api_key(api_key: Option<&str>) -> Result<String> {
+    match api_key {
+        Some(value) => resolve_env_reference(value),
+        None => env::var(DEFAULT_OPENAI_API_KEY_ENV)
             .with_context(|| format!("missing provider credential `{DEFAULT_OPENAI_API_KEY_ENV}`")),
     }
+}
+fn default_openai_protocol() -> OpenAiProtocol {
+    OpenAiProtocol::ChatCompletions
 }
 fn default_anthropic_key_env() -> String {
     "ANTHROPIC_API_KEY".to_owned()
@@ -448,8 +492,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_legacy_openai_api_key_env() {
-        let config: AppConfig = toml::from_str(
+    fn rejects_deprecated_openai_api_key_env_and_unknown_fields() {
+        for source in [
             r#"
             [provider]
             kind = "openai-compatible"
@@ -457,19 +501,38 @@ mod tests {
             base_url = "http://localhost:8000/v1"
             api_key_env = "LEGACY_OPENAI_API_KEY"
             "#,
+            "[runtime]\nmax_step = 12",
+            "unknown_section = true",
+            r#"
+            [mcp.example]
+            command = "example"
+            arguments = []
+            "#,
+        ] {
+            assert!(
+                toml::from_str::<AppConfig>(source).is_err(),
+                "accepted unknown field in {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn openai_compatible_defaults_to_chat_completions() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [provider]
+            kind = "openai-compatible"
+            model = "model"
+            base_url = "http://localhost:8000/v1"
+            api_key = "token"
+            "#,
         )
         .unwrap();
 
-        let ProviderConfig::OpenaiCompatible {
-            api_key,
-            api_key_env,
-            ..
-        } = config.provider
-        else {
+        let ProviderConfig::OpenaiCompatible { protocol, .. } = config.provider else {
             panic!("expected openai-compatible provider");
         };
-        assert!(api_key.is_none());
-        assert_eq!(api_key_env.as_deref(), Some("LEGACY_OPENAI_API_KEY"));
+        assert_eq!(protocol, OpenAiProtocol::ChatCompletions);
     }
 
     #[test]
@@ -486,29 +549,46 @@ mod tests {
     }
 
     #[test]
-    fn resolves_new_and_legacy_openai_credentials_without_ambiguity() {
+    fn resolves_openai_literal_environment_and_default_credentials() {
         assert_eq!(
-            resolve_openai_api_key(Some("inline-token"), None).unwrap(),
+            resolve_openai_api_key(Some("inline-token")).unwrap(),
             "inline-token"
         );
         assert_eq!(
-            resolve_openai_api_key(Some("${PATH}"), None).unwrap(),
-            env::var("PATH").unwrap()
-        );
-        assert_eq!(
-            resolve_openai_api_key(None, Some("PATH")).unwrap(),
+            resolve_openai_api_key(Some("${PATH}")).unwrap(),
             env::var("PATH").unwrap()
         );
         match env::var(DEFAULT_OPENAI_API_KEY_ENV) {
             Ok(expected) => {
-                assert_eq!(resolve_openai_api_key(None, None).unwrap(), expected);
+                assert_eq!(resolve_openai_api_key(None).unwrap(), expected);
             }
             Err(_) => {
-                let error = resolve_openai_api_key(None, None).unwrap_err().to_string();
+                let error = resolve_openai_api_key(None).unwrap_err().to_string();
                 assert!(error.contains(DEFAULT_OPENAI_API_KEY_ENV), "{error}");
             }
         }
-        assert!(resolve_openai_api_key(Some("token"), Some("PATH")).is_err());
+    }
+
+    #[test]
+    fn rejects_zero_runtime_and_task_limits() {
+        for source in [
+            "[runtime]\nmax_steps = 0",
+            "[runtime]\nmax_parallel_tasks = 0",
+            "[runtime]\nmax_parallel_model_calls = 0",
+            "[runtime]\nmodel_request_timeout_seconds = 0",
+            "[runtime]\nmax_output_tokens = 0",
+            "[agents.general_task]\nmax_steps = 0",
+            "[agents.general_task]\nmax_output_tokens = 0",
+            "[tasks]\ndefault_execution_timeout_seconds = 0",
+            "[tasks]\ndefault_wait_timeout_seconds = 0",
+            "[tasks]\nmax_execution_timeout_seconds = 0",
+            "[tasks]\ndirect_tool_timeout_seconds = 0",
+            "[tasks]\ndefault_execution_timeout_seconds = 2000\nmax_execution_timeout_seconds = 1000",
+            "[tasks]\ndefault_wait_timeout_seconds = 30\ndirect_tool_timeout_seconds = 30",
+        ] {
+            let config: AppConfig = toml::from_str(source).unwrap();
+            assert!(config.validate().is_err(), "accepted {source}");
+        }
     }
 
     #[test]

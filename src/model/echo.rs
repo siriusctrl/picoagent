@@ -36,11 +36,9 @@ impl ModelProvider for EchoProvider {
                 RuntimeEventKind::ModelDelta { text: text.clone() },
             ))
             .await?;
-        Ok(ModelResponse {
-            text,
-            tool_calls: Vec::new(),
-            assistant_content: Vec::new(),
-            usage: ModelUsage::default(),
-        })
+        Ok(ModelResponse::new(
+            super::Message::text(super::Role::Assistant, text),
+            ModelUsage::default(),
+        ))
     }
 }

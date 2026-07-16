@@ -221,6 +221,16 @@ impl ModelProvider for OpenAiOAuthProvider {
         "openai-oauth"
     }
 
+    fn resume_fingerprint(&self) -> String {
+        super::stable_resume_fingerprint(
+            self.name(),
+            &[
+                ("base_url", self.options.base_url.trim_end_matches('/')),
+                ("protocol", "responses"),
+            ],
+        )
+    }
+
     async fn complete(
         &self,
         request: ModelRequest,

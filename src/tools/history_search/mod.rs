@@ -79,33 +79,14 @@ impl Tool for HistorySearchTool {
                 result.matches.len()
             )
         });
-        let mut records = Vec::with_capacity(result.matches.len() + 1);
-        records.push(serde_json::to_string(&json!({
-            "type": "search_summary",
-            "returned": result.matches.len(),
-            "truncated": result.truncated,
-            "truncation_reason": result.truncated.then_some("max_matches"),
-            "omitted": result.truncated.then_some("older_matches"),
-            "instruction": instruction,
-        }))?);
-        for found in result.matches {
-            records.push(serde_json::to_string(&json!({
-                "type": "match",
-                "message_ref": found.message_ref,
-                "seq": found.seq,
-                "created_at": found.created_at,
-                "role": found.role,
-                "kind": found.kind,
-                "tool_name": found.tool_name,
-                "match_source": found.match_source,
-                "snippet": found.snippet,
-            }))?);
-        }
-
         Ok(RawToolOutput {
-            content: records.join("\n").into_bytes(),
+            content: serde_json::to_vec(&json!({
+                "matches": result.matches,
+                "truncated": result.truncated,
+                "instruction": instruction,
+            }))?,
             source_path: None,
-            media_type: "application/x-ndjson; charset=utf-8".to_owned(),
+            media_type: "application/json".to_owned(),
             is_error: false,
         })
     }
@@ -115,7 +96,8 @@ impl Tool for HistorySearchTool {
 mod tests {
     use super::*;
     use crate::trajectory::{
-        HistoryReadRequest, HistoryReadResult, HistorySearchResult, TrajectoryReader,
+        HistoryMatch, HistoryMatchSource, HistoryReadRequest, HistoryReadResult,
+        HistorySearchResult, TrajectoryReader,
     };
     use tempfile::tempdir;
 
@@ -125,7 +107,11 @@ mod tests {
     impl TrajectoryReader for StubReader {
         async fn search(&self, _request: HistorySearchRequest) -> Result<HistorySearchResult> {
             Ok(HistorySearchResult {
-                matches: Vec::new(),
+                matches: vec![HistoryMatch {
+                    message_ref: "msg-7".to_owned(),
+                    match_source: HistoryMatchSource::Message,
+                    snippet: "alpha".to_owned(),
+                }],
                 truncated: true,
             })
         }
@@ -148,9 +134,13 @@ mod tests {
             .execute(context.clone(), json!({"pattern": "alpha"}))
             .await
             .unwrap();
-        let text = String::from_utf8(output.content).unwrap();
-        assert!(text.contains(r#""truncated":true"#));
-        assert!(text.contains("refine the regex"));
+        let value: Value = serde_json::from_slice(&output.content).unwrap();
+        assert_eq!(
+            value["matches"][0],
+            json!({"ref": "msg-7", "source": "message", "snippet": "alpha"})
+        );
+        assert_eq!(value["truncated"], true);
+        assert!(value["instruction"].as_str().unwrap().contains("refine"));
 
         let error = tool
             .execute(context, json!({"pattern": "["}))

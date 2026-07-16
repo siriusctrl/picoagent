@@ -9,10 +9,7 @@ use clap::Parser;
 use picoagent::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
     artifact::{ArtifactPolicy, ArtifactStore},
-    config::{
-        AppConfig, OpenAiProtocol as ConfigOpenAiProtocol, ProviderConfig, resolve_env_reference,
-        resolve_openai_api_key,
-    },
+    config::{AppConfig, ProviderConfig, resolve_env_reference, resolve_openai_api_key},
     events::{NdjsonEventSink, NoopEventSink, SharedEventSink},
     hooks::{CommandHook, HookEvent, HookPipeline},
     mcp::{McpStdioClient, McpStdioConfig},
@@ -21,7 +18,7 @@ use picoagent::{
         ModelProvider,
         anthropic_compatible::{AnthropicCompatibleOptions, AnthropicCompatibleProvider},
         echo::EchoProvider,
-        openai_compatible::{OpenAiCompatibleOptions, OpenAiCompatibleProvider, OpenAiProtocol},
+        openai_compatible::{OpenAiCompatibleOptions, OpenAiCompatibleProvider},
         openai_oauth::{DEFAULT_OPENAI_OAUTH_BASE_URL, OpenAiOAuthProvider},
     },
     skills::{LoadSkillTool, SkillRegistry},
@@ -50,6 +47,9 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Run { prompt, output } => {
             run_task(&workspace, &pico_home, config, prompt, output).await
+        }
+        Command::Resume { run_id, output } => {
+            resume_task(&workspace, &pico_home, config, run_id, output).await
         }
         Command::Inspect { run_id } => inspect_run(&workspace, &run_id).await,
         Command::Auth {
@@ -81,11 +81,50 @@ async fn run_task(
     .await
 }
 
+async fn resume_task(
+    workspace: &Path,
+    pico_home: &Path,
+    config: AppConfig,
+    run_id: String,
+    output: OutputFormat,
+) -> Result<()> {
+    run_action(
+        workspace,
+        pico_home,
+        config,
+        RunAction::Resume(run_id),
+        output,
+    )
+    .await
+}
+
+enum RunAction {
+    Start(RunRequest),
+    Resume(String),
+}
+
 async fn run_request(
     workspace: &Path,
     pico_home: &Path,
     config: AppConfig,
     request: RunRequest,
+    output: OutputFormat,
+) -> Result<()> {
+    run_action(
+        workspace,
+        pico_home,
+        config,
+        RunAction::Start(request),
+        output,
+    )
+    .await
+}
+
+async fn run_action(
+    workspace: &Path,
+    pico_home: &Path,
+    config: AppConfig,
+    action: RunAction,
     output: OutputFormat,
 ) -> Result<()> {
     let provider = build_provider(&config.provider, pico_home)?;
@@ -156,6 +195,8 @@ async fn run_request(
             max_steps: config.runtime.max_steps,
             max_subagent_depth: config.runtime.max_subagent_depth,
             max_parallel_tasks: config.runtime.max_parallel_tasks,
+            max_parallel_model_calls: config.runtime.max_parallel_model_calls,
+            model_request_timeout_seconds: config.runtime.model_request_timeout_seconds,
             max_output_tokens: config.runtime.max_output_tokens,
             direct_tool_timeout_seconds: config.tasks.direct_tool_timeout_seconds,
             task_execution_timeout_seconds: config.tasks.default_execution_timeout_seconds,
@@ -174,7 +215,10 @@ async fn run_request(
             },
         },
     });
-    let result = runner.run(request).await;
+    let result = match action {
+        RunAction::Start(request) => runner.run(request).await,
+        RunAction::Resume(run_id) => runner.resume(run_id).await,
+    };
     let mut shutdown_error = None;
     for client in mcp_clients {
         if let Err(error) = client.shutdown().await
@@ -213,17 +257,12 @@ fn build_provider(config: &ProviderConfig, pico_home: &Path) -> Result<Arc<dyn M
         ProviderConfig::OpenaiCompatible {
             base_url,
             api_key,
-            api_key_env,
             protocol,
             reasoning_effort,
             ..
         } => {
-            let api_key = resolve_openai_api_key(api_key.as_deref(), api_key_env.as_deref())?;
-            let protocol = match protocol {
-                ConfigOpenAiProtocol::Responses => OpenAiProtocol::Responses,
-                ConfigOpenAiProtocol::ChatCompletions => OpenAiProtocol::ChatCompletions,
-            };
-            let options = OpenAiCompatibleOptions::new(base_url, api_key, protocol);
+            let api_key = resolve_openai_api_key(api_key.as_deref())?;
+            let options = OpenAiCompatibleOptions::new(base_url, api_key, *protocol);
             let mut provider = OpenAiCompatibleProvider::with_options(options);
             if let Some(reasoning_effort) = reasoning_effort {
                 provider = provider.with_reasoning_effort(reasoning_effort);

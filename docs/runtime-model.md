@@ -2,10 +2,15 @@
 
 ## Run
 
-A run is one task executed by `AgentRunner`. Its launch states are queued,
-running, completed, or failed. The implementation does not resume inside a
-provider stream or shell command; the last complete message is the durable
-boundary.
+A run is one task executed by `AgentRunner`. Its states are queued, running,
+completed, or failed. `pico resume <run-id>` continues a non-completed root run from
+its last complete message. The implementation does not resume inside a provider
+stream or shell command; the last complete message is the durable boundary.
+One per-run execution lease prevents two processes from advancing the same
+trajectory concurrently. Resume also requires the same non-secret provider
+fingerprint: endpoint and wire protocol, plus provider-specific continuation
+settings such as reasoning effort or Anthropic version. Credentials are never
+part of that fingerprint.
 
 ## Durable Messages
 
@@ -25,10 +30,11 @@ compatible Chat requests replay it separately from visible assistant `content`.
 Each message has one corresponding line in `message_metadata.jsonl`. The
 sidecar holds the stable ref, sequence, timestamp, exact-message SHA-256,
 provider-neutral content layout, tool-error state, opaque provider items, and a
-second SHA-256 covering all reconstruction metadata. The two logs are created
-and directory-synced with the run. The Chat line is synced first and the
-metadata line is synced last as its commit marker. Reads, recovery, and appends
-take one per-run file lock, including across independently opened stores.
+result's optional `ArtifactRef` plus exact preview-byte count. A second SHA-256
+covers all reconstruction metadata. The two logs are created and
+directory-synced with the run. The Chat line is synced first and the metadata
+line is synced last as its commit marker. Reads, recovery, and appends take one
+per-run file lock, including across independently opened stores.
 Readers expose only paired records whose hashes and layouts validate. A lone
 final Chat message is treated as an interrupted append; metadata ahead of the
 message log or corruption in a committed pair is an error. This pre-release
@@ -50,6 +56,11 @@ For each model step:
 7. artifact large outputs and persist complete tool messages;
 8. repeat, join outstanding background work before finalization, or write
    `final.md` when no tool calls or tasks remain.
+
+On resume, a complete final assistant message is finalized without another
+model call. If the last assistant message contains a tool call without a paired
+durable result, picoagent appends an interrupted error result and does not run
+the tool again because its side effects are unknown.
 
 ## Compaction And History
 
@@ -96,6 +107,26 @@ the configured limit. Each child creates a normal run with a parent id. Children
 share the workspace, provider, and base tools. The default maximum depth of one
 keeps the initial execution model predictable. `wait` is a bounded join; a wait
 timeout does not cancel the task.
+
+Task JSON is coordination state, not a second transcript. Delivery is derived
+from `BackgroundTaskResult` entries already committed to the parent message
+log. After restart, running ordinary tools become terminal `interrupted` tasks
+and are never replayed. A queued/running child agent resumes its separate child
+run with the same `AgentRunner`; completed or failed children are reconciled
+into the parent exactly once.
+
+The CLI resumes the parent, not a child id. Parent recovery owns durable
+GeneralTask child reconciliation, which avoids two processes racing to advance
+the same child. A focused MemoryMaintenance child invoked synchronously by
+`memory_update` follows direct-tool semantics instead: an interrupted call is
+reported as unknown and is not replayed.
+
+Parent, child, and compaction requests share one model-call semaphore. Its
+default capacity is one so a child can run against single-concurrency compatible
+endpoints without racing the parent; deployments can raise it explicitly. Every
+request also has the same configured deadline. A normal request timeout fails
+that run; a compaction timeout records `compaction_failed` and continues with
+the uncompacted context.
 
 ## Streaming
 

@@ -277,6 +277,7 @@ mod tests {
                     name: "bash".into(),
                     status: "completed".into(),
                     content: "done".into(),
+                    metadata: crate::artifact::ResultMetadata::empty(),
                 }],
             }],
             tools: Vec::new(),

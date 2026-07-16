@@ -60,10 +60,8 @@ async fn cumulative_budget_forces_later_small_results_to_artifacts() {
     assert!(second.artifact.is_some());
     assert!(second.preview.len() <= 2);
     let model_content = second.model_content();
-    assert!(model_content.contains("preview: head_only"));
-    assert!(model_content.contains("bytes: total=8; shown=2 (head=2, tail=0); omitted=6"));
-    assert!(model_content.contains("omitted_region: tail"));
-    assert!(model_content.contains("reason: run_preview_budget_limited"));
+    assert!(model_content.contains("bytes: total=8; preview_head=2; preview_tail=0; omitted=6"));
+    assert!(model_content.contains("preview_limitation: run_preview_budget_limited"));
 }
 
 #[tokio::test]
@@ -88,7 +86,7 @@ async fn identifies_budget_as_the_reason_when_a_small_result_spills() {
     assert!(
         output
             .model_content()
-            .contains("reason: run_preview_budget_limited")
+            .contains("preview_limitation: run_preview_budget_limited")
     );
 }
 
@@ -110,7 +108,12 @@ async fn artifact_backed_full_preview_is_not_labeled_truncated() {
     assert!(!output.truncated);
     assert_eq!(output.preview, "abcdef");
     assert!(output.model_content().contains("truncated: false"));
-    assert!(output.model_content().contains("preview: full"));
+    assert!(
+        output
+            .model_content()
+            .contains("bytes: total=6; preview_head=6; preview_tail=0; omitted=0")
+    );
+    assert!(output.model_content().contains("preview_limitation: none"));
 }
 
 #[tokio::test]
@@ -133,10 +136,8 @@ async fn exhausted_preview_budget_returns_metadata_and_inspection_guidance() {
 
     assert!(output.preview.is_empty());
     let model_content = output.model_content();
-    assert!(model_content.contains("preview: none"));
-    assert!(model_content.contains("bytes: total=8; shown=0 (head=0, tail=0); omitted=8"));
-    assert!(model_content.contains("omitted_region: all"));
-    assert!(model_content.contains("reason: run_preview_budget_exhausted"));
+    assert!(model_content.contains("bytes: total=8; preview_head=0; preview_tail=0; omitted=8"));
+    assert!(model_content.contains("preview_limitation: run_preview_budget_exhausted"));
     assert!(model_content.contains("artifact preserves the complete returned output"));
     assert!(model_content.contains("`read` (`path`, `offset`, `limit`)"));
     assert!(model_content.contains("`bash`/`rg`"));
@@ -167,9 +168,8 @@ async fn spills_small_binary_results_without_lossy_inline_decoding() {
     assert!(output.truncated);
     assert!(output.preview.is_empty());
     let model_content = output.model_content();
-    assert!(model_content.contains("preview: none"));
-    assert!(model_content.contains("omitted_region: all"));
-    assert!(model_content.contains("reason: binary_or_non_utf8"));
+    assert!(model_content.contains("preview_head=0; preview_tail=0; omitted=4"));
+    assert!(model_content.contains("preview_limitation: binary_or_non_utf8"));
     assert!(!model_content.contains("[Preview]"));
     assert!(output.artifact.unwrap().path.contains("call-binary-"));
 }
@@ -196,10 +196,8 @@ async fn spills_large_results_with_versioned_sidecar_and_head_tail_preview() {
     let model_content = output.model_content();
     assert!(model_content.contains("truncated: true"));
     assert!(model_content.contains("media_type: text/plain"));
-    assert!(model_content.contains("preview: head_tail"));
-    assert!(model_content.contains("shown=16 (head=8, tail=8)"));
-    assert!(model_content.contains("omitted_region: middle"));
-    assert!(model_content.contains("reason: output_exceeds_inline_limit"));
+    assert!(model_content.contains("preview_head=8; preview_tail=8"));
+    assert!(model_content.contains("preview_limitation: none"));
     assert!(model_content.contains("`read` (`path`, `offset`, `limit`)"));
     assert!(model_content.contains("`bash`/`rg`"));
 
@@ -226,6 +224,11 @@ async fn spills_large_results_with_versioned_sidecar_and_head_tail_preview() {
     let reference: ArtifactRef =
         serde_json::from_slice(&tokio::fs::read(sidecar).await.unwrap()).unwrap();
     assert_eq!(reference, artifact);
+
+    let preview_info = serde_json::to_value(output.preview_info.unwrap()).unwrap();
+    assert!(preview_info.get("strategy").is_none());
+    assert!(preview_info.get("omitted_region").is_none());
+    assert!(preview_info.get("reason").is_none());
 }
 
 #[tokio::test]

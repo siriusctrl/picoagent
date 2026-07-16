@@ -1,9 +1,27 @@
 use std::path::Path;
 
 use picoagent::{
+    artifact::{ArtifactRef, ResultMetadata},
     model::{Message, MessageContent, Role},
     storage::{MESSAGE_FORMAT, RunDirStore, RunRecord},
 };
+
+fn result_metadata(call_id: &str, preview_bytes: usize) -> ResultMetadata {
+    ResultMetadata {
+        artifact: Some(ArtifactRef {
+            version: 1,
+            artifact_id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_owned(),
+            run_id: "run-1".to_owned(),
+            call_id: call_id.to_owned(),
+            path: ".pico/runs/run-1/artifacts/result.txt".to_owned(),
+            media_type: "text/plain; charset=utf-8".to_owned(),
+            bytes: 100,
+            sha256: "a".repeat(64),
+        }),
+        preview_bytes,
+    }
+}
 use serde_json::{Value, json};
 use tempfile::tempdir;
 use tokio::io::AsyncWriteExt;
@@ -82,6 +100,7 @@ async fn messages_are_native_chat_json_and_sidecar_preserves_stable_refs() {
                     call_id: "call_1".into(),
                     content: "file contents".into(),
                     is_error: true,
+                    metadata: result_metadata("call_1", "file contents".len()),
                 }],
             },
         )
@@ -137,6 +156,12 @@ async fn messages_are_native_chat_json_and_sidecar_preserves_stable_refs() {
         assert_eq!(item["reconstruction_sha256"].as_str().unwrap().len(), 64);
         assert!(item["layout"].is_array());
     }
+    assert_eq!(metadata[2]["layout"][0]["metadata"]["preview_bytes"], 13);
+    assert_eq!(
+        metadata[2]["layout"][0]["metadata"]["artifact"]["call_id"],
+        "call_1"
+    );
+    assert!(!lines[2].to_string().contains("artifact"));
 
     let persisted_run: Value =
         serde_json::from_slice(&tokio::fs::read(&paths.metadata).await.unwrap()).unwrap();
@@ -176,6 +201,7 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
                     name: "worker".into(),
                     status: "completed".into(),
                     content: "后台结果".into(),
+                    metadata: result_metadata("background-task-1", "后台结果".len()),
                 },
             ],
         },
@@ -205,6 +231,7 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
                 call_id: "call_opaque".into(),
                 content: "command failed".into(),
                 is_error: true,
+                metadata: ResultMetadata::empty(),
             }],
         },
     ];
@@ -303,6 +330,7 @@ async fn rejects_reconstruction_metadata_that_no_longer_matches_its_sha() {
                     call_id: "call_1".into(),
                     content: "failed".into(),
                     is_error: true,
+                    metadata: ResultMetadata::empty(),
                 }],
             },
         )

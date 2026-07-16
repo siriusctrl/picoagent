@@ -1,4 +1,4 @@
-Read a conversation-order window around a ref from `history_search`. `before`
-and `after` count nearby compacted messages; tool call/result pairs expand
-together. A spill artifact, if reported, contains this returned window only.
-This tool cannot search or modify history.
+Read exact completed messages around a ref from `history_search`. `before` and
+`after` count nearby compacted messages. Each JSONL record contains only a ref
+and the same Chat-compatible message shape stored in `messages.jsonl`. Tool
+call/result pairs may expand together. This tool cannot modify history.

@@ -1,15 +1,16 @@
+use std::collections::{HashMap, HashSet, VecDeque};
+
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Message, Role};
+use crate::model::{Message, MessageContent};
 
 mod artifacts;
 mod local;
 
-pub use artifacts::LocalRunArtifactSource;
 pub use local::LocalTrajectoryReader;
 
 const SNIPPET_CONTEXT_CHARS: usize = 120;
@@ -17,6 +18,36 @@ const HISTORY_TOOL_NAMES: [&str; 2] = ["history_read", "history_search"];
 
 pub(crate) fn is_history_tool(name: &str) -> bool {
     HISTORY_TOOL_NAMES.contains(&name)
+}
+
+/// Result-message indexes paired, by occurrence, with internal history calls.
+/// Provider call ids may be reused later by ordinary tools, so ids alone are
+/// not a safe projection key.
+pub(crate) fn history_tool_result_message_indices(
+    messages: &[TrajectoryMessage],
+) -> HashSet<usize> {
+    let mut pending = HashMap::<&str, VecDeque<bool>>::new();
+    let mut hidden = HashSet::new();
+    for (message_index, record) in messages.iter().enumerate() {
+        for content in &record.message.content {
+            match content {
+                MessageContent::ToolCall { id, name, .. } => pending
+                    .entry(id)
+                    .or_default()
+                    .push_back(is_history_tool(name)),
+                MessageContent::ToolResult { call_id, .. }
+                    if pending
+                        .get_mut(call_id.as_str())
+                        .and_then(VecDeque::pop_front)
+                        == Some(true) =>
+                {
+                    hidden.insert(message_index);
+                }
+                _ => {}
+            }
+        }
+    }
+    hidden
 }
 
 /// A completed message with a stable identity in an append-only trajectory.
@@ -28,72 +59,11 @@ pub struct TrajectoryMessage {
     pub message: Message,
 }
 
-/// The compacted prefix visible to history retrieval for one run.
-///
-/// The source, rather than the reader, owns the compaction boundary. It must
-/// not return messages that are still present in the active model context.
-#[derive(Debug, Clone, Default)]
-pub struct CompactedHistory {
-    pub messages: Vec<TrajectoryMessage>,
-}
-
-#[async_trait]
-pub trait CompactedHistorySource: Send + Sync {
-    async fn load_compacted_history(&self, run_id: &str) -> Result<CompactedHistory>;
-}
-
-/// Immutable artifact identity linked from one completed result message.
-///
-/// `sha256` is optional only for older or external trajectories whose message
-/// does not carry a picoagent artifact envelope. Implementations must not guess
-/// between multiple artifacts that share such a lookup's call id.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArtifactLookup {
-    pub call_id: String,
-    pub sha256: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ArtifactSearchMatch {
-    pub lookup: ArtifactLookup,
-    pub snippet: String,
-}
-
-/// Optional full-text access to immutable result artifacts. The trajectory
-/// projection resolves picoagent's known envelope to this identity before the
-/// storage implementation opens any sidecar or content.
-#[async_trait]
-pub trait TrajectoryArtifactSource: Send + Sync {
-    /// Opens one query-local search session. Implementations should index
-    /// cheap metadata here and defer artifact content access until `find`.
-    async fn begin_search(&self, run_id: &str) -> Result<Box<dyn TrajectoryArtifactSearch>>;
-}
-
-/// A query-local artifact index. The trajectory reader calls `find` in message
-/// order so it can stop as soon as the requested matches plus one are known.
-#[async_trait]
-pub trait TrajectoryArtifactSearch: Send {
-    async fn find(
-        &mut self,
-        lookups: &[ArtifactLookup],
-        pattern: &Regex,
-    ) -> Result<Option<ArtifactSearchMatch>>;
-}
-
 #[derive(Debug, Clone)]
 pub struct HistorySearchRequest {
     pub run_id: String,
     pub pattern: Regex,
     pub max_matches: usize,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum HistoryMatchKind {
-    Text,
-    ToolCall,
-    ToolResult,
-    BackgroundTaskResult,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -105,13 +75,9 @@ pub enum HistoryMatchSource {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HistoryMatch {
+    #[serde(rename = "ref")]
     pub message_ref: String,
-    pub seq: u64,
-    pub created_at: DateTime<Utc>,
-    pub role: Role,
-    pub kind: HistoryMatchKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_name: Option<String>,
+    #[serde(rename = "source")]
     pub match_source: HistoryMatchSource,
     pub snippet: String,
 }
@@ -131,10 +97,14 @@ pub struct HistoryReadRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct HistoryReadMessage {
+    pub message_ref: String,
+    pub message: Message,
+}
+
+#[derive(Debug, Clone)]
 pub struct HistoryReadResult {
-    pub anchor_ref: String,
-    pub messages: Vec<TrajectoryMessage>,
-    pub tool_pairs_expanded: bool,
+    pub messages: Vec<HistoryReadMessage>,
 }
 
 /// Provider-neutral read access used by the two model-facing history tools.

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -9,16 +9,27 @@ use serde_json::{Value, json};
 
 use super::{
     Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
-    ToolCall, ToolSpec,
+    ToolSpec,
     common::{ToolCallBuilder, content_text, emit_text, ensure_success, join_url, merge_usage},
 };
 use crate::events::SharedEventSink;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AnthropicCompatibleOptions {
     pub base_url: String,
     pub api_key: String,
     pub anthropic_version: String,
+}
+
+impl fmt::Debug for AnthropicCompatibleOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AnthropicCompatibleOptions")
+            .field("base_url", &self.base_url)
+            .field("api_key", &"[REDACTED]")
+            .field("anthropic_version", &self.anthropic_version)
+            .finish()
+    }
 }
 
 impl AnthropicCompatibleOptions {
@@ -58,6 +69,16 @@ impl AnthropicCompatibleProvider {
 impl ModelProvider for AnthropicCompatibleProvider {
     fn name(&self) -> &str {
         "anthropic-compatible"
+    }
+
+    fn resume_fingerprint(&self) -> String {
+        super::stable_resume_fingerprint(
+            self.name(),
+            &[
+                ("base_url", self.options.base_url.trim_end_matches('/')),
+                ("anthropic_version", &self.options.anthropic_version),
+            ],
+        )
     }
 
     async fn complete(
@@ -157,6 +178,7 @@ fn anthropic_tool_results(message: &Message) -> Vec<Value> {
                 call_id,
                 content,
                 is_error,
+                ..
             } => Some(json!({
                 "type": "tool_result",
                 "tool_use_id": call_id,
@@ -218,7 +240,7 @@ fn anthropic_tools(tools: &[ToolSpec]) -> Value {
 
 #[derive(Default)]
 struct AnthropicAccumulator {
-    text: String,
+    texts: BTreeMap<usize, String>,
     tools: BTreeMap<usize, ToolCallBuilder>,
     usage: ModelUsage,
     completed: bool,
@@ -235,24 +257,32 @@ impl AnthropicAccumulator {
             "content_block_start" => {
                 let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                 let block = &value["content_block"];
-                if block.get("type").and_then(Value::as_str) == Some("tool_use") {
-                    let builder = self.tools.entry(index).or_default();
-                    builder.id = block
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned();
-                    builder.name = block
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned();
-                    if let Some(input) = block.get("input").filter(|input| !input.is_null()) {
-                        let initial = input.to_string();
-                        if initial != "{}" {
-                            builder.arguments = initial;
+                match block.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(text) = block.get("text").and_then(Value::as_str) {
+                            self.texts.entry(index).or_default().push_str(text);
                         }
                     }
+                    Some("tool_use") => {
+                        let builder = self.tools.entry(index).or_default();
+                        builder.id = block
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned();
+                        builder.name = block
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned();
+                        if let Some(input) = block.get("input").filter(|input| !input.is_null()) {
+                            let initial = input.to_string();
+                            if initial != "{}" {
+                                builder.arguments = initial;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             "content_block_delta" => {
@@ -263,7 +293,7 @@ impl AnthropicAccumulator {
                             .pointer("/delta/text")
                             .and_then(Value::as_str)
                             .unwrap_or_default();
-                        self.text.push_str(text);
+                        self.texts.entry(index).or_default().push_str(text);
                         return Ok(Some(text.to_owned()));
                     }
                     Some("input_json_delta") => {
@@ -300,23 +330,43 @@ impl AnthropicAccumulator {
         if !self.completed {
             bail!("Anthropic stream ended before `message_stop`");
         }
-        let tool_calls = self
-            .tools
-            .into_values()
-            .map(ToolCallBuilder::finish)
-            .collect::<Result<Vec<ToolCall>>>()?;
-        Ok(ModelResponse {
-            text: self.text,
-            tool_calls,
-            assistant_content: Vec::new(),
-            usage: self.usage,
-        })
+        let mut content = BTreeMap::new();
+        for (index, text) in self.texts {
+            if !text.is_empty() {
+                content.insert(index, MessageContent::Text { text });
+            }
+        }
+        for (index, builder) in self.tools {
+            let call = builder.finish()?;
+            content.insert(
+                index,
+                MessageContent::ToolCall {
+                    id: call.id,
+                    name: call.name,
+                    arguments: call.arguments,
+                },
+            );
+        }
+        Ok(ModelResponse::new(
+            Message::assistant(content.into_values().collect()),
+            self.usage,
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn options_debug_redacts_resolved_api_key() {
+        let options =
+            AnthropicCompatibleOptions::new("https://example.test/v1", "anthropic-secret-token");
+
+        let debug = format!("{options:?}");
+        assert!(!debug.contains("anthropic-secret-token"));
+        assert!(debug.contains("[REDACTED]"));
+    }
 
     fn request_with(messages: Vec<Message>, tools: Vec<ToolSpec>) -> ModelRequest {
         ModelRequest {
@@ -371,6 +421,7 @@ mod tests {
                         call_id: "call-1".into(),
                         content: "one result".into(),
                         is_error: false,
+                        metadata: crate::artifact::ResultMetadata::empty(),
                     }],
                 },
                 Message {
@@ -379,6 +430,7 @@ mod tests {
                         call_id: "call-2".into(),
                         content: "two result".into(),
                         is_error: true,
+                        metadata: crate::artifact::ResultMetadata::empty(),
                     }],
                 },
                 Message::text(Role::Assistant, "done"),
@@ -436,6 +488,7 @@ mod tests {
                     name: "general-task".into(),
                     status: "completed".into(),
                     content: "done".into(),
+                    metadata: crate::artifact::ResultMetadata::empty(),
                 }],
             }],
             tools: Vec::new(),

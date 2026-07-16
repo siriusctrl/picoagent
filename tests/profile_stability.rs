@@ -12,7 +12,7 @@ use picoagent::{
     hooks::HookPipeline,
     memory::MemoryPaths,
     model::{
-        Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, ToolCall,
+        Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
         ToolSpec,
     },
     storage::RunDirStore,
@@ -85,16 +85,14 @@ impl ModelProvider for NoCheckpointHistoryProvider {
     ) -> Result<ModelResponse> {
         self.requests.lock().unwrap().push(request);
         match self.normal_calls.fetch_add(1, Ordering::SeqCst) {
-            0 => Ok(ModelResponse {
-                text: String::new(),
-                tool_calls: vec![ToolCall {
+            0 => Ok(ModelResponse::new(
+                Message::assistant(vec![MessageContent::ToolCall {
                     id: "call-empty-history".to_owned(),
                     name: "history_search".to_owned(),
                     arguments: json!({"pattern": "anything"}),
-                }],
-                assistant_content: Vec::new(),
-                usage: ModelUsage::default(),
-            }),
+                }]),
+                ModelUsage::default(),
+            )),
             1 => Ok(final_response("empty history confirmed")),
             unexpected => bail!("unexpected no-checkpoint model call {unexpected}"),
         }
@@ -141,18 +139,12 @@ impl ModelProvider for ProfileContractProvider {
 }
 
 fn final_response(text: &str) -> ModelResponse {
-    ModelResponse {
-        text: text.to_owned(),
-        tool_calls: Vec::new(),
-        assistant_content: Vec::new(),
-        usage: ModelUsage::default(),
-    }
+    ModelResponse::new(Message::text(Role::Assistant, text), ModelUsage::default())
 }
 
 fn spawn_response(id: &str, prompt: &str) -> ModelResponse {
-    ModelResponse {
-        text: String::new(),
-        tool_calls: vec![ToolCall {
+    ModelResponse::new(
+        Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: "spawn".to_owned(),
             arguments: json!({
@@ -160,10 +152,9 @@ fn spawn_response(id: &str, prompt: &str) -> ModelResponse {
                 "profile": "general-task",
                 "prompt": prompt,
             }),
-        }],
-        assistant_content: Vec::new(),
-        usage: ModelUsage::default(),
-    }
+        }]),
+        ModelUsage::default(),
+    )
 }
 
 #[tokio::test]
@@ -339,10 +330,10 @@ async fn history_search_without_a_checkpoint_returns_an_empty_result() {
     assert_eq!(result.final_output, "empty history confirmed");
     let trajectory = store.load_trajectory(&result.run_id).await.unwrap();
     let output = tool_result_content(&trajectory, "call-empty-history").unwrap();
-    assert!(output.contains(r#""type":"search_summary""#));
-    assert!(output.contains(r#""returned":0"#));
-    assert!(output.contains(r#""truncated":false"#));
-    assert!(!output.contains(r#""type":"match""#));
+    let output: Value = serde_json::from_str(output).unwrap();
+    assert_eq!(output["matches"], json!([]));
+    assert_eq!(output["truncated"], false);
+    assert!(output["instruction"].is_null());
     assert!(
         store
             .load_compactions(&result.run_id)

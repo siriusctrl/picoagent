@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use serde_json::Value;
 
 use super::{
-    MessageContent, ModelResponse, ModelUsage,
+    Message, MessageContent, ModelResponse, ModelUsage,
     common::{ToolCallBuilder, emit_reasoning, emit_text, ensure_success, merge_usage},
     openai_compatible::OpenAiProtocol,
 };
@@ -282,7 +282,6 @@ impl OpenAiAccumulator {
                     text: self.text.clone(),
                 });
             }
-            let mut tool_calls = Vec::new();
             for builder in self.tools.into_values() {
                 let call = builder.finish()?;
                 assistant_content.push(MessageContent::ToolCall {
@@ -290,14 +289,11 @@ impl OpenAiAccumulator {
                     name: call.name.clone(),
                     arguments: call.arguments.clone(),
                 });
-                tool_calls.push(call);
             }
-            return Ok(ModelResponse {
-                text: self.text,
-                tool_calls,
-                assistant_content,
-                usage: self.usage,
-            });
+            return Ok(ModelResponse::new(
+                Message::assistant(assistant_content),
+                self.usage,
+            ));
         }
 
         let mut assistant_items = self.provider_items;
@@ -306,7 +302,6 @@ impl OpenAiAccumulator {
                 assistant_items.insert(index, MessageContent::Text { text });
             }
         }
-        let mut tool_calls = Vec::new();
         for (index, builder) in self.tools {
             let call = builder.finish()?;
             assistant_items.insert(
@@ -317,14 +312,11 @@ impl OpenAiAccumulator {
                     arguments: call.arguments.clone(),
                 },
             );
-            tool_calls.push(call);
         }
-        Ok(ModelResponse {
-            text: self.text,
-            tool_calls,
-            assistant_content: assistant_items.into_values().collect(),
-            usage: self.usage,
-        })
+        Ok(ModelResponse::new(
+            Message::assistant(assistant_items.into_values().collect()),
+            self.usage,
+        ))
     }
 }
 
@@ -368,11 +360,11 @@ mod tests {
             .unwrap();
         let response = accumulator.finish(OpenAiProtocol::Responses).unwrap();
         assert!(matches!(
-            response.assistant_content[0],
+            response.assistant.content[0],
             MessageContent::ProviderItem { .. }
         ));
         assert!(matches!(
-            response.assistant_content[1],
+            response.assistant.content[1],
             MessageContent::ToolCall { .. }
         ));
     }

@@ -2,9 +2,12 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::model::{
-    Message, MessageContent, Role,
-    openai_chat::{ChatMessage, ChatToolCall, ChatToolCallKind},
+use crate::{
+    artifact::ResultMetadata,
+    model::{
+        Message, MessageContent, Role,
+        openai_chat::{ChatMessage, ChatToolCall, ChatToolCallKind},
+    },
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +30,7 @@ pub(super) enum ContentLayout {
     },
     ToolResult {
         is_error: bool,
+        metadata: ResultMetadata,
     },
     ProviderItem {
         provider: String,
@@ -40,6 +44,7 @@ pub(super) enum ContentLayout {
         end: usize,
         content_start: usize,
         content_end: usize,
+        metadata: ResultMetadata,
     },
 }
 
@@ -85,7 +90,9 @@ fn encode_user(message: &Message, expected: &str) -> Result<Vec<ContentLayout>> 
                 name,
                 status,
                 content,
+                metadata,
             } => {
+                validate_result_metadata(metadata, &format!("background-{task_id}"))?;
                 let prefix = format!(
                     "<background_task_result task_id=\"{task_id}\" name=\"{name}\" status=\"{status}\">\n"
                 );
@@ -105,6 +112,7 @@ fn encode_user(message: &Message, expected: &str) -> Result<Vec<ContentLayout>> 
                     end,
                     content_start,
                     content_end: content_start + content.len(),
+                    metadata: metadata.clone(),
                 });
             }
             _ => bail!("user messages contain only runtime context, text, or background results"),
@@ -179,22 +187,22 @@ fn encode_assistant(
 }
 
 fn encode_tool(message: &Message) -> Result<Vec<ContentLayout>> {
-    let mut results = message.content.iter().filter_map(|block| match block {
-        MessageContent::ToolResult { is_error, .. } => Some(*is_error),
-        _ => None,
-    });
-    let Some(is_error) = results.next() else {
+    let [
+        MessageContent::ToolResult {
+            call_id,
+            is_error,
+            metadata,
+            ..
+        },
+    ] = message.content.as_slice()
+    else {
         bail!("tool messages require exactly one tool result");
     };
-    ensure!(
-        results.next().is_none(),
-        "tool messages require exactly one tool result"
-    );
-    ensure!(
-        message.content.len() == 1,
-        "tool messages contain only one tool result"
-    );
-    Ok(vec![ContentLayout::ToolResult { is_error }])
+    validate_result_metadata(metadata, call_id)?;
+    Ok(vec![ContentLayout::ToolResult {
+        is_error: *is_error,
+        metadata: metadata.clone(),
+    }])
 }
 
 pub(super) fn decode(native: &ChatMessage, layout: Vec<ContentLayout>) -> Result<Message> {
@@ -234,6 +242,7 @@ fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageC
                 end,
                 content_start,
                 content_end,
+                metadata,
             } => {
                 ensure!(
                     start <= content_start && content_end <= end,
@@ -247,11 +256,13 @@ fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageC
                     span(content, start, end)? == expected,
                     "background result envelope disagrees with its metadata"
                 );
+                validate_result_metadata(&metadata, &format!("background-{task_id}"))?;
                 Ok(MessageContent::BackgroundTaskResult {
                     task_id,
                     name,
                     status,
                     content: raw,
+                    metadata,
                 })
             }
             _ => bail!("user message metadata contains a non-user layout entry"),
@@ -308,14 +319,27 @@ fn decode_tool(
     content: &str,
     layout: Vec<ContentLayout>,
 ) -> Result<Vec<MessageContent>> {
-    let [ContentLayout::ToolResult { is_error }] = layout.as_slice() else {
+    let [ContentLayout::ToolResult { is_error, metadata }] = layout.as_slice() else {
         bail!("tool message metadata must contain exactly one tool result");
     };
+    validate_result_metadata(metadata, call_id)?;
     Ok(vec![MessageContent::ToolResult {
         call_id: call_id.to_owned(),
         content: content.to_owned(),
         is_error: *is_error,
+        metadata: metadata.clone(),
     }])
+}
+
+fn validate_result_metadata(metadata: &ResultMetadata, call_id: &str) -> Result<()> {
+    if let Some(artifact) = &metadata.artifact {
+        ensure!(
+            artifact.call_id == call_id,
+            "result artifact call id `{}` does not match `{call_id}`",
+            artifact.call_id
+        );
+    }
+    Ok(())
 }
 
 fn append_visible(

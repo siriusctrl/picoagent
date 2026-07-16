@@ -29,6 +29,9 @@ pub enum RuntimeEventKind {
     RunStarted {
         prompt: String,
     },
+    RunResumed {
+        completed_messages: usize,
+    },
     ModelStarted {
         step: usize,
     },

@@ -14,7 +14,7 @@ use picoagent::{
     events::{NoopEventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::HookPipeline,
     model::{
-        Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, ToolCall,
+        Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
         ToolSpec,
     },
     storage::{RunDirStore, RunState},
@@ -88,32 +88,28 @@ impl ModelProvider for ScriptedCompactionProvider {
             if self.fail_summary {
                 bail!("intentional summary failure");
             }
-            return Ok(ModelResponse {
-                text: SUMMARY_TEXT.to_owned(),
-                tool_calls: Vec::new(),
-                assistant_content: Vec::new(),
-                usage: ModelUsage {
+            return Ok(ModelResponse::new(
+                Message::text(Role::Assistant, SUMMARY_TEXT),
+                ModelUsage {
                     input_tokens: Some(42),
                     output_tokens: Some(9),
                     ..ModelUsage::default()
                 },
-            });
+            ));
         }
 
         let index = self.normal_calls.fetch_add(1, Ordering::SeqCst);
         match index {
             0 => Ok(tool_call_response("call-old", "old")),
             1 => Ok(tool_call_response("call-new", "new")),
-            2 => Ok(ModelResponse {
-                text: "finished after compaction".to_owned(),
-                tool_calls: Vec::new(),
-                assistant_content: Vec::new(),
-                usage: ModelUsage {
+            2 => Ok(ModelResponse::new(
+                Message::text(Role::Assistant, "finished after compaction"),
+                ModelUsage {
                     input_tokens: Some(80),
                     output_tokens: Some(5),
                     ..ModelUsage::default()
                 },
-            }),
+            )),
             unexpected => bail!("unexpected normal model call {unexpected}"),
         }
     }
@@ -124,20 +120,18 @@ fn tool_call_response(id: &str, label: &str) -> ModelResponse {
 }
 
 fn tool_call_response_with_usage(id: &str, label: &str, input_tokens: u64) -> ModelResponse {
-    ModelResponse {
-        text: String::new(),
-        tool_calls: vec![ToolCall {
+    ModelResponse::new(
+        Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: "marker".to_owned(),
             arguments: json!({"label": label}),
-        }],
-        assistant_content: Vec::new(),
-        usage: ModelUsage {
+        }]),
+        ModelUsage {
             input_tokens: Some(input_tokens),
             output_tokens: Some(10),
             ..ModelUsage::default()
         },
-    }
+    )
 }
 
 fn runner(

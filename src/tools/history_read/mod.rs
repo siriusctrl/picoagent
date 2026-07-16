@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    model::ToolSpec,
+    model::{ToolSpec, openai_chat::project_chat_message},
     tools::{RawToolOutput, Tool, ToolContext},
     trajectory::{HistoryReadRequest, TrajectoryReader},
 };
@@ -91,34 +91,11 @@ impl Tool for HistoryReadTool {
             })
             .await?;
 
-        let first_ref = result
-            .messages
-            .first()
-            .map(|message| message.message_ref.as_str());
-        let last_ref = result
-            .messages
-            .last()
-            .map(|message| message.message_ref.as_str());
-        let mut records = Vec::with_capacity(result.messages.len() + 1);
-        records.push(serde_json::to_string(&json!({
-            "type": "history_window",
-            "anchor_ref": result.anchor_ref,
-            "requested_before": args.before,
-            "requested_after": args.after,
-            "returned": result.messages.len(),
-            "first_ref": first_ref,
-            "last_ref": last_ref,
-            "tool_pairs_expanded": result.tool_pairs_expanded,
-        }))?);
+        let mut records = Vec::with_capacity(result.messages.len());
         for record in result.messages {
             records.push(serde_json::to_string(&json!({
-                "type": "message",
-                "message_ref": record.message_ref,
-                "seq": record.seq,
-                "created_at": record.created_at,
-                "anchor": record.message_ref == result.anchor_ref,
-                "role": record.message.role,
-                "content": record.message.content,
+                "ref": record.message_ref,
+                "message": project_chat_message(&record.message),
             }))?);
         }
 
@@ -137,11 +114,10 @@ mod tests {
     use crate::{
         model::{Message, MessageContent, Role},
         trajectory::{
-            HistoryReadResult, HistorySearchRequest, HistorySearchResult, TrajectoryMessage,
+            HistoryReadMessage, HistoryReadResult, HistorySearchRequest, HistorySearchResult,
             TrajectoryReader,
         },
     };
-    use chrono::Utc;
     use tempfile::tempdir;
 
     struct StubReader;
@@ -154,25 +130,26 @@ mod tests {
 
         async fn read(&self, request: HistoryReadRequest) -> Result<HistoryReadResult> {
             Ok(HistoryReadResult {
-                anchor_ref: request.message_ref.clone(),
-                messages: vec![TrajectoryMessage {
+                messages: vec![HistoryReadMessage {
                     message_ref: request.message_ref,
-                    seq: 7,
-                    created_at: Utc::now(),
                     message: Message {
                         role: Role::Assistant,
-                        content: vec![MessageContent::Text {
-                            text: "remembered".to_owned(),
-                        }],
+                        content: vec![
+                            MessageContent::Reasoning {
+                                text: "inspect the compacted evidence".to_owned(),
+                            },
+                            MessageContent::Text {
+                                text: "remembered".to_owned(),
+                            },
+                        ],
                     },
                 }],
-                tool_pairs_expanded: false,
             })
         }
     }
 
     #[tokio::test]
-    async fn returns_an_anchor_aware_jsonl_window() {
+    async fn returns_chat_compatible_jsonl_messages() {
         let workspace = tempdir().unwrap();
         let tool = HistoryReadTool::new(Arc::new(StubReader));
         let output = tool
@@ -186,10 +163,19 @@ mod tests {
             )
             .await
             .unwrap();
-        let lines = String::from_utf8(output.content).unwrap();
-        assert!(lines.contains(r#""anchor_ref":"msg-7""#));
-        assert!(lines.contains(r#""anchor":true"#));
-        assert!(lines.contains("remembered"));
+        let line: Value = serde_json::from_slice(&output.content).unwrap();
+        assert_eq!(line["ref"], "msg-7");
+        assert_eq!(
+            line["message"],
+            json!({
+                "role": "assistant",
+                "content": "remembered",
+                "reasoning_content": "inspect the compacted evidence"
+            })
+        );
+        assert!(line.get("seq").is_none());
+        assert!(line.get("created_at").is_none());
+        assert!(line.get("anchor").is_none());
         assert_eq!(output.media_type, "application/x-ndjson; charset=utf-8");
     }
 }

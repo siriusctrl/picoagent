@@ -64,3 +64,8 @@ reminder; its task prompt names the designated path and directs targeted reads
 and writes instead. Each maintenance child has its own run directory,
 transcript, events, artifacts, and parent id, so memory changes remain auditable
 without inflating the parent context.
+
+MemoryMaintenance is synchronous direct-tool work, not a durable GeneralTask
+task record. If `memory_update` is interrupted, its child directory remains
+available for audit, but parent resume records the direct tool outcome as
+unknown and does not replay or independently resume that maintenance child.

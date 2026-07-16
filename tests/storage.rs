@@ -2,7 +2,6 @@ use picoagent::{
     events::{EventSink, RuntimeEvent, RuntimeEventKind},
     model::{Message, Role},
     storage::{CompactionCheckpoint, RunDirStore, RunRecord, RunState},
-    trajectory::CompactedHistorySource,
 };
 use tempfile::tempdir;
 
@@ -15,6 +14,7 @@ fn record(workspace: &std::path::Path) -> RunRecord {
         workspace.to_owned(),
         None,
     )
+    .with_provider_resume_fingerprint("sha256:test-provider-fingerprint")
 }
 
 #[tokio::test]
@@ -36,6 +36,18 @@ async fn persists_run_messages_events_and_final_output() {
         .unwrap();
 
     assert_eq!(updated.state, RunState::Completed);
+    assert_eq!(
+        updated.provider_resume_fingerprint,
+        "sha256:test-provider-fingerprint"
+    );
+    updated
+        .verify_provider_resume_fingerprint("sha256:test-provider-fingerprint")
+        .unwrap();
+    assert!(
+        updated
+            .verify_provider_resume_fingerprint("sha256:different")
+            .is_err()
+    );
     assert_eq!(
         store.load_run("run-1").await.unwrap().state,
         RunState::Completed
@@ -127,6 +139,19 @@ async fn rejects_writes_for_unknown_runs() {
 }
 
 #[tokio::test]
+async fn only_one_process_lease_can_advance_a_run() {
+    let workspace = tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    store.create_run(&record(workspace.path())).await.unwrap();
+
+    let lease = store.acquire_run_lease("run-1").await.unwrap();
+    let error = store.acquire_run_lease("run-1").await.unwrap_err();
+    assert!(error.to_string().contains("already being executed"));
+    drop(lease);
+    store.acquire_run_lease("run-1").await.unwrap();
+}
+
+#[tokio::test]
 async fn compaction_checkpoints_are_append_only_and_latest_wins() {
     let workspace = tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
@@ -181,8 +206,8 @@ async fn compaction_checkpoints_are_append_only_and_latest_wins() {
     assert_eq!(messages[0].message_ref, initial.message_ref);
 
     let history = store.load_compacted_history("run-1").await.unwrap();
-    assert_eq!(history.messages.len(), 1);
-    assert_eq!(history.messages[0].message_ref, older.message_ref);
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].message_ref, older.message_ref);
 }
 
 #[tokio::test]

@@ -9,7 +9,7 @@ use crate::tools::{RawToolOutput, ToolContext};
 
 mod preview;
 
-pub use preview::{OmittedRegion, PreviewInfo, PreviewReason, PreviewStrategy};
+pub use preview::{PreviewInfo, PreviewLimitation};
 use preview::{file_preview, textual_preview, unavailable_preview};
 
 const MODEL_INSPECTION_INSTRUCTION: &str = include_str!("artifact/model-instruction.md");
@@ -36,6 +36,7 @@ impl Default for ArtifactPolicy {
 
 /// A stable reference to the complete result of one tool call.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactRef {
     pub version: u32,
     /// Immutable content identity. Equal bytes produce the same artifact id.
@@ -49,6 +50,24 @@ pub struct ArtifactRef {
     pub sha256: String,
 }
 
+/// Local execution metadata for one completed result. It is persisted beside
+/// Chat-compatible messages, never inside their model-facing content.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResultMetadata {
+    pub artifact: Option<ArtifactRef>,
+    pub preview_bytes: usize,
+}
+
+impl ResultMetadata {
+    pub fn empty() -> Self {
+        Self {
+            artifact: None,
+            preview_bytes: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolOutput {
     pub preview: String,
@@ -60,6 +79,13 @@ pub struct ToolOutput {
 }
 
 impl ToolOutput {
+    pub fn result_metadata(&self) -> ResultMetadata {
+        ResultMetadata {
+            artifact: self.artifact.clone(),
+            preview_bytes: self.preview.len(),
+        }
+    }
+
     /// Text sent back to the model. The complete artifact stays out of context.
     pub fn model_content(&self) -> String {
         let Some(artifact) = &self.artifact else {
@@ -69,23 +95,23 @@ impl ToolOutput {
             .preview_info
             .as_ref()
             .expect("artifact-backed tool output must describe its preview");
-        let shown_bytes = info.shown_head_bytes + info.shown_tail_bytes;
-        let preview = if self.preview.is_empty() || info.strategy == PreviewStrategy::None {
+        let preview = if self.preview.is_empty() {
             String::new()
         } else {
             format!("\n\n[Preview]\n{}", self.preview)
         };
+        let limitation = info
+            .limitation
+            .map(PreviewLimitation::as_str)
+            .unwrap_or("none");
         format!(
-            "[Tool output]\ntruncated: {}\nreason: {}\npreview: {}; omitted_region: {}\nbytes: total={}; shown={} (head={}, tail={}); omitted={}\nartifact: {}\nmedia_type: {}\nsha256: {}\ninstruction: {}{}",
+            "[Tool output]\ntruncated: {}\nbytes: total={}; preview_head={}; preview_tail={}; omitted={}\npreview_limitation: {}\nartifact: {}\nmedia_type: {}\nsha256: {}\ninstruction: {}{}",
             self.truncated,
-            info.reason.as_str(),
-            info.strategy.as_str(),
-            info.omitted_region.as_str(),
             artifact.bytes,
-            shown_bytes,
             info.shown_head_bytes,
             info.shown_tail_bytes,
             info.omitted_bytes,
+            limitation,
             artifact.path,
             artifact.media_type,
             artifact.sha256,
@@ -189,22 +215,21 @@ impl ArtifactStore {
             .await
             .with_context(|| format!("write artifact sidecar {}", sidecar_path.display()))?;
 
-        let (preview, preview_info) = if textual {
-            let reason = if output.content.len() > self.policy.inline_limit_bytes {
-                PreviewReason::OutputExceedsInlineLimit
-            } else {
-                PreviewReason::RunPreviewBudgetLimited
-            };
+        let budget_forced_spill = output.content.len() <= self.policy.inline_limit_bytes
+            && output.content.len() > preview_budget;
+        let (preview, mut preview_info) = if textual {
             textual_preview(
                 &output.content,
                 self.policy.preview_head_bytes,
                 self.policy.preview_tail_bytes,
                 preview_budget,
-                reason,
             )
         } else {
             unavailable_preview(output.content.len() as u64, preview_budget)
         };
+        if budget_forced_spill && preview_info.limitation.is_none() {
+            preview_info.limitation = Some(PreviewLimitation::RunPreviewBudgetLimited);
+        }
         let truncated = preview_info.omitted_bytes > 0;
         Ok(ToolOutput {
             preview,
@@ -245,24 +270,23 @@ impl ArtifactStore {
         }
         let artifact = artifact_ref(context, &output.media_type, bytes, sha256, &absolute_path);
         write_sidecar(&directory, &stable_name, &artifact).await?;
-        let (preview, preview_info) = if is_textual(&output.media_type) {
-            let reason = if bytes > self.policy.inline_limit_bytes as u64 {
-                PreviewReason::OutputExceedsInlineLimit
-            } else {
-                PreviewReason::RunPreviewBudgetLimited
-            };
+        let budget_forced_spill =
+            bytes <= self.policy.inline_limit_bytes as u64 && bytes > preview_budget as u64;
+        let (preview, mut preview_info) = if is_textual(&output.media_type) {
             file_preview(
                 &absolute_path,
                 bytes,
                 self.policy.preview_head_bytes,
                 self.policy.preview_tail_bytes,
                 preview_budget,
-                reason,
             )
             .await?
         } else {
             unavailable_preview(bytes, preview_budget)
         };
+        if budget_forced_spill && preview_info.limitation.is_none() {
+            preview_info.limitation = Some(PreviewLimitation::RunPreviewBudgetLimited);
+        }
         let truncated = preview_info.omitted_bytes > 0;
         Ok(ToolOutput {
             preview,

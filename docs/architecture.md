@@ -89,8 +89,10 @@ Picoagent-only state lives in the paired `message_metadata.jsonl` sidecar. Each
 line carries the stable message id, sequence, timestamp, SHA-256 of the exact
 Chat JSON, the layout needed to recover provider-neutral content, and a second
 SHA-256 over that reconstruction metadata. Tool-error state and opaque provider
-continuation items also remain there rather than adding private fields to the
-Chat message. `run.json` identifies the format as `openai-chat-compatible`.
+continuation items also remain there, as do structured result artifact refs and
+the exact preview-byte counts used to restore the per-run budget. None of these
+private fields are added to the Chat message. `run.json` identifies the format
+as `openai-chat-compatible`.
 
 Only complete messages are resumable. Stream deltas are emitted to live sinks
 but omitted from the persisted `events.jsonl` and are never appended as partial
@@ -111,11 +113,13 @@ cached next sequence is trusted only when both durable file lengths still match;
 it is removed before cancellable I/O and restored only after the metadata commit
 has synced.
 
-The persisted run state is intentionally coarse:
+The persisted run state is intentionally coarse; a failed or process-abandoned
+run may re-enter `running` through the explicit resume command:
 
 ```text
 queued -> running -> completed
                   `-> failed
+failed/running -> running  # explicit resume, if not already owned
 ```
 
 The loop itself is a small state machine too: inject newly completed background
@@ -130,13 +134,22 @@ Background tasks have a separate persisted state:
 ```text
 queued -> running -> completed
                   |-> failed
-                  `-> timed_out
+                  |-> timed_out
+                  |-> cancelled
+                  `-> interrupted
 ```
 
-`delivered` is orthogonal metadata indicating whether a terminal result has
-already entered the parent context. A `spawn` result is one normal tool result;
-later completion is a new user/runtime message, never a second tool result with
-the same provider call id.
+Whether a terminal result has entered the parent context is derived from the
+parent's committed `BackgroundTaskResult` messages; task JSON does not carry a
+second authoritative `delivered` flag. A `spawn` result is one normal tool
+result; later completion is a new user/runtime message, never a second tool
+result with the same provider call id.
+
+The full run holds a filesystem execution lease. Resume rebuilds the recorded
+profile, validates provider/model/workspace identity, loads the paired message
+log and latest checkpoint, and continues after the last completed model step.
+An unpaired direct tool request becomes an explicit interrupted error result;
+it is never automatically replayed.
 
 ### Artifact storage
 
@@ -171,12 +184,12 @@ window, expanding it when necessary to preserve tool-call/result pairs. A
 future remote or database-backed trajectory can implement the same reader
 without granting the model filesystem write access.
 
-For linked local artifacts, the query opens sidecar metadata lazily in message
-order, resolves the exact digest carried by the foreground or background
-result envelope, verifies it with a bounded-memory stream, and invokes `rg`
-with bounded output. It stops after the requested newest matches plus one,
-avoiding whole-artifact heap loads and unnecessary older scans. A call id alone
-is not treated as immutable identity when multiple sidecars share it.
+For linked local artifacts, the query reads the structured `ArtifactRef` from
+the completed result's paired message metadata. It does not parse the
+model-facing preview prose or guess from a call id. The reader verifies the
+artifact with a bounded-memory stream and invokes `rg` with bounded output. It
+stops after the requested newest matches plus one, avoiding whole-artifact heap
+loads and unnecessary older scans.
 
 The launch local message source still materializes one run's trajectory JSONL
 per history query. Artifact contents remain streamed and bounded. If run sizes
@@ -219,6 +232,18 @@ artifact reference return to the parent.
 synchronous. This keeps async policy out of every individual tool schema while
 still letting the model parallelize independent work. `wait` is a bounded join;
 all background executions have a separate hard timeout.
+
+Each task record is durable coordination state only. Child messages remain in
+the child's run directory. Recovery derives delivered ids from the parent
+transcript, marks in-flight ordinary tools `interrupted` with unknown side
+effects, reconciles terminal children, and resumes queued/running children
+through the same runner.
+
+The durable child guarantee belongs to `spawn(kind="agent")` GeneralTask
+records, and the parent run is the only resume entrypoint. The synchronous
+MemoryMaintenance child inside `memory_update` is intentionally a direct-tool
+implementation detail: interruption produces an unknown direct-tool result and
+does not replay that child.
 
 ## Prompt And Cache Shape
 

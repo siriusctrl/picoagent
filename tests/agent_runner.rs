@@ -1,4 +1,11 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
@@ -9,13 +16,34 @@ use picoagent::{
     hooks::{CommandHook, HookEvent, HookPipeline},
     memory::MemoryPaths,
     model::{
-        MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role, ToolCall,
+        Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
+        ToolCall, echo::EchoProvider,
     },
-    storage::{RunDirStore, RunState},
+    storage::{RunDirStore, RunRecord, RunState},
     tools::{RawToolOutput, Tool, ToolContext, ToolRegistry, WriteTool},
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
+
+fn text_response(text: impl Into<String>, usage: ModelUsage) -> ModelResponse {
+    ModelResponse::new(Message::text(Role::Assistant, text), usage)
+}
+
+fn tool_response(calls: Vec<ToolCall>, usage: ModelUsage) -> ModelResponse {
+    ModelResponse::new(
+        Message::assistant(
+            calls
+                .into_iter()
+                .map(|call| MessageContent::ToolCall {
+                    id: call.id,
+                    name: call.name,
+                    arguments: call.arguments,
+                })
+                .collect(),
+        ),
+        usage,
+    )
+}
 
 fn first_user_text(request: &ModelRequest) -> &str {
     request
@@ -29,6 +57,412 @@ fn first_user_text(request: &ModelRequest) -> &str {
             })
         })
         .unwrap_or_default()
+}
+
+struct ResumeProvider {
+    calls: Arc<AtomicUsize>,
+    require_interrupted_result: bool,
+}
+
+#[async_trait]
+impl ModelProvider for ResumeProvider {
+    fn name(&self) -> &str {
+        "resume-scripted"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.require_interrupted_result
+            && !request.messages.iter().any(|message| {
+                message.content.iter().any(|content| match content {
+                    MessageContent::ToolResult {
+                        content, is_error, ..
+                    } => *is_error && content.contains("side effects are unknown"),
+                    _ => false,
+                })
+            })
+        {
+            bail!("resume request omitted the interrupted tool result");
+        }
+        Ok(text_response("resumed", ModelUsage::default()))
+    }
+}
+
+struct CountingTool(Arc<AtomicUsize>);
+
+#[async_trait]
+impl Tool for CountingTool {
+    fn spec(&self) -> picoagent::model::ToolSpec {
+        picoagent::model::ToolSpec {
+            name: "side_effect".to_owned(),
+            description: "Count executions".to_owned(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    async fn execute(&self, _context: ToolContext, _arguments: Value) -> Result<RawToolOutput> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(RawToolOutput::text("executed"))
+    }
+}
+
+fn resume_runner(
+    workspace: &Path,
+    store: &RunDirStore,
+    provider: ResumeProvider,
+    tools: ToolRegistry,
+) -> Arc<AgentRunner> {
+    AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(provider),
+        model: "scripted".to_owned(),
+        workspace: workspace.to_path_buf(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions::default(),
+    })
+}
+
+async fn create_interrupted_run(store: &RunDirStore, workspace: &Path, run_id: &str) {
+    store
+        .create_run(
+            &RunRecord::new(
+                run_id,
+                "resume me",
+                "resume-scripted",
+                "scripted",
+                workspace.to_path_buf(),
+                None,
+            )
+            .with_provider_resume_fingerprint(
+                ResumeProvider {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    require_interrupted_result: false,
+                }
+                .resume_fingerprint(),
+            ),
+        )
+        .await
+        .unwrap();
+    store.update_state(run_id, RunState::Running).await.unwrap();
+    store
+        .append_message(run_id, &Message::text(Role::User, "resume me"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn resume_marks_incomplete_tool_calls_interrupted_without_reexecution() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_interrupted_run(&store, workspace.path(), "resume-tool").await;
+    store
+        .append_message(
+            "resume-tool",
+            &Message::assistant(vec![MessageContent::ToolCall {
+                id: "side-effect-call".to_owned(),
+                name: "side_effect".to_owned(),
+                arguments: json!({}),
+            }]),
+        )
+        .await
+        .unwrap();
+    let model_calls = Arc::new(AtomicUsize::new(0));
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let mut tools = ToolRegistry::default();
+    tools
+        .register(Arc::new(CountingTool(tool_calls.clone())))
+        .unwrap();
+    let runner = resume_runner(
+        workspace.path(),
+        &store,
+        ResumeProvider {
+            calls: model_calls.clone(),
+            require_interrupted_result: true,
+        },
+        tools,
+    );
+
+    let result = runner.resume("resume-tool").await.unwrap();
+    assert_eq!(result.final_output, "resumed");
+    assert_eq!(model_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 0);
+    let messages = store.load_messages("resume-tool").await.unwrap();
+    assert_eq!(messages.len(), 4);
+    assert!(matches!(
+        messages[2].content.as_slice(),
+        [MessageContent::ToolResult {
+            content,
+            is_error: true,
+            metadata,
+            ..
+        }] if metadata.preview_bytes == content.len()
+    ));
+}
+
+#[tokio::test]
+async fn resume_finalizes_an_already_durable_final_assistant_without_model_replay() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_interrupted_run(&store, workspace.path(), "resume-final").await;
+    store
+        .append_message(
+            "resume-final",
+            &Message::text(Role::Assistant, "already finished"),
+        )
+        .await
+        .unwrap();
+    let model_calls = Arc::new(AtomicUsize::new(0));
+    let runner = resume_runner(
+        workspace.path(),
+        &store,
+        ResumeProvider {
+            calls: model_calls.clone(),
+            require_interrupted_result: false,
+        },
+        ToolRegistry::default(),
+    );
+
+    let result = runner.resume("resume-final").await.unwrap();
+    assert_eq!(result.final_output, "already finished");
+    assert_eq!(model_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        store.load_run("resume-final").await.unwrap().state,
+        RunState::Completed
+    );
+    let events = tokio::fs::read_to_string(store.paths("resume-final").events)
+        .await
+        .unwrap();
+    assert!(events.contains("\"type\":\"run_resumed\""));
+}
+
+#[tokio::test]
+async fn public_resume_rejects_a_child_run_in_favor_of_parent_recovery() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    store
+        .create_run(
+            &RunRecord::new(
+                "child",
+                "child work",
+                "resume-scripted",
+                "scripted",
+                workspace.path().to_path_buf(),
+                Some("parent".to_owned()),
+            )
+            .with_execution_context("general_task_leaf", 1, None)
+            .with_provider_resume_fingerprint(
+                ResumeProvider {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    require_interrupted_result: false,
+                }
+                .resume_fingerprint(),
+            ),
+        )
+        .await
+        .unwrap();
+    let runner = resume_runner(
+        workspace.path(),
+        &store,
+        ResumeProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+            require_interrupted_result: false,
+        },
+        ToolRegistry::default(),
+    );
+
+    let error = runner.resume("child").await.unwrap_err();
+    assert!(format!("{error:#}").contains("resume its parent `parent` instead"));
+}
+
+#[tokio::test]
+async fn run_end_hook_failure_does_not_downgrade_a_durable_completion() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let mut hooks = HookPipeline::new();
+    hooks.register(CommandHook::new(
+        "failing-run-end",
+        HookEvent::RunEnd,
+        "sh",
+        vec!["-c".into(), "exit 7".into()],
+    ));
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(EchoProvider),
+        model: "echo".to_owned(),
+        workspace: workspace.path().to_path_buf(),
+        skill_catalog: String::new(),
+        tools: ToolRegistry::default(),
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks,
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions::default(),
+    });
+
+    let result = runner.run(RunRequest::root("finish once")).await.unwrap();
+    assert_eq!(result.final_output, "received: finish once");
+    assert_eq!(
+        store.load_run(&result.run_id).await.unwrap().state,
+        RunState::Completed
+    );
+    let events = tokio::fs::read_to_string(store.paths(&result.run_id).events)
+        .await
+        .unwrap();
+    assert!(events.contains("\"type\":\"run_completed\""));
+    assert!(!events.contains("\"type\":\"run_failed\""));
+}
+
+struct ResumeBudgetProvider;
+
+#[async_trait]
+impl ModelProvider for ResumeBudgetProvider {
+    fn name(&self) -> &str {
+        "resume-budget"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        let has_small_result = request.messages.iter().any(|message| {
+            message.content.iter().any(|content| {
+                matches!(content, MessageContent::ToolResult { call_id, .. } if call_id == "small-call")
+            })
+        });
+        if has_small_result {
+            return Ok(text_response("resumed with budget", ModelUsage::default()));
+        }
+        assert!(request.messages.iter().any(|message| {
+            message
+                .content
+                .iter()
+                .any(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
+        }));
+        Ok(tool_response(
+            vec![ToolCall {
+                id: "small-call".to_owned(),
+                name: "small_output".to_owned(),
+                arguments: json!({}),
+            }],
+            ModelUsage::default(),
+        ))
+    }
+}
+
+struct SmallOutputTool;
+
+#[async_trait]
+impl Tool for SmallOutputTool {
+    fn spec(&self) -> picoagent::model::ToolSpec {
+        picoagent::model::ToolSpec {
+            name: "small_output".to_owned(),
+            description: "Return fifteen bytes".to_owned(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    async fn execute(&self, _context: ToolContext, _arguments: Value) -> Result<RawToolOutput> {
+        Ok(RawToolOutput::text("s".repeat(15)))
+    }
+}
+
+#[tokio::test]
+async fn resume_keeps_preview_budget_reserved_for_undelivered_tasks() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let run_id = "resume-budget";
+    store
+        .create_run(
+            &RunRecord::new(
+                run_id,
+                "resume with a completed task",
+                ResumeBudgetProvider.name(),
+                "scripted",
+                workspace.path().to_path_buf(),
+                None,
+            )
+            .with_provider_resume_fingerprint(ResumeBudgetProvider.resume_fingerprint()),
+        )
+        .await
+        .unwrap();
+    store.update_state(run_id, RunState::Running).await.unwrap();
+    store
+        .append_message(
+            run_id,
+            &Message::text(Role::User, "resume with a completed task"),
+        )
+        .await
+        .unwrap();
+    let task_directory = store.paths(run_id).directory.join("tasks");
+    tokio::fs::create_dir_all(&task_directory).await.unwrap();
+    tokio::fs::write(
+        task_directory.join("reserved.json"),
+        serde_json::to_vec_pretty(&json!({
+            "version": 2,
+            "id": "reserved",
+            "kind": "tool",
+            "name": "earlier-tool",
+            "state": "completed",
+            "result": {
+                "content": "u".repeat(20),
+                "metadata": { "artifact": null, "preview_bytes": 20 }
+            },
+            "error": null,
+            "child_run_id": null,
+            "prompt": null,
+            "timeout_seconds": 60,
+            "created_at": chrono::Utc::now()
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let mut tools = ToolRegistry::default();
+    tools.register(Arc::new(SmallOutputTool)).unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(ResumeBudgetProvider),
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_path_buf(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::new(ArtifactPolicy {
+            inline_limit_bytes: 100,
+            max_inline_bytes_per_run: 30,
+            preview_head_bytes: 8,
+            preview_tail_bytes: 8,
+        }),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions::default(),
+    });
+
+    let result = runner.resume(run_id).await.unwrap();
+    assert_eq!(result.final_output, "resumed with budget");
+    let messages = store.load_messages(run_id).await.unwrap();
+    assert!(messages.iter().any(|message| {
+        message.content.iter().any(|content| {
+            matches!(
+                content,
+                MessageContent::ToolResult {
+                    call_id,
+                    metadata,
+                    ..
+                } if call_id == "small-call" && metadata.artifact.is_some()
+            )
+        })
+    }));
 }
 
 struct FileProducingProvider;
@@ -51,34 +485,30 @@ impl ModelProvider for FileProducingProvider {
                 .any(|content| matches!(content, MessageContent::ToolResult { .. }))
         });
         if has_result {
-            Ok(ModelResponse {
-                text: "finished".to_owned(),
-                tool_calls: Vec::new(),
-                assistant_content: vec![
+            Ok(ModelResponse::new(
+                Message::assistant(vec![
                     MessageContent::Reasoning {
                         text: "finish reasoning".to_owned(),
                     },
                     MessageContent::Text {
                         text: "finished".to_owned(),
                     },
-                ],
-                usage: ModelUsage {
+                ]),
+                ModelUsage {
                     input_tokens: Some(12),
                     output_tokens: Some(2),
                     cached_input_tokens: Some(8),
                     reasoning_tokens: Some(3),
                 },
-            })
+            ))
         } else {
             let call = ToolCall {
                 id: "large-call".to_owned(),
                 name: "large_output".to_owned(),
                 arguments: json!({}),
             };
-            Ok(ModelResponse {
-                text: String::new(),
-                tool_calls: vec![call.clone()],
-                assistant_content: vec![
+            Ok(ModelResponse::new(
+                Message::assistant(vec![
                     MessageContent::Reasoning {
                         text: "tool reasoning".to_owned(),
                     },
@@ -87,14 +517,14 @@ impl ModelProvider for FileProducingProvider {
                         name: call.name,
                         arguments: call.arguments,
                     },
-                ],
-                usage: ModelUsage {
+                ]),
+                ModelUsage {
                     input_tokens: Some(10),
                     output_tokens: Some(1),
                     cached_input_tokens: Some(6),
                     reasoning_tokens: Some(2),
                 },
-            })
+            ))
         }
     }
 }
@@ -210,9 +640,8 @@ impl ModelProvider for DelegatingProvider {
             bail!("scripted child failure");
         }
         if first_user == "spawn work" && !has_result {
-            return Ok(ModelResponse {
-                text: String::new(),
-                tool_calls: vec![
+            return Ok(tool_response(
+                vec![
                     ToolCall {
                         id: "spawn-one".to_owned(),
                         name: "spawn".to_owned(),
@@ -232,16 +661,13 @@ impl ModelProvider for DelegatingProvider {
                         }),
                     },
                 ],
-                assistant_content: Vec::new(),
-                usage: ModelUsage::default(),
-            });
+                ModelUsage::default(),
+            ));
         }
-        Ok(ModelResponse {
-            text: format!("done: {first_user}"),
-            tool_calls: Vec::new(),
-            assistant_content: Vec::new(),
-            usage: ModelUsage::default(),
-        })
+        Ok(text_response(
+            format!("done: {first_user}"),
+            ModelUsage::default(),
+        ))
     }
 }
 
@@ -311,6 +737,94 @@ async fn subagents_reuse_the_runner_and_report_failed_children() {
     assert!(Path::new(&store.paths(&parent.run_id).final_output).is_file());
 }
 
+struct LastStepBackgroundProvider;
+
+#[async_trait]
+impl ModelProvider for LastStepBackgroundProvider {
+    fn name(&self) -> &str {
+        "last-step-background"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        let first_user = first_user_text(&request);
+        if first_user == "slow child" {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            return Ok(text_response("child result", ModelUsage::default()));
+        }
+        let has_spawn_result = request.messages.iter().any(|message| {
+            message.content.iter().any(|content| {
+                matches!(content, MessageContent::ToolResult { call_id, .. } if call_id == "spawn-edge")
+            })
+        });
+        let has_background_result = request.messages.iter().any(|message| {
+            message
+                .content
+                .iter()
+                .any(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
+        });
+        if !has_spawn_result {
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "spawn-edge".to_owned(),
+                    name: "spawn".to_owned(),
+                    arguments: json!({
+                        "kind": "agent",
+                        "profile": "general-task",
+                        "prompt": "slow child"
+                    }),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        Ok(text_response(
+            if has_background_result {
+                "parent consumed child result"
+            } else {
+                "premature final"
+            },
+            ModelUsage::default(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn last_step_background_completion_gets_one_reconciliation_call() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(LastStepBackgroundProvider),
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_path_buf(),
+        skill_catalog: String::new(),
+        tools: ToolRegistry::default(),
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions {
+            max_steps: 2,
+            max_parallel_model_calls: 2,
+            ..RunnerOptions::default()
+        },
+    });
+
+    let result = runner.run(RunRequest::root("edge parent")).await.unwrap();
+    assert_eq!(result.final_output, "parent consumed child result");
+    let messages = store.load_messages(&result.run_id).await.unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message.role == Role::Assistant)
+            .count(),
+        3
+    );
+}
+
 struct SlowOutputTool;
 
 #[async_trait]
@@ -357,12 +871,7 @@ impl ModelProvider for WaitingProvider {
             .iter()
             .any(|(call_id, _)| *call_id == "wait-call")
         {
-            return Ok(ModelResponse {
-                text: "joined".to_owned(),
-                tool_calls: Vec::new(),
-                assistant_content: Vec::new(),
-                usage: ModelUsage::default(),
-            });
+            return Ok(text_response("joined", ModelUsage::default()));
         }
         if let Some((_, content)) = tool_results
             .iter()
@@ -372,20 +881,17 @@ impl ModelProvider for WaitingProvider {
                 .as_str()
                 .unwrap_or_default()
                 .to_owned();
-            return Ok(ModelResponse {
-                text: String::new(),
-                tool_calls: vec![ToolCall {
+            return Ok(tool_response(
+                vec![ToolCall {
                     id: "wait-call".to_owned(),
                     name: "wait".to_owned(),
-                    arguments: json!({"task_ids": [task_id], "timeout_seconds": 1}),
+                    arguments: json!({"task_ids": [task_id]}),
                 }],
-                assistant_content: Vec::new(),
-                usage: ModelUsage::default(),
-            });
+                ModelUsage::default(),
+            ));
         }
-        Ok(ModelResponse {
-            text: String::new(),
-            tool_calls: vec![ToolCall {
+        Ok(tool_response(
+            vec![ToolCall {
                 id: "spawn-call".to_owned(),
                 name: "spawn".to_owned(),
                 arguments: json!({
@@ -394,9 +900,8 @@ impl ModelProvider for WaitingProvider {
                     "arguments": {}
                 }),
             }],
-            assistant_content: Vec::new(),
-            usage: ModelUsage::default(),
-        })
+            ModelUsage::default(),
+        ))
     }
 }
 
@@ -442,7 +947,7 @@ async fn wait_joins_a_background_tool_without_duplicate_result_injection() {
     assert_eq!(result.final_output, "joined");
     let messages = store.load_messages(&result.run_id).await.unwrap();
     assert!(
-        !messages
+        messages
             .iter()
             .flat_map(|message| &message.content)
             .any(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
@@ -456,7 +961,7 @@ async fn wait_joins_a_background_tool_without_duplicate_result_injection() {
         .path();
     let task: Value = serde_json::from_slice(&tokio::fs::read(task_path).await.unwrap()).unwrap();
     assert_eq!(task["state"], "completed");
-    assert_eq!(task["delivered"], true);
+    assert!(task.get("delivered").is_none());
     let events = tokio::fs::read_to_string(store.paths(&result.run_id).events)
         .await
         .unwrap();
@@ -509,16 +1014,14 @@ impl ModelProvider for FailingParentProvider {
         {
             bail!("scripted parent failure");
         }
-        Ok(ModelResponse {
-            text: String::new(),
-            tool_calls: vec![ToolCall {
+        Ok(tool_response(
+            vec![ToolCall {
                 id: "spawn-hanging".to_owned(),
                 name: "spawn".to_owned(),
                 arguments: json!({"kind": "tool", "tool": "hanging", "arguments": {}}),
             }],
-            assistant_content: Vec::new(),
-            usage: ModelUsage::default(),
-        })
+            ModelUsage::default(),
+        ))
     }
 }
 
@@ -561,11 +1064,72 @@ async fn parent_failure_aborts_and_settles_background_tasks() {
         .unwrap()
         .path();
     let task: Value = serde_json::from_slice(&tokio::fs::read(task_path).await.unwrap()).unwrap();
-    assert_eq!(task["state"], "failed");
+    assert_eq!(task["state"], "cancelled");
     assert!(task["error"].as_str().unwrap().contains("parent run ended"));
 }
 
 struct MemoryTimeoutProvider;
+
+struct SlowModelProvider;
+
+#[async_trait]
+impl ModelProvider for SlowModelProvider {
+    fn name(&self) -> &str {
+        "slow-model"
+    }
+
+    async fn complete(
+        &self,
+        _request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        Ok(text_response("too late", ModelUsage::default()))
+    }
+}
+
+#[tokio::test]
+async fn model_requests_have_a_runtime_deadline() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(SlowModelProvider),
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_path_buf(),
+        skill_catalog: String::new(),
+        tools: ToolRegistry::default(),
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions {
+            model_request_timeout_seconds: 1,
+            ..RunnerOptions::default()
+        },
+    });
+
+    let error = runner
+        .run(RunRequest::root("wait forever"))
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("model call exceeded 1 seconds"),
+        "{error:#}"
+    );
+    let run_id = std::fs::read_dir(workspace.path().join(".pico/runs"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        store.load_run(&run_id).await.unwrap().state,
+        RunState::Failed
+    );
+}
 
 #[async_trait]
 impl ModelProvider for MemoryTimeoutProvider {
@@ -587,23 +1151,19 @@ impl ModelProvider for MemoryTimeoutProvider {
             .iter()
             .any(|message| message.role == Role::Tool)
         {
-            return Ok(ModelResponse {
-                text: "continued after timeout".to_owned(),
-                tool_calls: Vec::new(),
-                assistant_content: Vec::new(),
-                usage: ModelUsage::default(),
-            });
+            return Ok(text_response(
+                "continued after timeout",
+                ModelUsage::default(),
+            ));
         }
-        Ok(ModelResponse {
-            text: String::new(),
-            tool_calls: vec![ToolCall {
+        Ok(tool_response(
+            vec![ToolCall {
                 id: "memory-call".to_owned(),
                 name: "memory_update".to_owned(),
                 arguments: json!({"scope": "project", "instruction": "remember this"}),
             }],
-            assistant_content: Vec::new(),
-            usage: ModelUsage::default(),
-        })
+            ModelUsage::default(),
+        ))
     }
 }
 
@@ -666,21 +1226,15 @@ impl ModelProvider for MemorySuccessProvider {
             .any(|message| message.role == Role::Tool);
         if first_user.starts_with("Update durable") {
             if has_tool_result {
-                return Ok(ModelResponse {
-                    text: "updated profile.md".to_owned(),
-                    tool_calls: Vec::new(),
-                    assistant_content: Vec::new(),
-                    usage: ModelUsage::default(),
-                });
+                return Ok(text_response("updated profile.md", ModelUsage::default()));
             }
             let root = first_user
                 .split_once("stored at ")
                 .and_then(|(_, rest)| rest.split_once(".\n\nInstruction"))
                 .map(|(path, _)| path)
                 .unwrap_or_default();
-            return Ok(ModelResponse {
-                text: String::new(),
-                tool_calls: vec![ToolCall {
+            return Ok(tool_response(
+                vec![ToolCall {
                     id: "write-memory".to_owned(),
                     name: "write".to_owned(),
                     arguments: json!({
@@ -688,21 +1242,14 @@ impl ModelProvider for MemorySuccessProvider {
                         "content": "# Preferences\n\n- Prefers concise output.\n"
                     }),
                 }],
-                assistant_content: Vec::new(),
-                usage: ModelUsage::default(),
-            });
+                ModelUsage::default(),
+            ));
         }
         if has_tool_result {
-            return Ok(ModelResponse {
-                text: "remembered".to_owned(),
-                tool_calls: Vec::new(),
-                assistant_content: Vec::new(),
-                usage: ModelUsage::default(),
-            });
+            return Ok(text_response("remembered", ModelUsage::default()));
         }
-        Ok(ModelResponse {
-            text: String::new(),
-            tool_calls: vec![ToolCall {
+        Ok(tool_response(
+            vec![ToolCall {
                 id: "memory-call".to_owned(),
                 name: "memory_update".to_owned(),
                 arguments: json!({
@@ -710,9 +1257,8 @@ impl ModelProvider for MemorySuccessProvider {
                     "instruction": "Record that the user prefers concise output"
                 }),
             }],
-            assistant_content: Vec::new(),
-            usage: ModelUsage::default(),
-        })
+            ModelUsage::default(),
+        ))
     }
 }
 

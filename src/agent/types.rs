@@ -17,6 +17,8 @@ pub struct RunnerOptions {
     pub max_steps: usize,
     pub max_subagent_depth: usize,
     pub max_parallel_tasks: usize,
+    pub max_parallel_model_calls: usize,
+    pub model_request_timeout_seconds: u64,
     pub max_output_tokens: Option<u32>,
     pub direct_tool_timeout_seconds: u64,
     pub task_execution_timeout_seconds: u64,
@@ -51,6 +53,8 @@ impl Default for RunnerOptions {
             max_steps: 32,
             max_subagent_depth: 1,
             max_parallel_tasks: 4,
+            max_parallel_model_calls: 1,
+            model_request_timeout_seconds: 300,
             max_output_tokens: None,
             direct_tool_timeout_seconds: 300,
             task_execution_timeout_seconds: 300,
@@ -139,6 +143,40 @@ impl RunRequest {
             depth: 0,
             additional_instructions: Some(additional_instructions.into()),
             profile: RunProfile::MemoryMaintenance,
+        }
+    }
+
+    pub(crate) fn from_stored(
+        prompt: String,
+        parent_run_id: Option<String>,
+        depth: usize,
+        additional_instructions: Option<String>,
+        profile: &str,
+    ) -> anyhow::Result<Self> {
+        let profile = match profile {
+            "root" => RunProfile::Root,
+            "general_task_delegating" => RunProfile::GeneralTaskDelegating,
+            "general_task_leaf" => RunProfile::GeneralTaskLeaf,
+            "memory_maintenance" => RunProfile::MemoryMaintenance,
+            value => anyhow::bail!("unknown stored run profile `{value}`"),
+        };
+        Ok(Self {
+            prompt,
+            parent_run_id,
+            depth,
+            additional_instructions,
+            profile,
+        })
+    }
+}
+
+impl RunProfile {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::GeneralTaskDelegating => "general_task_delegating",
+            Self::GeneralTaskLeaf => "general_task_leaf",
+            Self::MemoryMaintenance => "memory_maintenance",
         }
     }
 }

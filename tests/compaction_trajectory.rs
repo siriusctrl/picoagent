@@ -17,7 +17,7 @@ use picoagent::{
     events::{NoopEventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::HookPipeline,
     model::{
-        Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, ToolCall,
+        Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
         ToolSpec,
     },
     storage::RunDirStore,
@@ -87,17 +87,15 @@ impl ModelProvider for InspectableTrajectoryProvider {
         let is_summary = request.tools.is_empty();
         self.requests.lock().unwrap().push(request.clone());
         if is_summary {
-            return Ok(ModelResponse {
-                text: SUMMARY_TEXT.to_owned(),
-                tool_calls: Vec::new(),
-                assistant_content: Vec::new(),
-                usage: ModelUsage {
+            return Ok(ModelResponse::new(
+                Message::text(Role::Assistant, SUMMARY_TEXT),
+                ModelUsage {
                     input_tokens: Some(42),
                     output_tokens: Some(9),
                     cached_input_tokens: Some(3),
                     reasoning_tokens: None,
                 },
-            });
+            ));
         }
 
         match self.normal_calls.fetch_add(1, Ordering::SeqCst) {
@@ -121,37 +119,33 @@ impl ModelProvider for InspectableTrajectoryProvider {
                 }),
                 100,
             )),
-            4 => Ok(ModelResponse {
-                text: "finished after history recovery".to_owned(),
-                tool_calls: Vec::new(),
-                assistant_content: Vec::new(),
-                usage: ModelUsage {
+            4 => Ok(ModelResponse::new(
+                Message::text(Role::Assistant, "finished after history recovery"),
+                ModelUsage {
                     input_tokens: Some(120),
                     output_tokens: Some(6),
                     cached_input_tokens: Some(60),
                     reasoning_tokens: None,
                 },
-            }),
+            )),
             unexpected => bail!("unexpected inspectable normal model call {unexpected}"),
         }
     }
 }
 
 fn tool_call_response(id: &str, label: &str, input_tokens: u64) -> ModelResponse {
-    ModelResponse {
-        text: String::new(),
-        tool_calls: vec![ToolCall {
+    ModelResponse::new(
+        Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: "marker".to_owned(),
             arguments: json!({"label": label}),
-        }],
-        assistant_content: Vec::new(),
-        usage: ModelUsage {
+        }]),
+        ModelUsage {
             input_tokens: Some(input_tokens),
             output_tokens: Some(10),
             ..ModelUsage::default()
         },
-    }
+    )
 }
 
 fn history_tool_call_response(
@@ -160,21 +154,19 @@ fn history_tool_call_response(
     arguments: Value,
     input_tokens: u64,
 ) -> ModelResponse {
-    ModelResponse {
-        text: String::new(),
-        tool_calls: vec![ToolCall {
+    ModelResponse::new(
+        Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: name.to_owned(),
             arguments,
-        }],
-        assistant_content: Vec::new(),
-        usage: ModelUsage {
+        }]),
+        ModelUsage {
             input_tokens: Some(input_tokens),
             output_tokens: Some(10),
             cached_input_tokens: Some(input_tokens / 2),
             reasoning_tokens: None,
         },
-    }
+    )
 }
 
 fn history_match_ref(request: &ModelRequest) -> Result<String> {
@@ -192,15 +184,9 @@ fn history_match_ref(request: &ModelRequest) -> Result<String> {
     let Some(search_result) = search_result else {
         bail!("history_read request was prepared without a history_search result")
     };
-    for line in search_result.lines() {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if record["type"] == "match"
-            && let Some(message_ref) = record["message_ref"].as_str()
-        {
-            return Ok(message_ref.to_owned());
-        }
+    let record: Value = serde_json::from_str(search_result)?;
+    if let Some(message_ref) = record["matches"][0]["ref"].as_str() {
+        return Ok(message_ref.to_owned());
     }
     bail!("history_search result did not contain a message ref")
 }
@@ -317,7 +303,8 @@ async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
 
     let trajectory = store.load_trajectory(&result.run_id).await.unwrap();
     let search_output = tool_result_content(&trajectory, "call-history-search").unwrap();
-    assert!(search_output.contains(r#""type":"match""#));
+    assert!(search_output.contains(r#""matches":[{"#));
+    assert!(search_output.contains(r#""ref":"msg_"#));
     assert!(search_output.contains("result-old"));
     let recovered_ref = history_match_ref(normal_requests[3]).unwrap();
     assert!(has_tool_call(
@@ -331,7 +318,9 @@ async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
         "history_read"
     ));
     let read_output = tool_result_content(&trajectory, "call-history-read").unwrap();
-    assert!(read_output.contains(r#""type":"history_window""#));
+    assert!(read_output.lines().any(|line| {
+        serde_json::from_str::<Value>(line).is_ok_and(|record| record["message"]["role"] == "tool")
+    }));
     assert!(read_output.contains("result-old"));
 
     let checkpoints = store.load_compactions(&result.run_id).await.unwrap();
@@ -455,11 +444,7 @@ async fn write_trajectory_capture(
         .ok_or_else(|| anyhow::anyhow!("missing retained history_search result"))?;
     let read_output = tool_result_content(trajectory, "call-history-read")
         .ok_or_else(|| anyhow::anyhow!("missing retained history_read result"))?;
-    tokio::fs::write(
-        history_directory.join("history_search.jsonl"),
-        search_output,
-    )
-    .await?;
+    tokio::fs::write(history_directory.join("history_search.json"), search_output).await?;
     tokio::fs::write(history_directory.join("history_read.jsonl"), read_output).await?;
 
     let normal_requests = requests
@@ -490,7 +475,7 @@ async fn write_trajectory_capture(
         ],
         "request_files": request_files,
         "history_files": [
-            "history/history_search.jsonl",
+            "history/history_search.json",
             "history/history_read.jsonl",
         ],
     });

@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -9,20 +9,45 @@ use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use crate::{
-    artifact::ArtifactRef,
+    artifact::{ArtifactRef, ResultMetadata},
     model::{Message, MessageContent, Role},
 };
 
 use super::*;
+use super::{
+    artifacts::LocalRunArtifactSource,
+    local::{read_messages, search_messages},
+};
 
 struct StaticSource(Vec<TrajectoryMessage>);
 
+struct StaticReader {
+    messages: Vec<TrajectoryMessage>,
+    artifact_workspace: Option<PathBuf>,
+}
+
 #[async_trait]
-impl CompactedHistorySource for StaticSource {
-    async fn load_compacted_history(&self, _run_id: &str) -> Result<CompactedHistory> {
-        Ok(CompactedHistory {
-            messages: self.0.clone(),
-        })
+impl TrajectoryReader for StaticReader {
+    async fn search(&self, request: HistorySearchRequest) -> Result<HistorySearchResult> {
+        let mut artifact_search = match &self.artifact_workspace {
+            Some(workspace) => Some(
+                LocalRunArtifactSource::new(workspace)
+                    .begin_search(&request.run_id)
+                    .await?,
+            ),
+            None => None,
+        };
+        search_messages(
+            self.messages.clone(),
+            artifact_search.as_mut(),
+            &request.pattern,
+            request.max_matches,
+        )
+        .await
+    }
+
+    async fn read(&self, request: HistoryReadRequest) -> Result<HistoryReadResult> {
+        read_messages(self.messages.clone(), request)
     }
 }
 
@@ -35,8 +60,18 @@ fn record(seq: u64, role: Role, content: Vec<MessageContent>) -> TrajectoryMessa
     }
 }
 
-fn reader(messages: Vec<TrajectoryMessage>) -> LocalTrajectoryReader {
-    LocalTrajectoryReader::new(Arc::new(StaticSource(messages)))
+fn reader(messages: Vec<TrajectoryMessage>) -> StaticReader {
+    StaticReader {
+        messages,
+        artifact_workspace: None,
+    }
+}
+
+fn reader_with_artifacts(source: StaticSource, workspace: &Path) -> StaticReader {
+    StaticReader {
+        messages: source.0,
+        artifact_workspace: Some(workspace.to_owned()),
+    }
 }
 
 async fn write_artifact(
@@ -72,22 +107,11 @@ async fn write_artifact(
     artifact
 }
 
-fn current_artifact_envelope(artifact: &ArtifactRef) -> String {
-    format!(
-        "[Tool output]\ntruncated: true\nreason: output_exceeds_inline_limit\npreview: head_tail; omitted_region: middle\nbytes: total={}; shown=8 (head=4, tail=4); omitted={}\nartifact: {}\nmedia_type: {}\nsha256: {}\ninstruction: inspect the immutable artifact",
-        artifact.bytes,
-        artifact.bytes.saturating_sub(8),
-        artifact.path,
-        artifact.media_type,
-        artifact.sha256,
-    )
-}
-
-fn legacy_artifact_envelope(artifact: &ArtifactRef) -> String {
-    format!(
-        "bounded preview\n\n[Full output artifact]\ntruncated: true\npath: {}\nmedia_type: {}\nbytes: {}\nsha256: {}\nUse read with offset/limit or bash with rg to inspect it.",
-        artifact.path, artifact.media_type, artifact.bytes, artifact.sha256,
-    )
+fn artifact_metadata(artifact: &ArtifactRef) -> ResultMetadata {
+    ResultMetadata {
+        artifact: Some(artifact.clone()),
+        preview_bytes: "bounded preview".len(),
+    }
 }
 
 #[tokio::test]
@@ -154,6 +178,7 @@ async fn search_supports_inline_regex_flags_and_hides_internal_content() {
                 call_id: "internal-call".to_owned(),
                 content: "Visible recursive output".to_owned(),
                 is_error: false,
+                metadata: ResultMetadata::empty(),
             }],
         ),
     ]);
@@ -206,6 +231,7 @@ async fn read_returns_a_contiguous_window_and_keeps_tool_pairs() {
                 call_id: "call-1".to_owned(),
                 content: "ok".to_owned(),
                 is_error: false,
+                metadata: ResultMetadata::empty(),
             }],
         ),
         record(
@@ -235,7 +261,6 @@ async fn read_returns_a_contiguous_window_and_keeps_tool_pairs() {
             .collect::<Vec<_>>(),
         ["msg-2", "msg-3"]
     );
-    assert!(result.tool_pairs_expanded);
 }
 
 #[tokio::test]
@@ -257,6 +282,7 @@ async fn read_pairs_reused_call_ids_by_occurrence() {
                 call_id: "reused".to_owned(),
                 content: "old result".to_owned(),
                 is_error: false,
+                metadata: ResultMetadata::empty(),
             }],
         ),
         record(
@@ -275,6 +301,7 @@ async fn read_pairs_reused_call_ids_by_occurrence() {
                 call_id: "reused".to_owned(),
                 content: "new result".to_owned(),
                 is_error: false,
+                metadata: ResultMetadata::empty(),
             }],
         ),
     ]);
@@ -297,7 +324,102 @@ async fn read_pairs_reused_call_ids_by_occurrence() {
             .collect::<Vec<_>>(),
         ["msg-3", "msg-4"]
     );
-    assert!(result.tool_pairs_expanded);
+}
+
+#[tokio::test]
+async fn history_projection_hides_only_the_matching_reused_call_occurrence() {
+    let reader = reader(vec![
+        record(
+            1,
+            Role::Assistant,
+            vec![MessageContent::ToolCall {
+                id: "reused".to_owned(),
+                name: "history_search".to_owned(),
+                arguments: json!({"pattern": "old"}),
+            }],
+        ),
+        record(
+            2,
+            Role::Tool,
+            vec![MessageContent::ToolResult {
+                call_id: "reused".to_owned(),
+                content: "derived internal result".to_owned(),
+                is_error: false,
+                metadata: ResultMetadata::empty(),
+            }],
+        ),
+        record(
+            3,
+            Role::Assistant,
+            vec![MessageContent::ToolCall {
+                id: "reused".to_owned(),
+                name: "bash".to_owned(),
+                arguments: json!({"command": "real work"}),
+            }],
+        ),
+        record(
+            4,
+            Role::Tool,
+            vec![MessageContent::ToolResult {
+                call_id: "reused".to_owned(),
+                content: "ordinary durable result".to_owned(),
+                is_error: false,
+                metadata: ResultMetadata::empty(),
+            }],
+        ),
+    ]);
+
+    let found = reader
+        .search(HistorySearchRequest {
+            run_id: "run".to_owned(),
+            pattern: Regex::new("ordinary durable result").unwrap(),
+            max_matches: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(found.matches.len(), 1);
+    assert_eq!(found.matches[0].message_ref, "msg-4");
+
+    let hidden = reader
+        .search(HistorySearchRequest {
+            run_id: "run".to_owned(),
+            pattern: Regex::new("derived internal result").unwrap(),
+            max_matches: 10,
+        })
+        .await
+        .unwrap();
+    assert!(hidden.matches.is_empty());
+}
+
+#[tokio::test]
+async fn read_preserves_reasoning_in_exact_assistant_messages() {
+    let reader = reader(vec![record(
+        1,
+        Role::Assistant,
+        vec![
+            MessageContent::Reasoning {
+                text: "inspect the omitted evidence".to_owned(),
+            },
+            MessageContent::Text {
+                text: "the answer".to_owned(),
+            },
+        ],
+    )]);
+
+    let result = reader
+        .read(HistoryReadRequest {
+            run_id: "run".to_owned(),
+            message_ref: "msg-1".to_owned(),
+            before: 0,
+            after: 0,
+        })
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        &result.messages[0].message.content[0],
+        MessageContent::Reasoning { text } if text == "inspect the omitted evidence"
+    ));
 }
 
 #[tokio::test]
@@ -325,13 +447,13 @@ async fn search_matches_the_complete_tool_result_artifact() {
             Role::Tool,
             vec![MessageContent::ToolResult {
                 call_id: "call-1".to_owned(),
-                content: current_artifact_envelope(&artifact),
+                content: "bounded preview without artifact identity text".to_owned(),
                 is_error: false,
+                metadata: artifact_metadata(&artifact),
             }],
         ),
     ]);
-    let reader =
-        LocalTrajectoryReader::with_local_artifacts(Arc::new(source), workspace.path().to_owned());
+    let reader = reader_with_artifacts(source, workspace.path());
     let result = reader
         .search(HistorySearchRequest {
             run_id: "run".to_owned(),
@@ -343,7 +465,6 @@ async fn search_matches_the_complete_tool_result_artifact() {
 
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].message_ref, "msg-2");
-    assert_eq!(result.matches[0].tool_name.as_deref(), Some("bash"));
     assert_eq!(result.matches[0].match_source, HistoryMatchSource::Artifact);
     assert!(result.matches[0].snippet.contains("needle"));
 }
@@ -359,12 +480,12 @@ async fn artifact_snippet_trims_partial_multibyte_edges_without_replacement_char
         Role::Tool,
         vec![MessageContent::ToolResult {
             call_id: "call-1".to_owned(),
-            content: current_artifact_envelope(&artifact),
+            content: "bounded preview".to_owned(),
             is_error: false,
+            metadata: artifact_metadata(&artifact),
         }],
     )]);
-    let reader =
-        LocalTrajectoryReader::with_local_artifacts(Arc::new(source), workspace.path().to_owned());
+    let reader = reader_with_artifacts(source, workspace.path());
     let result = reader
         .search(HistorySearchRequest {
             run_id: "run".to_owned(),
@@ -380,18 +501,12 @@ async fn artifact_snippet_trims_partial_multibyte_edges_without_replacement_char
 }
 
 #[tokio::test]
-async fn search_stops_before_an_older_corrupt_artifact_after_limit_is_known() {
+async fn search_stops_before_an_older_missing_artifact_after_limit_is_known() {
     let workspace = tempdir().unwrap();
-    let artifact_directory = workspace.path().join(".pico/runs/run/artifacts");
-    tokio::fs::create_dir_all(&artifact_directory)
+    let old_artifact = write_artifact(workspace.path(), "run", "old-call", "unread artifact").await;
+    tokio::fs::remove_file(workspace.path().join(&old_artifact.path))
         .await
         .unwrap();
-    tokio::fs::write(
-        artifact_directory.join("old-call-deadbeef0000.artifact.json"),
-        b"this sidecar must stay unread",
-    )
-    .await
-    .unwrap();
 
     let source = StaticSource(vec![
         record(
@@ -410,6 +525,7 @@ async fn search_stops_before_an_older_corrupt_artifact_after_limit_is_known() {
                 call_id: "old-call".to_owned(),
                 content: "preview without the query".to_owned(),
                 is_error: false,
+                metadata: artifact_metadata(&old_artifact),
             }],
         ),
         record(
@@ -427,8 +543,7 @@ async fn search_stops_before_an_older_corrupt_artifact_after_limit_is_known() {
             }],
         ),
     ]);
-    let reader =
-        LocalTrajectoryReader::with_local_artifacts(Arc::new(source), workspace.path().to_owned());
+    let reader = reader_with_artifacts(source, workspace.path());
     let result = reader
         .search(HistorySearchRequest {
             run_id: "run".to_owned(),
@@ -475,8 +590,9 @@ async fn reused_call_ids_resolve_each_result_to_its_exact_artifact() {
             Role::Tool,
             vec![MessageContent::ToolResult {
                 call_id: "reused-call".to_owned(),
-                content: current_artifact_envelope(&old_artifact),
+                content: "old bounded preview".to_owned(),
                 is_error: false,
+                metadata: artifact_metadata(&old_artifact),
             }],
         ),
         record(
@@ -493,13 +609,13 @@ async fn reused_call_ids_resolve_each_result_to_its_exact_artifact() {
             Role::Tool,
             vec![MessageContent::ToolResult {
                 call_id: "reused-call".to_owned(),
-                content: current_artifact_envelope(&new_artifact),
+                content: "new bounded preview".to_owned(),
                 is_error: false,
+                metadata: artifact_metadata(&new_artifact),
             }],
         ),
     ]);
-    let reader =
-        LocalTrajectoryReader::with_local_artifacts(Arc::new(source), workspace.path().to_owned());
+    let reader = reader_with_artifacts(source, workspace.path());
 
     let result = reader
         .search(HistorySearchRequest {
@@ -512,13 +628,11 @@ async fn reused_call_ids_resolve_each_result_to_its_exact_artifact() {
 
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].message_ref, "msg-2");
-    assert_eq!(result.matches[0].tool_name.as_deref(), Some("bash"));
-    assert_eq!(result.matches[0].kind, HistoryMatchKind::ToolResult);
     assert_eq!(result.matches[0].match_source, HistoryMatchSource::Artifact);
 }
 
 #[tokio::test]
-async fn background_result_searches_its_full_legacy_envelope_artifact() {
+async fn background_result_searches_its_linked_full_artifact() {
     let workspace = tempdir().unwrap();
     let artifact = write_artifact(
         workspace.path(),
@@ -534,11 +648,11 @@ async fn background_result_searches_its_full_legacy_envelope_artifact() {
             task_id: "task-1".to_owned(),
             name: "bash".to_owned(),
             status: "completed".to_owned(),
-            content: legacy_artifact_envelope(&artifact),
+            content: "bounded preview".to_owned(),
+            metadata: artifact_metadata(&artifact),
         }],
     )]);
-    let reader =
-        LocalTrajectoryReader::with_local_artifacts(Arc::new(source), workspace.path().to_owned());
+    let reader = reader_with_artifacts(source, workspace.path());
 
     let result = reader
         .search(HistorySearchRequest {
@@ -551,11 +665,6 @@ async fn background_result_searches_its_full_legacy_envelope_artifact() {
 
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].message_ref, "msg-1");
-    assert_eq!(
-        result.matches[0].kind,
-        HistoryMatchKind::BackgroundTaskResult
-    );
-    assert_eq!(result.matches[0].tool_name.as_deref(), Some("bash"));
     assert_eq!(result.matches[0].match_source, HistoryMatchSource::Artifact);
 }
 
@@ -584,8 +693,9 @@ async fn plain_result_does_not_claim_a_reused_call_ids_only_artifact() {
             Role::Tool,
             vec![MessageContent::ToolResult {
                 call_id: "reused-call".to_owned(),
-                content: current_artifact_envelope(&artifact),
+                content: "bounded preview".to_owned(),
                 is_error: false,
+                metadata: artifact_metadata(&artifact),
             }],
         ),
         record(
@@ -604,11 +714,11 @@ async fn plain_result_does_not_claim_a_reused_call_ids_only_artifact() {
                 call_id: "reused-call".to_owned(),
                 content: "small inline result without an artifact envelope".to_owned(),
                 is_error: false,
+                metadata: ResultMetadata::empty(),
             }],
         ),
     ]);
-    let reader =
-        LocalTrajectoryReader::with_local_artifacts(Arc::new(source), workspace.path().to_owned());
+    let reader = reader_with_artifacts(source, workspace.path());
 
     let result = reader
         .search(HistorySearchRequest {
@@ -621,41 +731,6 @@ async fn plain_result_does_not_claim_a_reused_call_ids_only_artifact() {
 
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].message_ref, "msg-2");
-    assert_eq!(result.matches[0].tool_name.as_deref(), Some("bash"));
-}
-
-#[tokio::test]
-async fn identity_free_lookup_does_not_guess_between_sidecars() {
-    let workspace = tempdir().unwrap();
-    write_artifact(
-        workspace.path(),
-        "run",
-        "ambiguous-call",
-        "first artifact contains ambiguous needle",
-    )
-    .await;
-    write_artifact(
-        workspace.path(),
-        "run",
-        "ambiguous-call",
-        "second artifact is unrelated",
-    )
-    .await;
-    let source = LocalRunArtifactSource::new(workspace.path());
-    let mut search = source.begin_search("run").await.unwrap();
-
-    let result = search
-        .find(
-            &[ArtifactLookup {
-                call_id: "ambiguous-call".to_owned(),
-                sha256: None,
-            }],
-            &Regex::new("ambiguous needle").unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert!(result.is_none());
 }
 
 #[tokio::test]
@@ -671,12 +746,12 @@ async fn same_length_artifact_tampering_fails_integrity_check() {
         Role::Tool,
         vec![MessageContent::ToolResult {
             call_id: "call-1".to_owned(),
-            content: current_artifact_envelope(&artifact),
+            content: "bounded preview".to_owned(),
             is_error: false,
+            metadata: artifact_metadata(&artifact),
         }],
     )]);
-    let reader =
-        LocalTrajectoryReader::with_local_artifacts(Arc::new(source), workspace.path().to_owned());
+    let reader = reader_with_artifacts(source, workspace.path());
 
     let error = reader
         .search(HistorySearchRequest {

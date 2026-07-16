@@ -1,5 +1,7 @@
-use anyhow::{Context, Result, bail};
-use reqwest::Response;
+use std::{error::Error, fmt};
+
+use anyhow::{Context, Result};
+use reqwest::{Response, StatusCode};
 
 use crate::{
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
@@ -7,6 +9,31 @@ use crate::{
 };
 
 pub(crate) const ERROR_BODY_LIMIT: usize = 16 * 1024;
+
+#[derive(Debug)]
+struct HttpStatusError {
+    provider: String,
+    status: StatusCode,
+    body: String,
+}
+
+impl fmt::Display for HttpStatusError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} request failed with HTTP {}: {}",
+            self.provider, self.status, self.body
+        )
+    }
+}
+
+impl Error for HttpStatusError {}
+
+pub(crate) fn http_status(error: &anyhow::Error) -> Option<StatusCode> {
+    error
+        .downcast_ref::<HttpStatusError>()
+        .map(|error| error.status)
+}
 
 pub(crate) async fn ensure_success(response: Response, provider: &str) -> Result<Response> {
     if response.status().is_success() {
@@ -23,7 +50,12 @@ pub(crate) async fn ensure_success(response: Response, provider: &str) -> Result
         body.truncate(boundary);
         body.push_str("...[truncated]");
     }
-    bail!("{provider} request failed with HTTP {status}: {body}")
+    Err(HttpStatusError {
+        provider: provider.to_owned(),
+        status,
+        body,
+    }
+    .into())
 }
 
 pub(crate) async fn emit_text(events: &SharedEventSink, run_id: &str, text: &str) -> Result<()> {
@@ -125,6 +157,7 @@ pub(crate) fn content_text(content: &[MessageContent]) -> String {
                 name,
                 status,
                 content,
+                ..
             } => (
                 Some(format!(
                     "<background_task_result task_id=\"{task_id}\" name=\"{name}\" status=\"{status}\">\n{content}\n</background_task_result>"

@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -11,13 +12,25 @@ use serde_json::Value;
 pub(crate) const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const REFRESH_SKEW_SECONDS: u64 = 60;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OAuthCredentials {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+}
+
+impl fmt::Debug for OAuthCredentials {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OAuthCredentials")
+            .field("access_token", &"[REDACTED]")
+            .field("refresh_token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .field("account_id", &self.account_id)
+            .finish()
+    }
 }
 
 pub(crate) struct CredentialStore<'a> {
@@ -167,4 +180,24 @@ fn jwt_payload(token: &str) -> Option<Value> {
     let payload = token.split('.').nth(1)?;
     let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credentials_debug_redacts_tokens() {
+        let credentials = OAuthCredentials {
+            access_token: "access-secret".to_owned(),
+            refresh_token: "refresh-secret".to_owned(),
+            expires_at: 42,
+            account_id: Some("account".to_owned()),
+        };
+
+        let debug = format!("{credentials:?}");
+        assert!(!debug.contains("access-secret"));
+        assert!(!debug.contains("refresh-secret"));
+        assert!(debug.contains("[REDACTED]"));
+    }
 }

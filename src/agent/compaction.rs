@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
@@ -10,7 +10,7 @@ use crate::{
     events::{NoopEventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role},
     storage::{CompactionCheckpoint, RunDirStore},
-    trajectory::{TrajectoryMessage, is_history_tool},
+    trajectory::{TrajectoryMessage, history_tool_result_message_indices, is_history_tool},
 };
 
 const COMPACTION_PROMPT: &str = include_str!("../../prompts/agents/compaction.md");
@@ -27,6 +27,8 @@ pub(crate) struct CompactionAttempt<'a> {
     pub options: &'a CompactionOptions,
     pub store: &'a RunDirStore,
     pub events: &'a SharedEventSink,
+    pub model_slots: &'a tokio::sync::Semaphore,
+    pub timeout_seconds: u64,
 }
 
 pub(crate) async fn maybe_compact(
@@ -42,6 +44,8 @@ pub(crate) async fn maybe_compact(
         options,
         store,
         events,
+        model_slots,
+        timeout_seconds,
     } = attempt;
     let (Some(trigger_tokens), Some(tokens_before)) = (options.trigger_tokens, tokens_before)
     else {
@@ -76,19 +80,31 @@ pub(crate) async fn maybe_compact(
         tools: Vec::new(),
         max_output_tokens: Some(options.summary_max_output_tokens.max(1)),
     };
-    let response = provider
-        .complete(request, Arc::new(NoopEventSink))
+    let model_permit = model_slots
+        .acquire()
         .await
+        .map_err(|_| anyhow!("model concurrency limiter closed"))?;
+    let response = tokio::time::timeout(
+        Duration::from_secs(timeout_seconds),
+        provider.complete(request, Arc::new(NoopEventSink)),
+    )
+    .await;
+    drop(model_permit);
+    let response = response
+        .map_err(|_| anyhow!("compaction model call exceeded {timeout_seconds} seconds"))
+        .and_then(|response| response)
         .and_then(|response| {
-            if !response.tool_calls.is_empty() {
+            response.validate_completed()?;
+            if !response.tool_calls().is_empty() {
                 bail!("compaction model returned tool calls")
             }
-            if response.text.trim().is_empty() {
+            let summary = response.text();
+            if summary.trim().is_empty() {
                 bail!("compaction model returned an empty summary")
             }
-            Ok(response)
+            Ok((response, summary))
         });
-    let response = match response {
+    let (response, summary) = match response {
         Ok(response) => response,
         Err(error) => {
             events
@@ -112,7 +128,7 @@ pub(crate) async fn maybe_compact(
         previous_checkpoint_id: previous.map(|checkpoint| checkpoint.checkpoint_id.clone()),
         covered_through_message_ref: plan.covered_through.message_ref.clone(),
         first_kept_message_ref: plan.first_kept.message_ref.clone(),
-        summary: response.text.trim().to_owned(),
+        summary: summary.trim().to_owned(),
         provider: provider.name().to_owned(),
         model: model.to_owned(),
         tokens_before,
@@ -260,6 +276,7 @@ pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
                 name,
                 status,
                 content,
+                ..
             } => task_id.len() + name.len() + status.len() + content.len(),
         })
         .sum::<usize>();
@@ -270,14 +287,7 @@ fn render_summary_input(
     previous: Option<&CompactionCheckpoint>,
     messages: &[TrajectoryMessage],
 ) -> String {
-    let hidden_call_ids = messages
-        .iter()
-        .flat_map(|record| &record.message.content)
-        .filter_map(|content| match content {
-            MessageContent::ToolCall { id, name, .. } if is_history_tool(name) => Some(id.as_str()),
-            _ => None,
-        })
-        .collect::<std::collections::HashSet<_>>();
+    let hidden_result_messages = history_tool_result_message_indices(messages);
     let mut rendered = String::new();
     if let Some(previous) = previous {
         rendered.push_str("## Previous summary\n");
@@ -285,7 +295,7 @@ fn render_summary_input(
         rendered.push_str("\n\n");
     }
     rendered.push_str("## Newly compacted history\n");
-    for record in messages {
+    for (message_index, record) in messages.iter().enumerate() {
         let mut body = String::new();
         for content in &record.message.content {
             match content {
@@ -321,8 +331,9 @@ fn render_summary_input(
                     call_id,
                     content,
                     is_error,
+                    ..
                 } => {
-                    if hidden_call_ids.contains(call_id.as_str()) {
+                    if hidden_result_messages.contains(&message_index) {
                         continue;
                     }
                     body.push_str(&format!(
@@ -335,6 +346,7 @@ fn render_summary_input(
                     name,
                     status,
                     content,
+                    ..
                 } => {
                     if is_history_tool(name) {
                         continue;
@@ -427,6 +439,7 @@ mod tests {
                     call_id: "call-1".to_owned(),
                     content: "old".repeat(100),
                     is_error: false,
+                    metadata: crate::artifact::ResultMetadata::empty(),
                 },
             ),
             record(
@@ -445,6 +458,7 @@ mod tests {
                     call_id: "call-2".to_owned(),
                     content: "recent".repeat(100),
                     is_error: false,
+                    metadata: crate::artifact::ResultMetadata::empty(),
                 },
             ),
         ];
@@ -605,6 +619,7 @@ mod tests {
                     call_id: "history-call".to_owned(),
                     content: "derived historical secret".to_owned(),
                     is_error: false,
+                    metadata: crate::artifact::ResultMetadata::empty(),
                 },
             ),
             record(
@@ -615,6 +630,7 @@ mod tests {
                     name: "history_read".to_owned(),
                     status: "completed".to_owned(),
                     content: "spawned derived secret".to_owned(),
+                    metadata: crate::artifact::ResultMetadata::empty(),
                 },
             ),
             record(
@@ -631,6 +647,55 @@ mod tests {
         assert!(!rendered.contains("history_search"));
         assert!(!rendered.contains("derived historical secret"));
         assert!(!rendered.contains("spawned derived secret"));
+    }
+
+    #[test]
+    fn summary_input_hides_only_the_matching_reused_history_call() {
+        let messages = vec![
+            record(
+                1,
+                Role::Assistant,
+                MessageContent::ToolCall {
+                    id: "reused".to_owned(),
+                    name: "history_search".to_owned(),
+                    arguments: json!({"pattern": "old"}),
+                },
+            ),
+            record(
+                2,
+                Role::Tool,
+                MessageContent::ToolResult {
+                    call_id: "reused".to_owned(),
+                    content: "derived internal result".to_owned(),
+                    is_error: false,
+                    metadata: crate::artifact::ResultMetadata::empty(),
+                },
+            ),
+            record(
+                3,
+                Role::Assistant,
+                MessageContent::ToolCall {
+                    id: "reused".to_owned(),
+                    name: "bash".to_owned(),
+                    arguments: json!({"command": "real work"}),
+                },
+            ),
+            record(
+                4,
+                Role::Tool,
+                MessageContent::ToolResult {
+                    call_id: "reused".to_owned(),
+                    content: "ordinary durable result".to_owned(),
+                    is_error: false,
+                    metadata: crate::artifact::ResultMetadata::empty(),
+                },
+            ),
+        ];
+
+        let rendered = render_summary_input(None, &messages);
+        assert!(!rendered.contains("derived internal result"));
+        assert!(rendered.contains("ordinary durable result"));
+        assert!(rendered.contains("name=bash"));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -18,6 +19,7 @@ mod trajectory;
 pub use trajectory::CompactionCheckpoint;
 
 pub const MESSAGE_FORMAT: &str = "openai-chat-compatible";
+const RUN_RECORD_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -35,7 +37,14 @@ pub struct RunRecord {
     pub parent_run_id: Option<String>,
     pub state: RunState,
     pub prompt: String,
+    /// Stable agent capability profile used to rebuild the same run on resume.
+    pub profile: String,
+    pub depth: usize,
+    pub additional_instructions: Option<String>,
+    pub tool_schema_sha256: String,
     pub provider: String,
+    /// Non-secret identity of provider settings that affect wire compatibility.
+    pub provider_resume_fingerprint: String,
     pub model: String,
     pub message_format: String,
     pub cwd: PathBuf,
@@ -54,12 +63,17 @@ impl RunRecord {
     ) -> Self {
         let now = Utc::now();
         Self {
-            version: 1,
+            version: RUN_RECORD_VERSION,
             id: id.into(),
             parent_run_id,
             state: RunState::Queued,
             prompt: prompt.into(),
+            profile: "root".to_owned(),
+            depth: 0,
+            additional_instructions: None,
+            tool_schema_sha256: String::new(),
             provider: provider.into(),
+            provider_resume_fingerprint: String::new(),
             model: model.into(),
             message_format: MESSAGE_FORMAT.to_owned(),
             cwd,
@@ -67,11 +81,43 @@ impl RunRecord {
             updated_at: now,
         }
     }
+
+    pub fn with_execution_context(
+        mut self,
+        profile: impl Into<String>,
+        depth: usize,
+        additional_instructions: Option<String>,
+    ) -> Self {
+        self.profile = profile.into();
+        self.depth = depth;
+        self.additional_instructions = additional_instructions;
+        self
+    }
+
+    pub fn with_provider_resume_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
+        self.provider_resume_fingerprint = fingerprint.into();
+        self
+    }
+
+    pub fn verify_provider_resume_fingerprint(&self, current: &str) -> Result<()> {
+        ensure!(
+            !self.provider_resume_fingerprint.is_empty(),
+            "run `{}` has no provider resume fingerprint",
+            self.id
+        );
+        ensure!(
+            self.provider_resume_fingerprint == current,
+            "run `{}` provider configuration differs from its recorded resume fingerprint",
+            self.id
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunPaths {
     pub directory: PathBuf,
+    pub execution_lock: PathBuf,
     pub metadata: PathBuf,
     pub messages: PathBuf,
     pub message_metadata: PathBuf,
@@ -113,6 +159,7 @@ impl RunDirStore {
             .join("runs")
             .join(safe_component(run_id));
         RunPaths {
+            execution_lock: directory.join(".run.lock"),
             metadata: directory.join("run.json"),
             messages: directory.join("messages.jsonl"),
             message_metadata: directory.join("message_metadata.jsonl"),
@@ -133,6 +180,11 @@ impl RunDirStore {
                 run.message_format
             );
         }
+        ensure!(
+            run.version == RUN_RECORD_VERSION,
+            "unsupported run record version {}; expected {RUN_RECORD_VERSION}",
+            run.version
+        );
         if paths.metadata.exists() {
             bail!("run `{}` already exists", run.id);
         }
@@ -163,6 +215,22 @@ impl RunDirStore {
         Ok(run)
     }
 
+    pub async fn verify_tool_schema(&self, run_id: &str, tool_schema_sha256: &str) -> Result<()> {
+        let _guard = self.write_lock.lock().await;
+        let path = self.paths(run_id).metadata;
+        let mut run: RunRecord = read_json(&path).await?;
+        if run.tool_schema_sha256.is_empty() {
+            run.tool_schema_sha256 = tool_schema_sha256.to_owned();
+            run.updated_at = Utc::now();
+            return write_json_atomic(&path, &run).await;
+        }
+        ensure!(
+            run.tool_schema_sha256 == tool_schema_sha256,
+            "run `{run_id}` tool schemas differ from its recorded capability profile"
+        );
+        Ok(())
+    }
+
     pub async fn write_final(&self, run_id: &str, output: &str) -> Result<()> {
         let _guard = self.write_lock.lock().await;
         let paths = self.paths(run_id);
@@ -173,11 +241,78 @@ impl RunDirStore {
     }
 
     pub async fn load_run(&self, run_id: &str) -> Result<RunRecord> {
-        read_json(&self.paths(run_id).metadata).await
+        let run: RunRecord = read_json(&self.paths(run_id).metadata).await?;
+        ensure!(
+            run.version == RUN_RECORD_VERSION,
+            "unsupported run record version {}; expected {RUN_RECORD_VERSION}",
+            run.version
+        );
+        ensure!(
+            run.message_format == MESSAGE_FORMAT,
+            "unsupported message format {}; expected {MESSAGE_FORMAT}",
+            run.message_format
+        );
+        Ok(run)
+    }
+
+    /// Hold this lease for the full lifetime of a running or resumed loop.
+    /// It prevents two processes from advancing the same transcript at once.
+    pub async fn acquire_run_lease(&self, run_id: &str) -> Result<RunLease> {
+        let paths = self.paths(run_id);
+        ensure_run_exists(&paths).await?;
+        let run_id = run_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .open(&paths.execution_lock)
+                .with_context(|| {
+                    format!("open run execution lock {}", paths.execution_lock.display())
+                })?;
+            if let Err(source) = file.try_lock() {
+                return Err(RunLeaseBusy {
+                    run_id,
+                    source: source.into(),
+                }
+                .into());
+            }
+            Ok(RunLease { _file: file })
+        })
+        .await
+        .context("join run execution lock task")?
     }
 
     pub fn event_sink(&self) -> SharedEventSink {
         Arc::new(self.clone())
+    }
+}
+
+#[derive(Debug)]
+pub struct RunLease {
+    _file: std::fs::File,
+}
+
+#[derive(Debug)]
+pub(crate) struct RunLeaseBusy {
+    run_id: String,
+    source: std::io::Error,
+}
+
+impl fmt::Display for RunLeaseBusy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "run `{}` is already being executed by another process",
+            self.run_id
+        )
+    }
+}
+
+impl std::error::Error for RunLeaseBusy {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
     }
 }
 

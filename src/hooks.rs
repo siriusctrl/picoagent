@@ -76,6 +76,7 @@ impl CommandHook {
         command
             .args(&self.args)
             .current_dir(self.cwd.as_deref().unwrap_or(fallback_cwd))
+            .kill_on_drop(true)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());

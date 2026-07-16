@@ -4,74 +4,31 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-/// Describes exactly which source bytes are represented by a model-facing preview.
+/// Direct byte accounting for the model-facing portion of an artifact.
+///
+/// Head bytes come from the start of the artifact and tail bytes from the end;
+/// `omitted_bytes` is everything between or after them. That makes separate
+/// strategy and omitted-region fields unnecessary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PreviewInfo {
-    pub strategy: PreviewStrategy,
     pub shown_head_bytes: u64,
     pub shown_tail_bytes: u64,
     pub omitted_bytes: u64,
-    pub omitted_region: OmittedRegion,
-    pub reason: PreviewReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limitation: Option<PreviewLimitation>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PreviewStrategy {
-    Full,
-    HeadTail,
-    HeadOnly,
-    TailOnly,
-    None,
-}
-
-impl PreviewStrategy {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::Full => "full",
-            Self::HeadTail => "head_tail",
-            Self::HeadOnly => "head_only",
-            Self::TailOnly => "tail_only",
-            Self::None => "none",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum OmittedRegion {
-    None,
-    Head,
-    Middle,
-    Tail,
-    All,
-}
-
-impl OmittedRegion {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Head => "head",
-            Self::Middle => "middle",
-            Self::Tail => "tail",
-            Self::All => "all",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PreviewReason {
-    OutputExceedsInlineLimit,
+pub enum PreviewLimitation {
     RunPreviewBudgetLimited,
     RunPreviewBudgetExhausted,
     BinaryOrNonUtf8,
 }
 
-impl PreviewReason {
+impl PreviewLimitation {
     pub(super) fn as_str(self) -> &'static str {
         match self {
-            Self::OutputExceedsInlineLimit => "output_exceeds_inline_limit",
             Self::RunPreviewBudgetLimited => "run_preview_budget_limited",
             Self::RunPreviewBudgetExhausted => "run_preview_budget_exhausted",
             Self::BinaryOrNonUtf8 => "binary_or_non_utf8",
@@ -90,7 +47,6 @@ pub(super) fn textual_preview(
     head_limit: usize,
     tail_limit: usize,
     preview_budget: usize,
-    primary_reason: PreviewReason,
 ) -> (String, PreviewInfo) {
     if preview_budget == 0 {
         return unavailable_preview(content.len() as u64, 0);
@@ -98,14 +54,14 @@ pub(super) fn textual_preview(
 
     let desired = preview_bytes(content, head_limit, tail_limit);
     if desired.text.len() <= preview_budget {
-        return preview_output(desired, content.len() as u64, primary_reason);
+        return preview_output(desired, content.len() as u64, None);
     }
 
     let limited = head_bytes(content, head_limit.min(preview_budget));
     preview_output(
         limited,
         content.len() as u64,
-        PreviewReason::RunPreviewBudgetLimited,
+        Some(PreviewLimitation::RunPreviewBudgetLimited),
     )
 }
 
@@ -115,7 +71,6 @@ pub(super) async fn file_preview(
     head_limit: usize,
     tail_limit: usize,
     preview_budget: usize,
-    primary_reason: PreviewReason,
 ) -> Result<(String, PreviewInfo)> {
     if preview_budget == 0 {
         return Ok(unavailable_preview(bytes, 0));
@@ -125,7 +80,7 @@ pub(super) async fn file_preview(
         return Ok(unavailable_preview(bytes, preview_budget));
     };
     if desired.text.len() <= preview_budget {
-        return Ok(preview_output(desired, bytes, primary_reason));
+        return Ok(preview_output(desired, bytes, None));
     }
 
     let Some(limited) = head_file(path, bytes, head_limit.min(preview_budget)).await? else {
@@ -134,7 +89,7 @@ pub(super) async fn file_preview(
     Ok(preview_output(
         limited,
         bytes,
-        PreviewReason::RunPreviewBudgetLimited,
+        Some(PreviewLimitation::RunPreviewBudgetLimited),
     ))
 }
 
@@ -142,20 +97,18 @@ pub(super) fn unavailable_preview(
     total_bytes: u64,
     preview_budget: usize,
 ) -> (String, PreviewInfo) {
-    let reason = if preview_budget == 0 {
-        PreviewReason::RunPreviewBudgetExhausted
+    let limitation = if preview_budget == 0 {
+        PreviewLimitation::RunPreviewBudgetExhausted
     } else {
-        PreviewReason::BinaryOrNonUtf8
+        PreviewLimitation::BinaryOrNonUtf8
     };
     (
         String::new(),
         PreviewInfo {
-            strategy: PreviewStrategy::None,
             shown_head_bytes: 0,
             shown_tail_bytes: 0,
             omitted_bytes: total_bytes,
-            omitted_region: OmittedRegion::All,
-            reason,
+            limitation: Some(limitation),
         },
     )
 }
@@ -163,35 +116,19 @@ pub(super) fn unavailable_preview(
 fn preview_output(
     preview: PreviewSlice,
     total_bytes: u64,
-    reason: PreviewReason,
+    limitation: Option<PreviewLimitation>,
 ) -> (String, PreviewInfo) {
     let shown_head_bytes = preview.shown_head_bytes as u64;
     let shown_tail_bytes = preview.shown_tail_bytes as u64;
     let shown_bytes = shown_head_bytes.saturating_add(shown_tail_bytes);
     let omitted_bytes = total_bytes.saturating_sub(shown_bytes);
-    let strategy = match (omitted_bytes, shown_head_bytes, shown_tail_bytes) {
-        (0, _, _) => PreviewStrategy::Full,
-        (_, 0, 0) => PreviewStrategy::None,
-        (_, 0, _) => PreviewStrategy::TailOnly,
-        (_, _, 0) => PreviewStrategy::HeadOnly,
-        _ => PreviewStrategy::HeadTail,
-    };
-    let omitted_region = match strategy {
-        PreviewStrategy::Full => OmittedRegion::None,
-        PreviewStrategy::HeadTail => OmittedRegion::Middle,
-        PreviewStrategy::HeadOnly => OmittedRegion::Tail,
-        PreviewStrategy::TailOnly => OmittedRegion::Head,
-        PreviewStrategy::None => OmittedRegion::All,
-    };
     (
         preview.text,
         PreviewInfo {
-            strategy,
             shown_head_bytes,
             shown_tail_bytes,
             omitted_bytes,
-            omitted_region,
-            reason,
+            limitation,
         },
     )
 }
