@@ -645,7 +645,6 @@ impl ModelProvider for DelegatingProvider {
                         name: "spawn".to_owned(),
                         arguments: json!({
                             "kind": "agent",
-                            "profile": "general-task",
                             "prompt": "child one"
                         }),
                     },
@@ -654,7 +653,6 @@ impl ModelProvider for DelegatingProvider {
                         name: "spawn".to_owned(),
                         arguments: json!({
                             "kind": "agent",
-                            "profile": "general-task",
                             "prompt": "child two"
                         }),
                     },
@@ -771,7 +769,6 @@ impl ModelProvider for LastStepBackgroundProvider {
                     name: "spawn".to_owned(),
                     arguments: json!({
                         "kind": "agent",
-                        "profile": "general-task",
                         "prompt": "slow child"
                     }),
                 }],
@@ -1178,7 +1175,6 @@ impl ModelProvider for SteeringProvider {
                 name: "spawn".to_owned(),
                 arguments: json!({
                     "kind": "agent",
-                    "profile": "general-task",
                     "prompt": "child steer target"
                 }),
             }],

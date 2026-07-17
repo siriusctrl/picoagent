@@ -86,6 +86,47 @@ fn config(
 }
 
 #[tokio::test]
+async fn task_ids_are_short_and_sequential_within_the_parent_run() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
+
+    let (first, second) = tokio::join!(
+        manager.create_tool_task("first".to_owned()),
+        manager.create_tool_task("second".to_owned())
+    );
+    let mut ids = vec![first.unwrap(), second.unwrap()];
+    ids.sort();
+
+    assert_eq!(ids, ["t1", "t2"]);
+}
+
+#[tokio::test]
+async fn restored_parent_continues_its_local_task_sequence() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    task_store
+        .write(&BackgroundTaskRecord::queued_tool(
+            "t1".to_owned(),
+            "earlier".to_owned(),
+        ))
+        .await
+        .unwrap();
+
+    let (manager, _) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        manager.create_tool_task("later".to_owned()).await.unwrap(),
+        "t2"
+    );
+}
+
+#[tokio::test]
 async fn restore_reconciles_tools_and_completed_children() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());

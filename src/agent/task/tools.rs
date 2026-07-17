@@ -28,14 +28,13 @@ impl SpawnTool {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SpawnArgs {
     kind: String,
     #[serde(default)]
     tool: Option<String>,
     #[serde(default)]
     arguments: Option<Value>,
-    #[serde(default)]
-    profile: Option<String>,
     #[serde(default)]
     prompt: Option<String>,
 }
@@ -52,7 +51,6 @@ impl Tool for SpawnTool {
                     "kind": { "type": "string", "enum": ["tool", "agent"] },
                     "tool": { "type": "string", "description": "Tool name when kind=tool" },
                     "arguments": { "type": "object", "description": "Tool arguments when kind=tool" },
-                    "profile": { "type": "string", "enum": ["general-task"], "description": "Agent profile when kind=agent" },
                     "prompt": { "type": "string", "description": "Complete delegated task when kind=agent" }
                 },
                 "required": ["kind"],
@@ -73,10 +71,7 @@ impl Tool for SpawnTool {
             }
             "agent" => {
                 self.manager
-                    .spawn_agent(
-                        args.profile.unwrap_or_else(|| "general-task".to_owned()),
-                        args.prompt.context("spawn kind=agent requires `prompt`")?,
-                    )
+                    .spawn_agent(args.prompt.context("spawn kind=agent requires `prompt`")?)
                     .await?
             }
             kind => bail!("invalid spawn kind `{kind}`"),
@@ -182,14 +177,31 @@ fn task_records(records: Vec<super::BackgroundTaskRecord>) -> Value {
                 "kind": record.kind,
                 "name": record.name,
                 "status": record.status(),
-                "child_run_id": record.child_run_id,
-                "message": if record.state.is_terminal() {
-                    "Terminal result is delivered separately as a durable background-result message."
-                } else {
-                    "Task is still running."
-                },
             })
         })
         .collect::<Vec<_>>();
     json!({ "tasks": tasks })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_status_is_structured_without_explanatory_messages() {
+        let record =
+            super::super::BackgroundTaskRecord::queued_tool("t1".to_owned(), "bash".to_owned());
+
+        assert_eq!(
+            task_records(vec![record]),
+            json!({
+                "tasks": [{
+                    "task_id": "t1",
+                    "kind": "tool",
+                    "name": "bash",
+                    "status": "queued"
+                }]
+            })
+        );
+    }
 }

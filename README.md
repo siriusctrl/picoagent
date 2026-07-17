@@ -337,7 +337,9 @@ The task-control calls are intentionally small:
 ```
 
 An empty `task_ids` means all tasks owned by that run. `before_seq` is exclusive
-and optional; inspect returns `next_before_seq` when older messages exist.
+and optional; inspect returns `next_before_seq` when older messages exist. Task
+ids are short references local to their parent run (`t1`, `t2`, ...); child run
+ids remain internal durable-storage identities.
 
 ## Skills
 
@@ -357,9 +359,11 @@ pico skills list
 
 ## Subagents
 
-`spawn` with `kind = "agent"` starts the configured `general-task` profile. A
-child is another invocation of the same runner, not a second agent class. Each
-child:
+`spawn` with `kind = "agent"` automatically starts the sole `general-task`
+profile; there is no model-facing profile choice. Before the child starts, the
+runtime fixes it as delegating or leaf from the remaining depth. With the
+default `max_subagent_depth = 1`, it is a leaf. A child is another invocation of
+the same runner, not a second agent class. Each child:
 
 - invokes the same `AgentRunner` and provider
 - has a separate run id, transcript, events, and artifacts

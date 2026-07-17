@@ -148,7 +148,6 @@ fn spawn_response(id: &str, prompt: &str) -> ModelResponse {
             name: "spawn".to_owned(),
             arguments: json!({
                 "kind": "agent",
-                "profile": "general-task",
                 "prompt": prompt,
             }),
         }]),

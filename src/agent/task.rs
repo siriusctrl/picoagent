@@ -7,7 +7,6 @@ use std::{
 
 use anyhow::{Context, Result};
 use tokio::sync::{Mutex, Notify, Semaphore};
-use ulid::Ulid;
 
 use crate::{
     artifact::{ArtifactStore, ToolOutput},
@@ -108,9 +107,9 @@ impl TaskManager {
     }
 
     async fn create_tool_task(self: &Arc<Self>, name: String) -> Result<String> {
-        let task_id = Ulid::new().to_string();
-        let record = BackgroundTaskRecord::queued_tool(task_id.clone(), name);
         let mut records = self.records.lock().await;
+        let task_id = next_task_id(&records);
+        let record = BackgroundTaskRecord::queued_tool(task_id.clone(), name);
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);
         Ok(task_id)
@@ -122,10 +121,10 @@ impl TaskManager {
         child_run_id: String,
         prompt: String,
     ) -> Result<String> {
-        let task_id = Ulid::new().to_string();
+        let mut records = self.records.lock().await;
+        let task_id = next_task_id(&records);
         let record =
             BackgroundTaskRecord::queued_agent(task_id.clone(), profile, child_run_id, prompt);
-        let mut records = self.records.lock().await;
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);
         Ok(task_id)
@@ -388,6 +387,17 @@ impl TaskManager {
             }
             self.notify.notified().await;
         }
+    }
+}
+
+fn next_task_id(records: &BTreeMap<String, BackgroundTaskRecord>) -> String {
+    let mut number = records.len().saturating_add(1);
+    loop {
+        let candidate = format!("t{number}");
+        if !records.contains_key(&candidate) {
+            return candidate;
+        }
+        number = number.saturating_add(1);
     }
 }
 

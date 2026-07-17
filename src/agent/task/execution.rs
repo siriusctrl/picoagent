@@ -173,17 +173,11 @@ impl TaskManager {
         }
     }
 
-    pub async fn spawn_agent(
-        self: &Arc<Self>,
-        profile: String,
-        prompt: String,
-    ) -> Result<BackgroundTaskRecord> {
-        if profile != "general-task" {
-            bail!("unknown agent profile `{profile}`; expected `general-task`");
-        }
+    pub async fn spawn_agent(self: &Arc<Self>, prompt: String) -> Result<BackgroundTaskRecord> {
         if prompt.trim().is_empty() {
             bail!("agent prompt must not be empty");
         }
+        let profile = "general-task".to_owned();
         let child_run_id = Ulid::new().to_string();
         let task_id = self
             .create_agent_task(profile.clone(), child_run_id.clone(), prompt.clone())
