@@ -5,15 +5,18 @@ use serde_json::Value;
 use ulid::Ulid;
 
 use crate::{
-    agent::tool_execution::{ToolExecutionMode, ToolExecutionOutcome},
+    agent::{
+        runner::RunRequest,
+        tool_execution::{ToolExecutionMode, ToolExecutionOutcome},
+    },
     events::{RuntimeEvent, RuntimeEventKind},
     model::ToolCall,
+    prompts::agent_prompts,
     storage::{RunLeaseBusy, RunState},
     tools::{RawToolOutput, ToolContext},
 };
 
-use super::{BackgroundTaskRecord, GENERAL_TASK_INSTRUCTIONS, TaskManager};
-use crate::agent::runner::RunRequest;
+use super::{BackgroundTaskRecord, TaskManager};
 
 impl TaskManager {
     pub async fn spawn_tool(
@@ -225,7 +228,7 @@ impl TaskManager {
                 prompt,
                 manager.parent_run_id.clone(),
                 manager.parent_depth + 1,
-                GENERAL_TASK_INSTRUCTIONS.trim().to_owned(),
+                agent_prompts().general_task.clone(),
                 manager.child_can_delegate,
             );
             let child_exists =

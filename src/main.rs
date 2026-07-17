@@ -21,13 +21,11 @@ use picoagent::{
         openai_compatible::{OpenAiCompatibleOptions, OpenAiCompatibleProvider},
         openai_oauth::{DEFAULT_OPENAI_OAUTH_BASE_URL, OpenAiOAuthProvider},
     },
+    prompts::agent_prompts,
     skills::{LoadSkillTool, SkillRegistry},
     storage::RunDirStore,
     tools::{ToolRegistry, WebSearchTool, register_defaults},
 };
-
-const MEMORY_CONSOLIDATION_INSTRUCTIONS: &str =
-    include_str!("../prompts/agents/memory-consolidation.md");
 
 mod cli;
 
@@ -378,7 +376,7 @@ async fn memory_command(
                 workspace,
                 pico_home,
                 config,
-                RunRequest::memory_maintenance(prompt, MEMORY_CONSOLIDATION_INSTRUCTIONS.trim()),
+                RunRequest::memory_maintenance(prompt, &agent_prompts().memory_consolidation),
                 OutputFormat::Text,
             )
             .await?;

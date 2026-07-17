@@ -57,3 +57,5 @@ Use these sections:
   separate](0006-complete-message-resume-and-durable-child-coordination.md)
 - [ADR 0007: Emit compacted-history guidance only at its active
   boundary](0007-compacted-history-guidance-at-active-boundary.md)
+- [ADR 0008: Consolidate agent prompts in a typed YAML
+  registry](0008-typed-agent-prompt-registry.md)

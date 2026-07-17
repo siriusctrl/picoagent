@@ -141,9 +141,9 @@ Reasoning is not included in `final.md`.
 
 ## Prompt Stability
 
-The normal agent's built-in system prompt is workspace-independent, compiled
-from a Markdown asset, and invariant across its calls. Sorted tool schemas form
-the other stable request prefix and are frozen before the first call. Core
+The normal agent's built-in system prompt is workspace-independent, loaded from
+the embedded typed YAML registry, and invariant across its calls. Sorted tool
+schemas form the other stable request prefix and are frozen before the first call. Core
 history schemas are included regardless of `trigger_tokens`. Root and a
 depth-eligible GeneralTask may include memory and delegation schemas; each
 GeneralTask is assigned a delegating or leaf variant before it starts. Optional
@@ -153,9 +153,8 @@ narrow fixed profile. Compaction summaries use a separate tool-free profile.
 The first user message begins with a `<runtime-reminder>` text block containing
 the workspace snapshot: path, `AGENTS.md`, sorted skill metadata, memory paths,
 and optional delegated instructions. The original user request follows after a
-blank line in the same ordinary Chat `content` string. Source-only soft wraps
-inside Markdown paragraphs are joined during assembly; semantic Markdown
-boundaries remain newlines.
+blank line in the same ordinary Chat `content` string. YAML folds source-only
+wrapping in built-in agent prompts; dynamic reminder inputs remain exact.
 
 Tool output, background results, and later complete messages append at the
 durable conversation tail. Files or configuration changed during a run are

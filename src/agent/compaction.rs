@@ -9,15 +9,11 @@ use crate::{
     agent::CompactionOptions,
     events::{NoopEventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role},
+    prompts::agent_prompts,
     storage::{CompactionCheckpoint, RunDirStore},
     trajectory::{TrajectoryMessage, history_tool_result_message_indices, is_history_tool},
 };
 
-use super::context::normalize_prompt_markdown;
-
-const COMPACTION_PROMPT: &str = include_str!("../../prompts/agents/compaction.md");
-const COMPACTED_HISTORY_INSTRUCTIONS: &str =
-    include_str!("../../prompts/agents/compacted-history.md");
 const SUMMARY_TOOL_RESULT_LIMIT: usize = 6 * 1024;
 const SUMMARY_MESSAGE_TEXT_LIMIT: usize = 16 * 1024;
 
@@ -76,7 +72,7 @@ pub(crate) async fn maybe_compact(
     let request = ModelRequest {
         run_id: run_id.to_owned(),
         model: model.to_owned(),
-        system: COMPACTION_PROMPT.trim().to_owned(),
+        system: agent_prompts().compaction.clone(),
         messages: vec![Message::text(
             Role::User,
             render_summary_input(previous, plan.to_compact),
@@ -186,7 +182,7 @@ pub(crate) fn build_active_context(
         Role::User,
         format!(
             "<context-management>\n{}\n</context-management>\n\n<compacted-history checkpoint=\"{}\" covered-through=\"{}\" encoding=\"xml-escaped\">\n{}\n</compacted-history>",
-            normalize_prompt_markdown(COMPACTED_HISTORY_INSTRUCTIONS),
+            agent_prompts().compacted_history,
             checkpoint.checkpoint_id,
             checkpoint.covered_through_message_ref,
             escape_xml_text(&checkpoint.summary)

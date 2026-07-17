@@ -15,8 +15,8 @@ navigation, invariants, verification, and handoff.
 - `src/tools/`: the stable tool contract and registry plus flat standalone base
   tools (`read`, `write`, `bash`, and optional `web_search`). Each base tool owns
   its implementation, schema, and compile-time Markdown description.
-- `prompts/`: stable agent-level Markdown instructions embedded into the binary
-  at compile time; dynamic prompt assembly remains in `src/agent/context.rs`.
+- `prompts/agents.yaml`: the typed registry of stable agent-level instructions
+  embedded into the binary; dynamic assembly remains in `src/agent/context.rs`.
 - `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,
   and project-local artifact paths.
 - `src/storage/`: self-contained run directories, Chat-compatible message JSONL
@@ -72,8 +72,9 @@ navigation, invariants, verification, and handoff.
   capability profiles, and keep compaction summary calls on a separate
   tool-free request profile. Select the GeneralTask variant from remaining
   depth before its run starts; do not add or remove schemas during a run.
-- Keep stable model-facing prose in compile-time Markdown assets. Keep prompt
-  assembly, tool schemas, argument validation, and execution contracts in Rust.
+- Keep stable agent prose in the typed compile-time YAML registry and tool
+  descriptions beside their owners. Keep prompt assembly, schemas, validation,
+  and execution contracts in Rust.
 - Memory is durable user/project knowledge outside the live transcript. Inspect
   its ordinary Markdown with `read`/`bash`; do not inject the tree into every prompt.
 - Keep user memory and project memory distinct. Raw artifacts and transcripts
@@ -122,7 +123,7 @@ provider and inspect the generated run directory, `messages.jsonl`,
 `message_metadata.jsonl`, `events.jsonl`, final output, and artifact metadata.
 
 For prompt or tool-description asset changes, verify `cargo package --list`
-contains every referenced Markdown file in addition to compiling all targets.
+contains every referenced asset in addition to compiling all targets.
 
 ## Docs Update Rules
 

@@ -6,6 +6,7 @@ pub mod hooks;
 pub mod mcp;
 pub mod memory;
 pub mod model;
+pub mod prompts;
 pub mod skills;
 pub mod storage;
 pub mod tools;

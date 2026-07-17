@@ -4,6 +4,10 @@
 - Date: 2026-07-17
 - Refines: ADR 0004 (recovery-guidance placement and prompt rendering)
 
+ADR 0008 replaces the generic Markdown reflow portion below. Folded YAML now
+handles source wrapping for built-in agent prompts; dynamic reminder inputs are
+preserved exactly. Compacted-history guidance placement remains accepted.
+
 ## Context
 
 ADR 0004 kept the normal system prompt and tool schemas stable by registering

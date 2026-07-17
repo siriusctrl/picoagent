@@ -35,6 +35,9 @@ picoagent process. Run it only in environments where that access is appropriate.
 
 ## Install
 
+Picoagent requires Rust and `rg` (ripgrep). Artifact-backed compacted-history
+search invokes `rg` directly and expects it on `PATH`.
+
 ```bash
 cargo install --path .
 ```
@@ -94,11 +97,12 @@ resume` on a child id directly.
 Picoagent keeps its built-in system prompt independent of the workspace and
 unchanged across normal agent calls. At the start of each run, the first user
 message contains a synthetic `<runtime-reminder>` block before the original
-request. The reminder snapshots the workspace path, compacted-history recovery
-guidance, `AGENTS.md`, discovered skill metadata, memory locations, and any
-delegated-task instructions that apply to the profile. Tool schemas are sorted,
-and both the schemas and reminder are frozen for that run; configuration or
-file changes take effect on the next run.
+request. The reminder snapshots the workspace path, `AGENTS.md`, discovered
+skill metadata, memory locations, and any delegated-task instructions that
+apply to the profile. Compacted-history guidance appears only beside an actual
+checkpoint, not in the initial reminder. Tool schemas are sorted, and both the
+schemas and reminder are frozen for that run; configuration or file changes
+take effect on the next run.
 
 `messages.jsonl` uses the `openai-chat-compatible` format: each line is one
 complete Chat message with ordinary `role` and `content` fields. The runtime
@@ -115,10 +119,10 @@ prompt. The metadata line is written last and commits its corresponding message;
 compaction never rewrites or deletes committed trajectory records. Its
 checkpoints are appended separately to `compactions.jsonl` when enabled.
 
-Stable agent instructions are maintained as compile-time Markdown assets under
-`prompts/agents/`. Standalone base tool descriptions live beside their Rust
-implementations under `src/tools/<tool>/`; names, schemas, validation, and
-execution remain Rust contracts.
+Stable agent instructions are folded scalar values in the typed, compile-time
+`prompts/agents.yaml` registry. Standalone base tool descriptions remain
+Markdown beside their Rust implementations under `src/tools/<tool>/`; names,
+schemas, validation, and execution remain Rust contracts.
 
 ## Provider Setup
 

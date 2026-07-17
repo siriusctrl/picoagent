@@ -163,13 +163,15 @@ reuse. See [ADR 0004](adr/0004-stable-agent-prefix-and-core-history-tools.md).
 
 ## Compile-Time Prompt Assets
 
-Stable agent instructions and static tool descriptions are Markdown assets
-embedded with `include_str!`. Rust remains authoritative for prompt assembly,
-tool schemas, validation, and execution. Standalone base tools use flat
+Stable agent instructions are folded values in one typed `agents.yaml` registry;
+static tool descriptions remain Markdown beside their owners. Both are embedded
+with `include_str!`. Rust remains authoritative for prompt assembly, tool
+schemas, validation, and execution. Standalone base tools use flat
 `src/tools/<tool>/` modules; subsystem tools remain with their owning modules.
 
-See [ADR 0002](adr/0002-compile-time-prompt-assets-and-tool-ownership.md) for
-the packaging and ownership decision.
+See [ADR 0002](adr/0002-compile-time-prompt-assets-and-tool-ownership.md) and
+[ADR 0008](adr/0008-typed-agent-prompt-registry.md) for the packaging and
+ownership decisions.
 
 ## External Scheduling
 

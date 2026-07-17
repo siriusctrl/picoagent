@@ -30,9 +30,6 @@ pub use record::{BackgroundTaskRecord, BackgroundTaskState};
 pub use recovery::RecoverableSubagent;
 pub use tools::{SpawnTool, WaitTool};
 
-pub(super) const GENERAL_TASK_INSTRUCTIONS: &str =
-    include_str!("../../prompts/agents/general-task.md");
-
 pub struct TaskManager {
     runner: Arc<AgentRunner>,
     tools: ToolRegistry,

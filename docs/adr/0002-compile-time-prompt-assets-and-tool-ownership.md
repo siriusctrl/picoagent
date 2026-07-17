@@ -3,6 +3,10 @@
 - Status: Accepted
 - Date: 2026-07-15
 
+ADR 0008 refines only agent-prompt packaging below: the separate Markdown files
+are now folded values in one typed YAML registry. Compile-time embedding and
+tool-description ownership remain accepted.
+
 ## Context
 
 Stable system instructions and tool descriptions were inline Rust strings.

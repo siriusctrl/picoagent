@@ -10,14 +10,12 @@ use crate::{
     agent::runner::{AgentRunner, RunRequest},
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
     model::ToolSpec,
+    prompts::agent_prompts,
     storage::{RunDirStore, RunState},
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
 const MEMORY_UPDATE_DESCRIPTION: &str = include_str!("memory/descriptions/memory_update.md");
-const MEMORY_MAINTENANCE_INSTRUCTIONS: &str =
-    include_str!("../prompts/agents/memory-maintenance.md");
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryScope {
@@ -204,7 +202,7 @@ impl Tool for MemoryUpdateTool {
                     prompt,
                     self.parent_run_id.clone(),
                     self.parent_depth + 1,
-                    MEMORY_MAINTENANCE_INSTRUCTIONS.trim().to_owned(),
+                    agent_prompts().memory_maintenance.clone(),
                 ),
                 child_run_id.clone(),
             )

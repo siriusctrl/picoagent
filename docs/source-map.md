@@ -15,7 +15,8 @@
 - `src/agent/task/recovery.rs`: task reload, child reconciliation, and cancellation.
 - `src/agent/task/tools.rs`: model-facing `spawn` and `wait` schemas.
 - `src/agent/context.rs`: deterministic prompt framing and dynamic reminder assembly.
-- `prompts/agents/`: compile-time agent instruction assets.
+- `src/prompts.rs`: typed access to the embedded agent prompt registry.
+- `prompts/agents.yaml`: folded agent instructions for every fixed profile.
 - `src/model/mod.rs`: canonical messages, tools, requests, responses, and provider trait.
 - `src/model/openai_oauth.rs`: OAuth provider orchestration and 401 retry.
 - `src/model/openai_compatible.rs`: Responses/Chat provider facade.

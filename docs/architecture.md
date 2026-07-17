@@ -203,17 +203,14 @@ preserving exact recovery as part of the compaction contract.
 ### Skills and instructions
 
 The system prompt contains only stable built-in instructions loaded from
-compile-time Markdown under `prompts/agents/`. Rust owns prompt precedence,
-section ordering, dynamic values, and runtime-reminder framing. The first user
-message's ordinary text `content` carries a `<runtime-reminder>` block with
-the workspace `AGENTS.md`, sorted skill metadata, memory paths, and optional
-delegated instructions, followed by the original request. A skill body enters
-the conversation only after the model calls `load_skill`.
-
-Prompt assembly joins source-only soft wraps within Markdown paragraphs while
-preserving semantic boundaries such as blank lines, headings, list items,
-tables, explicit breaks, and fenced code. This keeps authored Markdown readable
-without sending arbitrary editor wrapping to the model.
+the typed `prompts/agents.yaml` registry. YAML folded scalars remove source-only
+line wrapping before Rust receives each value. `src/prompts.rs` parses the
+embedded registry once and rejects unknown or empty fields. Rust owns prompt
+precedence, section ordering, dynamic values, and runtime-reminder framing. The
+first user message's ordinary text `content` carries a `<runtime-reminder>`
+block with the workspace `AGENTS.md`, sorted skill metadata, memory paths, and
+optional delegated instructions, followed by the original request. A skill
+body enters the conversation only after the model calls `load_skill`.
 
 ### Memory
 

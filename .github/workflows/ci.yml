@@ -13,6 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install runtime dependencies
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
