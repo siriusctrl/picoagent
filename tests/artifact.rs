@@ -49,17 +49,16 @@ async fn cumulative_budget_forces_later_small_results_to_artifacts() {
         .unwrap();
     assert!(first.artifact.is_none());
 
+    let mut second_raw = RawToolOutput::text("abcdefgh");
+    second_raw.is_error = true;
     let second = store
-        .persist_output_with_budget(
-            &context(workspace.path()),
-            RawToolOutput::text("abcdefgh"),
-            2,
-        )
+        .persist_output_with_budget(&context(workspace.path()), second_raw, 2)
         .await
         .unwrap();
     assert!(second.artifact.is_some());
     assert!(second.preview.len() <= 2);
     let model_content = second.model_content();
+    assert!(model_content.contains("is_error: true"));
     assert!(model_content.contains("bytes: total=8; preview_head=2; preview_tail=0; omitted=6"));
     assert!(model_content.contains("preview_limitation: run_preview_budget_limited"));
 }
@@ -125,17 +124,16 @@ async fn exhausted_preview_budget_returns_metadata_and_inspection_guidance() {
         preview_head_bytes: 8,
         preview_tail_bytes: 4,
     });
+    let mut raw = RawToolOutput::text("abcdefgh");
+    raw.is_error = true;
     let output = store
-        .persist_output_with_budget(
-            &context(workspace.path()),
-            RawToolOutput::text("abcdefgh"),
-            0,
-        )
+        .persist_output_with_budget(&context(workspace.path()), raw, 0)
         .await
         .unwrap();
 
     assert!(output.preview.is_empty());
     let model_content = output.model_content();
+    assert!(model_content.contains("is_error: true"));
     assert!(model_content.contains("bytes: total=8; preview_head=0; preview_tail=0; omitted=8"));
     assert!(model_content.contains("preview_limitation: run_preview_budget_exhausted"));
     assert!(model_content.contains("artifact preserves the complete returned output"));

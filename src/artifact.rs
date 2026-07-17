@@ -105,7 +105,8 @@ impl ToolOutput {
             .map(PreviewLimitation::as_str)
             .unwrap_or("none");
         format!(
-            "[Tool output]\ntruncated: {}\nbytes: total={}; preview_head={}; preview_tail={}; omitted={}\npreview_limitation: {}\nartifact: {}\nmedia_type: {}\nsha256: {}\ninstruction: {}{}",
+            "[Tool output]\nis_error: {}\ntruncated: {}\nbytes: total={}; preview_head={}; preview_tail={}; omitted={}\npreview_limitation: {}\nartifact: {}\nmedia_type: {}\nsha256: {}\ninstruction: {}{}",
+            self.is_error,
             self.truncated,
             artifact.bytes,
             info.shown_head_bytes,

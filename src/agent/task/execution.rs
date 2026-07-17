@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 use ulid::Ulid;
 
@@ -182,7 +182,13 @@ impl TaskManager {
         let task_id = self
             .create_agent_task(profile.clone(), child_run_id.clone(), prompt.clone())
             .await?;
-        let handle = self.launch_agent_task(task_id.clone(), profile, child_run_id, prompt);
+        let handle = self.launch_agent_task(
+            task_id.clone(),
+            profile,
+            child_run_id,
+            prompt,
+            self.child_can_delegate,
+        );
         self.track(task_id.clone(), handle);
         self.get(&task_id).await
     }
@@ -217,6 +223,9 @@ impl TaskManager {
             record.name,
             task.child_run_id,
             task.prompt,
+            record
+                .child_can_delegate
+                .context("agent task is missing child capability")?,
         );
         self.track(task.task_id, handle);
         Ok(())
@@ -228,6 +237,7 @@ impl TaskManager {
         profile: String,
         child_run_id: String,
         prompt: String,
+        child_can_delegate: bool,
     ) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
@@ -269,7 +279,7 @@ impl TaskManager {
                 manager.parent_run_id.clone(),
                 manager.parent_depth + 1,
                 agent_prompts().general_task.clone(),
-                manager.child_can_delegate,
+                child_can_delegate,
             );
             let child_exists =
                 match tokio::fs::try_exists(manager.store.paths(&child_run_id).metadata).await {
@@ -339,27 +349,9 @@ impl TaskManager {
                                     ))
                                     .await;
                             }
-                            if let Err(error) = manager.complete(&task_id, output).await {
-                                manager.finish_failed(&task_id, &profile, error).await;
-                            } else {
-                                let _ = manager
-                                    .events
-                                    .emit(&RuntimeEvent::new(
-                                        &manager.parent_run_id,
-                                        RuntimeEventKind::BackgroundTaskCompleted {
-                                            task_id,
-                                            name: profile,
-                                        },
-                                    ))
-                                    .await;
-                                let _ = manager
-                                    .events
-                                    .emit(&RuntimeEvent::new(
-                                        &manager.parent_run_id,
-                                        RuntimeEventKind::SubagentCompleted { child_run_id },
-                                    ))
-                                    .await;
-                            }
+                            manager
+                                .finish_agent_output(&task_id, &profile, &child_run_id, output)
+                                .await;
                         }
                         Err(error) => manager.finish_failed(&task_id, &profile, error).await,
                     }

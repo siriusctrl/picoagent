@@ -123,8 +123,13 @@ impl TaskManager {
     ) -> Result<String> {
         let mut records = self.records.lock().await;
         let task_id = next_task_id(&records);
-        let record =
-            BackgroundTaskRecord::queued_agent(task_id.clone(), profile, child_run_id, prompt);
+        let record = BackgroundTaskRecord::queued_agent(
+            task_id.clone(),
+            profile,
+            child_run_id,
+            prompt,
+            self.child_can_delegate,
+        );
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);
         Ok(task_id)

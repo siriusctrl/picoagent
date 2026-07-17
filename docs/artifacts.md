@@ -35,6 +35,7 @@ Small UTF-8 results remain inline. When a result exceeds `inline_bytes` or the
 remaining run preview budget, the complete bytes are written to the artifact
 store and the model receives a compact `[Tool output]` envelope with:
 
+- whether the tool result is an error
 - whether any source bytes were actually truncated from the preview
 - total, preview-head, preview-tail, and omitted byte counts
 - an optional preview limitation when the run budget forces artifact spill,

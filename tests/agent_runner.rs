@@ -407,7 +407,7 @@ async fn resume_keeps_preview_budget_reserved_for_undelivered_tasks() {
     tokio::fs::write(
         task_directory.join("reserved.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 3,
+            "version": 4,
             "id": "reserved",
             "kind": "tool",
             "name": "earlier-tool",
@@ -418,6 +418,7 @@ async fn resume_keeps_preview_budget_reserved_for_undelivered_tasks() {
             },
             "error": null,
             "child_run_id": null,
+            "child_can_delegate": null,
             "prompt": null,
             "created_at": chrono::Utc::now()
         }))

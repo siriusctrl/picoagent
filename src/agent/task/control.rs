@@ -87,7 +87,8 @@ impl TaskManager {
             );
         }
         let input_id = self.store.enqueue_user_input(child_run_id, message).await?;
-        self.events
+        let _ = self
+            .events
             .emit(&RuntimeEvent::new(
                 &self.parent_run_id,
                 RuntimeEventKind::SubagentSteered {
@@ -96,7 +97,7 @@ impl TaskManager {
                     input_id: input_id.clone(),
                 },
             ))
-            .await?;
+            .await;
         drop(records);
         Ok(json!({
             "task_id": task_id,
@@ -110,6 +111,9 @@ impl TaskManager {
     pub async fn stop(&self, task_id: &str) -> Result<super::BackgroundTaskRecord> {
         let current = self.get(task_id).await?;
         if current.state.is_terminal() {
+            if current.state == BackgroundTaskState::Cancelled {
+                self.cancel_child_run_if_active(&current).await?;
+            }
             return Ok(current);
         }
         let reason = "stopped by parent agent".to_owned();
@@ -121,13 +125,9 @@ impl TaskManager {
             handle.abort();
             let _ = handle.await;
         }
-        if let Some(child_run_id) = &record.child_run_id
-            && let Ok(child) = self.store.load_run(child_run_id).await
-            && matches!(child.state, RunState::Queued | RunState::Running)
+        if self.cancel_child_run_if_active(&record).await?
+            && let Some(child_run_id) = &record.child_run_id
         {
-            self.store
-                .update_state(child_run_id, RunState::Cancelled)
-                .await?;
             self.events
                 .emit(&RuntimeEvent::new(
                     &self.parent_run_id,
@@ -147,5 +147,26 @@ impl TaskManager {
             ))
             .await?;
         Ok(record)
+    }
+
+    pub(super) async fn cancel_child_run_if_active(
+        &self,
+        record: &super::BackgroundTaskRecord,
+    ) -> Result<bool> {
+        let Some(child_run_id) = &record.child_run_id else {
+            return Ok(false);
+        };
+        let path = self.store.paths(child_run_id).metadata;
+        if !tokio::fs::try_exists(path).await? {
+            return Ok(false);
+        }
+        let child = self.store.load_run(child_run_id).await?;
+        if !matches!(child.state, RunState::Queued | RunState::Running) {
+            return Ok(false);
+        }
+        self.store
+            .update_state(child_run_id, RunState::Cancelled)
+            .await?;
+        Ok(true)
     }
 }

@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
     agent::types::{AgentRunnerConfig, RunnerOptions},
-    artifact::ArtifactPolicy,
-    events::NoopEventSink,
+    artifact::{ArtifactPolicy, ToolOutput},
+    events::{EventSink, NoopEventSink, RuntimeEvent, RuntimeEventKind},
     model::{Message, MessageContent, ModelProvider, Role, echo::EchoProvider},
     storage::{RunRecord, RunState},
 };
@@ -143,6 +143,7 @@ async fn restore_reconciles_tools_and_completed_children() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
+        false,
     );
     agent.state = BackgroundTaskState::Running;
     task_store.write(&agent).await.unwrap();
@@ -186,6 +187,7 @@ async fn restore_prefers_a_durable_completed_child_regardless_of_task_age() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
+        false,
     );
     agent.state = BackgroundTaskState::Running;
     agent.created_at = chrono::Utc::now() - chrono::Duration::minutes(10);
@@ -204,6 +206,91 @@ async fn restore_prefers_a_durable_completed_child_regardless_of_task_age() {
             .as_ref()
             .map(|result| result.content.as_str()),
         Some("late durable result")
+    );
+}
+
+#[tokio::test]
+async fn restore_and_repeated_stop_repair_a_cancelled_tasks_live_child() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "do work", RunState::Running).await;
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_agent(
+        "agent-task".to_owned(),
+        "general-task".to_owned(),
+        "child".to_owned(),
+        "do work".to_owned(),
+        false,
+    );
+    task.state = BackgroundTaskState::Cancelled;
+    task_store.write(&task).await.unwrap();
+
+    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+    assert!(recoverable.is_empty());
+    assert_eq!(
+        store.load_run("child").await.unwrap().state,
+        RunState::Cancelled
+    );
+
+    store
+        .update_state("child", RunState::Running)
+        .await
+        .unwrap();
+    let stopped = manager.stop("agent-task").await.unwrap();
+    assert_eq!(stopped.state, BackgroundTaskState::Cancelled);
+    assert_eq!(
+        store.load_run("child").await.unwrap().state,
+        RunState::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn restore_validates_a_live_child_against_its_stored_capability() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    store
+        .create_run(
+            &RunRecord::new(
+                "child",
+                "do work",
+                "echo",
+                "echo",
+                store.workspace().to_path_buf(),
+                Some("parent".to_owned()),
+            )
+            .with_execution_context("general_task_delegating", 1, None)
+            .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
+        )
+        .await
+        .unwrap();
+    store
+        .update_state("child", RunState::Running)
+        .await
+        .unwrap();
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_agent(
+        "agent-task".to_owned(),
+        "general-task".to_owned(),
+        "child".to_owned(),
+        "do work".to_owned(),
+        true,
+    );
+    task.state = BackgroundTaskState::Running;
+    task_store.write(&task).await.unwrap();
+
+    // The current parent configuration says a new child would be a leaf, but
+    // this existing child was durably fixed as delegating before it started.
+    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+    assert_eq!(recoverable.len(), 1);
+    assert_eq!(
+        manager.get("agent-task").await.unwrap().child_can_delegate,
+        Some(true)
     );
 }
 
@@ -241,6 +328,7 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
         "general-task".to_owned(),
         "child".to_owned(),
         "resume me".to_owned(),
+        false,
     );
     agent.state = BackgroundTaskState::Running;
     task_store.write(&agent).await.unwrap();
@@ -348,6 +436,7 @@ async fn resume_agent_task_creates_a_missing_child_run() {
         "general-task".to_owned(),
         "missing-child".to_owned(),
         "start after recovery".to_owned(),
+        true,
     );
     task_store.write(&task).await.unwrap();
 
@@ -370,6 +459,10 @@ async fn resume_agent_task_creates_a_missing_child_run() {
         store.load_run("missing-child").await.unwrap().state,
         RunState::Completed
     );
+    assert_eq!(
+        store.load_run("missing-child").await.unwrap().profile,
+        "general_task_delegating"
+    );
 }
 
 #[tokio::test]
@@ -384,6 +477,7 @@ async fn recovered_child_retries_a_busy_lease_and_reconciles_completion() {
         "general-task".to_owned(),
         "child".to_owned(),
         "resume me".to_owned(),
+        false,
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
@@ -442,6 +536,7 @@ async fn recovery_rejects_a_child_owned_by_another_parent() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
+        false,
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
@@ -476,6 +571,7 @@ async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
+        false,
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
@@ -636,6 +732,119 @@ async fn background_tool_errors_use_the_artifact_and_preview_contract() {
     assert!(completed[0].result_metadata().artifact.is_some());
     assert!(completed[0].model_content().contains("[Tool output]"));
     assert!(completed[0].model_content().contains("truncated: true"));
+}
+
+#[derive(Default)]
+struct CompletionEventSink {
+    background_completed: std::sync::atomic::AtomicBool,
+    subagent_completed: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl EventSink for CompletionEventSink {
+    async fn emit(&self, event: &RuntimeEvent) -> anyhow::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        match &event.kind {
+            RuntimeEventKind::BackgroundTaskCompleted { .. } => {
+                self.background_completed.store(true, Ordering::SeqCst);
+            }
+            RuntimeEventKind::SubagentCompleted { .. } => {
+                self.subagent_completed.store(true, Ordering::SeqCst);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn cancelled_agent_does_not_emit_completion_events_when_its_output_arrives() {
+    use std::sync::atomic::Ordering;
+
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let events = Arc::new(CompletionEventSink::default());
+    let mut task_config = config(workspace.path(), &store, "parent");
+    task_config.events = events.clone();
+    let manager = TaskManager::new(task_config);
+    let task_id = manager
+        .create_agent_task(
+            "general-task".to_owned(),
+            "child".to_owned(),
+            "do work".to_owned(),
+        )
+        .await
+        .unwrap();
+    manager
+        .cancel(&task_id, "stopped by parent agent".to_owned())
+        .await
+        .unwrap();
+
+    manager
+        .finish_agent_output(
+            &task_id,
+            "general-task",
+            "child",
+            ToolOutput {
+                preview: "late result".to_owned(),
+                artifact: None,
+                truncated: false,
+                is_error: false,
+                preview_info: None,
+            },
+        )
+        .await;
+
+    assert_eq!(
+        manager.get(&task_id).await.unwrap().state,
+        BackgroundTaskState::Cancelled
+    );
+    assert!(!events.background_completed.load(Ordering::SeqCst));
+    assert!(!events.subagent_completed.load(Ordering::SeqCst));
+}
+
+struct FailingEventSink;
+
+#[async_trait::async_trait]
+impl EventSink for FailingEventSink {
+    async fn emit(&self, _event: &RuntimeEvent) -> anyhow::Result<()> {
+        anyhow::bail!("event sink unavailable")
+    }
+}
+
+#[tokio::test]
+async fn committed_steering_succeeds_when_its_observation_event_fails() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "do work", RunState::Running).await;
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_agent(
+        "agent-task".to_owned(),
+        "general-task".to_owned(),
+        "child".to_owned(),
+        "do work".to_owned(),
+        false,
+    );
+    task.state = BackgroundTaskState::Running;
+    task_store.write(&task).await.unwrap();
+    let mut task_config = config(workspace.path(), &store, "parent");
+    task_config.events = Arc::new(FailingEventSink);
+    let (manager, _) = TaskManager::restore(task_config).await.unwrap();
+
+    manager
+        .steer("agent-task", "change direction".to_owned())
+        .await
+        .unwrap();
+    let mut trajectory = store.load_trajectory("child").await.unwrap();
+    let appended = store
+        .append_pending_inputs("child", &mut trajectory)
+        .await
+        .unwrap();
+    assert_eq!(appended.len(), 1);
+    assert_eq!(appended[0].message.visible_text(), "change direction");
 }
 
 #[tokio::test]

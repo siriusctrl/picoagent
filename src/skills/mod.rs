@@ -77,6 +77,7 @@ impl SkillRegistry {
         })?;
         let (_, _, body) = parse_skill_document(&content)
             .with_context(|| format!("invalid skill metadata in {}", skill.path.display()))?;
+        let body = body.trim_matches(|character| matches!(character, '\r' | '\n'));
         let path = std::fs::canonicalize(&skill.path)
             .with_context(|| format!("failed to resolve skill path {}", skill.path.display()))?;
         let directory = path
@@ -313,9 +314,9 @@ mod tests {
     }
 
     #[test]
-    fn loading_preserves_the_instruction_body_verbatim() {
+    fn loading_trims_boundary_line_breaks_but_preserves_internal_whitespace() {
         let workspace = TempDir::new().unwrap();
-        let body = "\n    indented instruction\n\n";
+        let body = "\r\n    indented instruction\n\nsecond instruction\n\r\n";
         write_skill(
             &workspace.path().join("skills"),
             "verbatim",
@@ -328,6 +329,9 @@ mod tests {
         let loaded = registry.load("verbatim").unwrap();
         let (_, loaded_body) = loaded.split_once("\n\n").unwrap();
 
-        assert_eq!(loaded_body, body);
+        assert_eq!(
+            loaded_body,
+            "    indented instruction\n\nsecond instruction"
+        );
     }
 }

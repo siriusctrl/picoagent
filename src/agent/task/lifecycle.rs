@@ -6,6 +6,40 @@ use crate::{
 use super::{BackgroundTaskRecord, BackgroundTaskState, TaskManager, record::BackgroundTaskOutput};
 
 impl TaskManager {
+    pub(super) async fn finish_agent_output(
+        &self,
+        task_id: &str,
+        profile: &str,
+        child_run_id: &str,
+        output: crate::artifact::ToolOutput,
+    ) {
+        match self.complete(task_id, output).await {
+            Ok(record) if record.state == BackgroundTaskState::Completed => {
+                let _ = self
+                    .events
+                    .emit(&RuntimeEvent::new(
+                        &self.parent_run_id,
+                        RuntimeEventKind::BackgroundTaskCompleted {
+                            task_id: task_id.to_owned(),
+                            name: profile.to_owned(),
+                        },
+                    ))
+                    .await;
+                let _ = self
+                    .events
+                    .emit(&RuntimeEvent::new(
+                        &self.parent_run_id,
+                        RuntimeEventKind::SubagentCompleted {
+                            child_run_id: child_run_id.to_owned(),
+                        },
+                    ))
+                    .await;
+            }
+            Ok(_) => {}
+            Err(error) => self.finish_failed(task_id, profile, error).await,
+        }
+    }
+
     pub(super) async fn fail_with_output(
         &self,
         task_id: &str,

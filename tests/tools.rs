@@ -6,6 +6,8 @@ use picoagent::{
     },
 };
 use serde_json::json;
+#[cfg(target_os = "linux")]
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -319,6 +321,42 @@ async fn bash_large_combined_output_uses_the_artifact_contract() {
         .unwrap();
     assert!(stored.len() >= 40_000);
     assert_eq!(stored.last(), Some(&b'x'));
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn bash_artifact_is_immutable_after_an_escaped_descendant_writes() {
+    let workspace = tempdir().unwrap();
+    let context = context(workspace.path(), "bash-escaped-writer");
+    let raw = BashTool
+        .execute(
+            context.clone(),
+            json!({
+                "command": "printf '%40000s' x; setsid bash -c 'sleep 0.5; printf late-output' & exit 7"
+            }),
+        )
+        .await
+        .unwrap();
+    let output = ArtifactStore::default()
+        .persist_output(&context, raw)
+        .await
+        .unwrap();
+
+    assert!(output.is_error);
+    let artifact = output.artifact.unwrap();
+    let path = workspace.path().join(&artifact.path);
+    let initial = tokio::fs::read(&path).await.unwrap();
+    assert!(initial.ends_with(b"Command exited with code 7"));
+    assert_eq!(initial.len() as u64, artifact.bytes);
+    assert_eq!(format!("{:x}", Sha256::digest(&initial)), artifact.sha256);
+
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let after_descendant = tokio::fs::read(path).await.unwrap();
+    assert_eq!(after_descendant, initial);
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&after_descendant)),
+        artifact.sha256
+    );
 }
 
 #[cfg(unix)]

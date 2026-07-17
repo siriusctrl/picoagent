@@ -60,8 +60,9 @@ impl Tool for BashTool {
             .join("artifacts");
         tokio::fs::create_dir_all(&artifact_dir).await?;
         let nonce = Ulid::new();
+        let capture_path = artifact_dir.join(format!(".bash-{nonce}.capture.tmp"));
         let combined_path = artifact_dir.join(format!(".bash-{nonce}.combined.tmp"));
-        let stdout = File::create(&combined_path).context("create shell output spool")?;
+        let stdout = File::create(&capture_path).context("create shell output spool")?;
         let stderr = stdout
             .try_clone()
             .context("clone shell output spool for stderr")?;
@@ -88,6 +89,7 @@ impl Tool for BashTool {
         #[cfg(unix)]
         process_group.terminate();
 
+        snapshot_capture(&capture_path, &combined_path).await?;
         finalize_output(&combined_path, &status).await?;
 
         Ok(RawToolOutput::file(
@@ -96,6 +98,29 @@ impl Tool for BashTool {
             !status.success(),
         ))
     }
+}
+
+async fn snapshot_capture(capture_path: &Path, output_path: &Path) -> Result<()> {
+    let capture = tokio::fs::File::open(capture_path)
+        .await
+        .context("open shell output capture")?;
+    let observed_bytes = capture.metadata().await?.len();
+    tokio::fs::remove_file(capture_path)
+        .await
+        .context("unlink shell output capture")?;
+
+    let mut output = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(output_path)
+        .await
+        .context("create shell output result")?;
+    let mut capture = capture.take(observed_bytes);
+    tokio::io::copy(&mut capture, &mut output)
+        .await
+        .context("snapshot shell output capture")?;
+    output.flush().await?;
+    Ok(())
 }
 
 async fn finalize_output(path: &Path, status: &ExitStatus) -> Result<()> {

@@ -133,7 +133,10 @@ impl TaskManager {
             child.depth,
             self.parent_depth.saturating_add(1)
         );
-        let expected_profile = if self.child_can_delegate {
+        let expected_profile = if task
+            .child_can_delegate
+            .context("agent task is missing child capability")?
+        {
             "general_task_delegating"
         } else {
             "general_task_leaf"
@@ -212,6 +215,9 @@ impl TaskManager {
         let mut recoverable = Vec::new();
         for record in records {
             if record.state.is_terminal() {
+                if record.state == super::BackgroundTaskState::Cancelled {
+                    self.cancel_child_run_if_active(&record).await?;
+                }
                 continue;
             }
             if record.kind == "tool" {
