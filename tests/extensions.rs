@@ -35,11 +35,14 @@ async fn skills_load_on_demand_and_memory_uses_ordinary_paths() {
         .await
         .unwrap();
     let loaded = String::from_utf8(loaded.content).unwrap();
-    assert!(loaded.contains("Use primary sources."));
-    assert!(loaded.contains(skill_dir.join("SKILL.md").to_string_lossy().as_ref()));
-    assert!(loaded.contains(skill_dir.to_string_lossy().as_ref()));
-    assert!(!loaded.contains("name: research"));
-    assert!(!loaded.contains("Research carefully."));
+    let skill_dir = fs::canonicalize(skill_dir).unwrap();
+    assert_eq!(
+        loaded,
+        format!(
+            "Skill directory: {}\n\n# Instructions\nUse primary sources.",
+            skill_dir.display()
+        )
+    );
 
     let memory = MemoryPaths::new(home.path(), workspace.path());
     assert_eq!(memory.user, home.path().join("memory/user"));

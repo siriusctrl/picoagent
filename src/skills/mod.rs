@@ -83,8 +83,7 @@ impl SkillRegistry {
             .parent()
             .context("skill path has no parent directory")?;
         Ok(format!(
-            "SKILL.md: {}\nSkill directory: {}\n\n{}",
-            path.display(),
+            "Skill directory: {}\n\n{}",
             directory.display(),
             body
         ))
@@ -257,10 +256,11 @@ mod tests {
         assert_eq!(metadata.source, SkillSource::Workspace);
         assert!(!registry.prompt_index().contains("workspace body"));
         let loaded = registry.load("demo").unwrap();
-        assert!(loaded.contains("workspace body"));
-        assert!(loaded.contains("SKILL.md:"));
-        assert!(loaded.contains("Skill directory:"));
-        assert!(!loaded.contains("description: workspace"));
+        let directory = fs::canonicalize(workspace.path().join("skills/demo")).unwrap();
+        assert_eq!(
+            loaded,
+            format!("Skill directory: {}\n\nworkspace body", directory.display())
+        );
     }
 
     #[test]
@@ -301,12 +301,15 @@ mod tests {
 
         let registry = SkillRegistry::discover(workspace.path(), None).unwrap();
         let loaded = registry.load("composite").unwrap();
+        let skill_root = fs::canonicalize(skill_root).unwrap();
 
-        assert!(!loaded.contains("name: composite"));
-        assert!(!loaded.contains("Already catalogued description."));
-        assert!(loaded.contains(skill_root.join("SKILL.md").to_string_lossy().as_ref()));
-        assert!(loaded.contains(skill_root.to_string_lossy().as_ref()));
-        assert!(loaded.contains("Read references/checklist.md before proceeding."));
+        assert_eq!(
+            loaded,
+            format!(
+                "Skill directory: {}\n\nRead references/checklist.md before proceeding.",
+                skill_root.display()
+            )
+        );
     }
 
     #[test]

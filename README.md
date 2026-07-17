@@ -351,7 +351,7 @@ Picoagent discovers Agent Skills from lowest to highest precedence:
 
 Only skill name and description enter the stable prompt prefix. `load_skill`
 returns the instruction body without repeating that metadata, plus the absolute
-`SKILL.md` and skill-directory paths needed to resolve referenced files.
+skill-directory path needed to resolve referenced files.
 
 ```bash
 pico skills list

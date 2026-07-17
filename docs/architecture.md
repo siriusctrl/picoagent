@@ -213,8 +213,8 @@ block with the workspace `AGENTS.md`, sorted skill metadata, memory paths, and
 optional delegated instructions, followed by the original request. A skill
 body enters the conversation only after the model calls `load_skill`. That
 result omits the already-catalogued name and description, and includes the
-absolute `SKILL.md` path and skill directory so relative references remain
-resolvable.
+absolute skill directory so relative references remain resolvable. The
+`SKILL.md` entry path is implied by that directory and is not repeated.
 
 ### Memory
 
