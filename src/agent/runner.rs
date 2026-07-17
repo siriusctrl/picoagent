@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -18,7 +18,7 @@ use crate::{
 use super::{
     compaction::{CompactionAttempt, build_active_context, estimate_message_tokens, maybe_compact},
     context::{build_runtime_reminder, build_system_prompt},
-    task::{SpawnTool, TaskManager, TaskManagerConfig, WaitTool},
+    task::{SpawnTool, TaskManager, TaskManagerConfig, TaskTool},
     tool_execution::DirectToolRuntime,
 };
 
@@ -82,7 +82,6 @@ impl AgentRunner {
     ) -> Result<RunResult> {
         let plan = self.plan(&request);
         let model = plan.model.clone();
-        let max_steps = plan.max_steps;
         let max_output_tokens = plan.max_output_tokens;
         self.store.update_state(&run_id, RunState::Running).await?;
         let (mut trajectory, needs_initial_message) = match mode {
@@ -157,38 +156,32 @@ impl AgentRunner {
             self.artifacts.policy().max_inline_bytes_per_run,
             &trajectory,
         )));
-        let (task_manager, recoverable_subagents) = if plan.may_delegate {
-            let task_config = TaskManagerConfig {
-                runner: self.clone(),
-                tools: registry.clone(),
-                artifacts: self.artifacts.clone(),
-                preview_budget: tool_preview_budget.clone(),
-                store: self.store.clone(),
-                workspace: self.workspace.clone(),
-                parent_run_id: run_id.clone(),
-                parent_depth: request.depth,
-                child_can_delegate: request.depth + 1 < self.options.max_subagent_depth,
-                events: events.clone(),
-                hooks: self.hooks.clone(),
-                max_parallel_tasks: self.options.max_parallel_tasks,
-                default_execution_timeout_seconds: self.options.task_execution_timeout_seconds,
-                default_wait_timeout_seconds: self.options.task_wait_timeout_seconds,
-                max_execution_timeout_seconds: self.options.task_max_timeout_seconds,
-            };
-            let (manager, recoverable) = if mode == RunMode::Resume {
-                TaskManager::restore(task_config).await?
-            } else {
-                (TaskManager::new(task_config), Vec::new())
-            };
-            registry.register(Arc::new(SpawnTool::new(manager.clone())))?;
-            registry.register(Arc::new(WaitTool::new(manager.clone())))?;
-            (Some(manager), recoverable)
-        } else {
-            (None, Vec::new())
+        let task_config = TaskManagerConfig {
+            runner: self.clone(),
+            tools: registry.clone(),
+            artifacts: self.artifacts.clone(),
+            preview_budget: tool_preview_budget.clone(),
+            store: self.store.clone(),
+            workspace: self.workspace.clone(),
+            parent_run_id: run_id.clone(),
+            parent_depth: request.depth,
+            child_can_delegate: request.depth + 1 < self.options.max_subagent_depth,
+            events: events.clone(),
+            hooks: self.hooks.clone(),
+            max_parallel_tasks: self.options.max_parallel_tasks,
+            wait_timeout_seconds: self.options.task_wait_timeout_seconds,
         };
-        let mut task_guard = task_manager
-            .as_ref()
-            .map(|manager| manager.cancellation_guard());
+        let (manager, recoverable_subagents) = if mode == RunMode::Resume {
+            TaskManager::restore(task_config).await?
+        } else {
+            (TaskManager::new(task_config), Vec::new())
+        };
+        if plan.may_delegate {
+            registry.register(Arc::new(SpawnTool::new(manager.clone())))?;
+        }
+        registry.register(Arc::new(TaskTool::new(manager.clone())))?;
+        let task_manager = manager;
+        let mut task_guard = task_manager.cancellation_guard();
         let direct_tools = DirectToolRuntime {
             registry: &registry,
             hooks: &self.hooks,
@@ -197,7 +190,8 @@ impl AgentRunner {
             events: &events,
             workspace: &self.workspace,
             run_id: &run_id,
-            timeout_seconds: self.options.direct_tool_timeout_seconds,
+            manager: task_manager.clone(),
+            foreground_timeout_seconds: self.options.foreground_tool_timeout_seconds,
         };
         // Freeze the model-facing schema set once per run. Tool execution keeps
         // using the registry, but every normal model request receives the exact
@@ -207,10 +201,8 @@ impl AgentRunner {
         self.store
             .verify_tool_schema(&run_id, &tool_schema_sha256)
             .await?;
-        if let Some(manager) = &task_manager {
-            for task in recoverable_subagents {
-                manager.resume_agent_task(task).await?;
-            }
+        for task in recoverable_subagents {
+            task_manager.resume_agent_task(task).await?;
         }
         let outcome: Result<RunResult> = async {
             let mut latest_checkpoint = self.store.load_latest_compaction(&run_id).await?;
@@ -219,49 +211,61 @@ impl AgentRunner {
                 .iter()
                 .filter(|record| record.message.role == Role::Assistant)
                 .count();
-            let mut step_limit = max_steps;
             if mode == RunMode::Resume {
                 let interrupted_preview_bytes =
                     append_interrupted_tool_results(&self.store, &run_id, &mut trajectory).await?;
                 let mut remaining = tool_preview_budget.lock().await;
                 *remaining = remaining.saturating_sub(interrupted_preview_bytes);
                 drop(remaining);
-                if let Some(final_text) = resumable_final_text(&trajectory) {
-                    let ready = if let Some(manager) = &task_manager {
-                        manager.settle_before_finish().await?
-                    } else {
-                        Vec::new()
-                    };
+                let resumed_inputs = self
+                    .store
+                    .append_pending_inputs(&run_id, &mut trajectory)
+                    .await?;
+                if resumed_inputs.is_empty()
+                    && let Some(final_text) = resumable_final_text(&trajectory)
+                {
+                    let ready = task_manager.pending_before_finish().await?;
                     if ready.is_empty() {
-                        self.finish_success(&run_id, &final_text, events.clone())
+                        let input_lock = self.store.pending_input_lock();
+                        let _input_guard = input_lock.lock().await;
+                        let steered = self
+                            .store
+                            .append_pending_inputs_locked(&run_id, &mut trajectory)
                             .await?;
-                        return Ok(RunResult {
-                            run_id: run_id.clone(),
-                            final_output: final_text,
-                        });
-                    }
-                    append_background_results(&self.store, &run_id, &mut trajectory, &ready)
-                        .await?;
-                    if let Some(manager) = &task_manager {
-                        manager.mark_delivered(&ready).await?;
-                    }
-                    if completed_steps >= max_steps {
-                        step_limit = max_steps.saturating_add(1);
+                        if steered.is_empty() {
+                            self.finish_success(&run_id, &final_text, events.clone())
+                                .await?;
+                            return Ok(RunResult {
+                                run_id: run_id.clone(),
+                                final_output: final_text,
+                            });
+                        }
+                    } else {
+                        append_background_results(&self.store, &run_id, &mut trajectory, &ready)
+                            .await?;
+                        task_manager.mark_delivered(&ready).await?;
                     }
                 }
             }
 
             let mut step = completed_steps.saturating_add(1);
-            while step <= step_limit {
-                if let Some(manager) = &task_manager {
-                    let ready = manager.drain_completed().await?;
-                    let added =
-                        append_background_results(&self.store, &run_id, &mut trajectory, &ready)
-                            .await?;
-                    manager.mark_delivered(&ready).await?;
-                    if let Some(tokens) = &mut context_tokens {
-                        *tokens = tokens.saturating_add(added);
-                    }
+            loop {
+                let ready = task_manager.drain_completed().await?;
+                let added =
+                    append_background_results(&self.store, &run_id, &mut trajectory, &ready)
+                        .await?;
+                task_manager.mark_delivered(&ready).await?;
+                if let Some(tokens) = &mut context_tokens {
+                    *tokens = tokens.saturating_add(added);
+                }
+                let steered = self
+                    .store
+                    .append_pending_inputs(&run_id, &mut trajectory)
+                    .await?;
+                if let Some(tokens) = &mut context_tokens {
+                    *tokens = steered.iter().fold(*tokens, |total, record| {
+                        total.saturating_add(estimate_message_tokens(&record.message))
+                    });
                 }
 
                 if automatic_compaction_enabled
@@ -347,26 +351,49 @@ impl AgentRunner {
                 trajectory.push(assistant_record);
 
                 if tool_calls.is_empty() {
-                    if let Some(manager) = &task_manager {
-                        let ready = manager.settle_before_finish().await?;
-                        if !ready.is_empty() {
-                            let added = append_background_results(
-                                &self.store,
-                                &run_id,
-                                &mut trajectory,
-                                &ready,
-                            )
-                            .await?;
-                            manager.mark_delivered(&ready).await?;
-                            if let Some(tokens) = &mut context_tokens {
-                                *tokens = tokens.saturating_add(added);
-                            }
-                            if step == max_steps {
-                                step_limit = max_steps.saturating_add(1);
-                            }
-                            step = step.saturating_add(1);
-                            continue;
+                    let steered = self
+                        .store
+                        .append_pending_inputs(&run_id, &mut trajectory)
+                        .await?;
+                    if !steered.is_empty() {
+                        if let Some(tokens) = &mut context_tokens {
+                            *tokens = steered.iter().fold(*tokens, |total, record| {
+                                total.saturating_add(estimate_message_tokens(&record.message))
+                            });
                         }
+                        step = step.saturating_add(1);
+                        continue;
+                    }
+                    let ready = task_manager.pending_before_finish().await?;
+                    if !ready.is_empty() {
+                        let added = append_background_results(
+                            &self.store,
+                            &run_id,
+                            &mut trajectory,
+                            &ready,
+                        )
+                        .await?;
+                        task_manager.mark_delivered(&ready).await?;
+                        if let Some(tokens) = &mut context_tokens {
+                            *tokens = tokens.saturating_add(added);
+                        }
+                        step = step.saturating_add(1);
+                        continue;
+                    }
+                    let input_lock = self.store.pending_input_lock();
+                    let _input_guard = input_lock.lock().await;
+                    let steered = self
+                        .store
+                        .append_pending_inputs_locked(&run_id, &mut trajectory)
+                        .await?;
+                    if !steered.is_empty() {
+                        if let Some(tokens) = &mut context_tokens {
+                            *tokens = steered.iter().fold(*tokens, |total, record| {
+                                total.saturating_add(estimate_message_tokens(&record.message))
+                            });
+                        }
+                        step = step.saturating_add(1);
+                        continue;
                     }
                     self.finish_success(&run_id, &final_text, events.clone())
                         .await?;
@@ -386,20 +413,14 @@ impl AgentRunner {
                 }
                 step = step.saturating_add(1);
             }
-
-            bail!("run exceeded the maximum of {max_steps} model steps")
         }
         .await;
-        if outcome.is_err()
-            && let Some(manager) = &task_manager
-        {
-            manager
+        if outcome.is_err() {
+            task_manager
                 .abort_and_settle("parent run ended before background task completion")
                 .await;
         }
-        if let Some(guard) = &mut task_guard {
-            guard.disarm();
-        }
+        task_guard.disarm();
         outcome
     }
 }

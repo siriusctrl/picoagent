@@ -6,7 +6,7 @@ use crate::{
 use super::{BackgroundTaskRecord, BackgroundTaskState, TaskManager, record::BackgroundTaskOutput};
 
 impl TaskManager {
-    async fn fail_with_output(
+    pub(super) async fn fail_with_output(
         &self,
         task_id: &str,
         error: String,
@@ -17,9 +17,11 @@ impl TaskManager {
             metadata: output.result_metadata(),
         };
         self.update(task_id, |record| {
-            record.state = BackgroundTaskState::Failed;
-            record.error = Some(error);
-            record.result = Some(result);
+            if !record.state.is_terminal() {
+                record.state = BackgroundTaskState::Failed;
+                record.error = Some(error);
+                record.result = Some(result);
+            }
         })
         .await
     }
@@ -52,34 +54,22 @@ impl TaskManager {
             ));
             self.fail_in_memory(task_id, error.clone()).await;
         }
-        let _ = self
-            .events
-            .emit(&RuntimeEvent::new(
-                &self.parent_run_id,
-                RuntimeEventKind::BackgroundTaskFailed {
-                    task_id: task_id.to_owned(),
-                    name: name.to_owned(),
-                    error,
-                },
-            ))
-            .await;
-    }
-
-    pub(super) async fn finish_timed_out(&self, task_id: &str, name: &str) {
-        match self.time_out(task_id).await {
-            Ok(_) => {
-                let _ = self
-                    .events
-                    .emit(&RuntimeEvent::new(
-                        &self.parent_run_id,
-                        RuntimeEventKind::BackgroundTaskTimedOut {
-                            task_id: task_id.to_owned(),
-                            name: name.to_owned(),
-                        },
-                    ))
-                    .await;
-            }
-            Err(error) => self.finish_failed(task_id, name, error).await,
+        if self
+            .get(task_id)
+            .await
+            .is_ok_and(|record| record.state == BackgroundTaskState::Failed)
+        {
+            let _ = self
+                .events
+                .emit(&RuntimeEvent::new(
+                    &self.parent_run_id,
+                    RuntimeEventKind::BackgroundTaskFailed {
+                        task_id: task_id.to_owned(),
+                        name: name.to_owned(),
+                        error,
+                    },
+                ))
+                .await;
         }
     }
 }

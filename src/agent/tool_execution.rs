@@ -1,11 +1,12 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{future::Future, path::Path, pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 
 use crate::{
-    artifact::{ArtifactStore, ToolOutput},
+    agent::task::TaskManager,
+    artifact::{ArtifactStore, ResultMetadata, ToolOutput},
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::{HookEvent, HookPipeline},
     model::{Message, MessageContent, Role, ToolCall},
@@ -21,8 +22,10 @@ pub(crate) enum ToolExecutionMode {
 pub(crate) enum ToolExecutionOutcome {
     Completed(Box<ToolOutput>),
     Failed(anyhow::Error),
-    TimedOut,
 }
+
+pub(crate) type ToolExecutionFuture =
+    Pin<Box<dyn Future<Output = Result<ToolExecutionOutcome>> + Send + 'static>>;
 
 /// Runs the lifecycle shared by direct and background ordinary-tool calls.
 /// Task state and scheduling remain the responsibility of `TaskManager`.
@@ -60,7 +63,6 @@ impl<'a> ToolExecutor<'a> {
     pub(crate) async fn execute(
         &self,
         call: ToolCall,
-        timeout: Duration,
         mode: ToolExecutionMode,
     ) -> Result<ToolExecutionOutcome> {
         let mut before_payload = hook_payload(self.run_id, &call, mode);
@@ -98,30 +100,14 @@ impl<'a> ToolExecutor<'a> {
                 .finish_failure(&call, &context, mode, anyhow!("unknown tool"))
                 .await;
         };
-        match tokio::time::timeout(timeout, tool.execute(context.clone(), arguments)).await {
-            Ok(Ok(raw)) => {
+        match tool.execute(context.clone(), arguments).await {
+            Ok(raw) => {
                 let output = self.persist_output(&context, raw).await?;
                 self.finish_lifecycle(&call, mode, Some(&output), output.is_error)
                     .await?;
                 Ok(ToolExecutionOutcome::Completed(Box::new(output)))
             }
-            Ok(Err(error)) => self.finish_failure(&call, &context, mode, error).await,
-            Err(_) if mode == ToolExecutionMode::Direct => {
-                let raw = failed_tool_output(
-                    &call.name,
-                    "direct tool call exceeded its execution timeout",
-                );
-                let output = self.persist_output(&context, raw).await?;
-                self.finish_lifecycle(&call, mode, Some(&output), true)
-                    .await?;
-                Ok(ToolExecutionOutcome::Completed(Box::new(output)))
-            }
-            Err(_) => {
-                // A timeout remains a task timeout even if a best-effort after
-                // hook or event sink fails while reporting it.
-                let _ = self.finish_lifecycle(&call, mode, None, true).await;
-                Ok(ToolExecutionOutcome::TimedOut)
-            }
+            Err(error) => self.finish_failure(&call, &context, mode, error).await,
         }
     }
 
@@ -223,27 +209,66 @@ pub struct DirectToolRuntime<'a> {
     pub events: &'a SharedEventSink,
     pub workspace: &'a Path,
     pub run_id: &'a str,
-    pub timeout_seconds: u64,
+    pub manager: Arc<TaskManager>,
+    pub foreground_timeout_seconds: u64,
 }
 
 impl DirectToolRuntime<'_> {
     pub async fn execute(&self, call: ToolCall) -> Result<Message> {
         let call_id = call.id.clone();
-        let outcome = ToolExecutor::new(
-            self.registry,
-            self.hooks,
-            self.artifacts,
-            self.preview_budget,
-            self.events,
-            self.workspace,
-            self.run_id,
+        let name = call.name.clone();
+        let registry = self.registry.clone();
+        let hooks = self.hooks.clone();
+        let artifacts = self.artifacts.clone();
+        let preview_budget = self.preview_budget.clone();
+        let events = self.events.clone();
+        let workspace = self.workspace.to_owned();
+        let run_id = self.run_id.to_owned();
+        let mut execution: ToolExecutionFuture = Box::pin(async move {
+            ToolExecutor::new(
+                &registry,
+                &hooks,
+                &artifacts,
+                &preview_budget,
+                &events,
+                &workspace,
+                &run_id,
+            )
+            .execute(call, ToolExecutionMode::Direct)
+            .await
+        });
+        let outcome = match tokio::time::timeout(
+            Duration::from_secs(self.foreground_timeout_seconds),
+            execution.as_mut(),
         )
-        .execute(
-            call,
-            Duration::from_secs(self.timeout_seconds.max(1)),
-            ToolExecutionMode::Direct,
-        )
-        .await?;
+        .await
+        {
+            Ok(outcome) => outcome?,
+            Err(_) => {
+                let task_id = self
+                    .manager
+                    .promote_running_tool(name.clone(), call_id.clone(), execution)
+                    .await?;
+                return Ok(Message {
+                    role: Role::Tool,
+                    content: vec![MessageContent::ToolResult {
+                        call_id,
+                        content: serde_json::to_string(&json!({
+                            "task_id": task_id,
+                            "kind": "tool",
+                            "name": name,
+                            "status": "running",
+                            "message": format!(
+                                "Tool task was sent to background after exceeding the {timeout}s foreground window. It continues without restarting. Use the task tool to inspect, wait, or stop it; its terminal result will also be delivered automatically.",
+                                timeout = self.foreground_timeout_seconds,
+                            ),
+                        }))?,
+                        is_error: false,
+                        metadata: ResultMetadata::empty(),
+                    }],
+                });
+            }
+        };
         let ToolExecutionOutcome::Completed(output) = outcome else {
             return Err(anyhow!("direct tool execution did not produce a result"));
         };

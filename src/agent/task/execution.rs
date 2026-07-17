@@ -7,12 +7,12 @@ use ulid::Ulid;
 use crate::{
     agent::{
         runner::RunRequest,
-        tool_execution::{ToolExecutionMode, ToolExecutionOutcome},
+        tool_execution::{ToolExecutionFuture, ToolExecutionMode, ToolExecutionOutcome},
     },
     events::{RuntimeEvent, RuntimeEventKind},
     model::ToolCall,
     prompts::agent_prompts,
-    storage::{RunLeaseBusy, RunState},
+    storage::RunLeaseBusy,
     tools::{RawToolOutput, ToolContext},
 };
 
@@ -23,94 +23,160 @@ impl TaskManager {
         self: &Arc<Self>,
         name: String,
         arguments: Value,
-        timeout_seconds: Option<u64>,
     ) -> Result<BackgroundTaskRecord> {
         if self.tools.get(&name).is_none() {
             bail!("unknown or non-spawnable tool `{name}`")
         }
-        let timeout = self.execution_timeout(timeout_seconds);
-        let deadline = tokio::time::Instant::now() + timeout;
-        let task_id = self
-            .create_tool_task(name.clone(), timeout.as_secs())
+        let task_id = self.create_tool_task(name.clone()).await?;
+        let manager = self.clone();
+        let task_id_for_future = task_id.clone();
+        let handle = tokio::spawn(async move {
+            let task_id = task_id_for_future;
+            let permit = match manager.slots.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(error) => {
+                    manager.finish_failed(&task_id, &name, error.into()).await;
+                    return;
+                }
+            };
+            let outcome = async {
+                manager.set_running(&task_id).await?;
+                let _ = manager
+                    .events
+                    .emit(&RuntimeEvent::new(
+                        &manager.parent_run_id,
+                        RuntimeEventKind::BackgroundTaskStarted {
+                            task_id: task_id.clone(),
+                            name: name.clone(),
+                        },
+                    ))
+                    .await;
+                let call = ToolCall {
+                    id: format!("background-{task_id}"),
+                    name: name.clone(),
+                    arguments,
+                };
+                manager
+                    .tool_executor()
+                    .execute(call, ToolExecutionMode::Background)
+                    .await
+            }
+            .await;
+            drop(permit);
+            match outcome {
+                Ok(ToolExecutionOutcome::Completed(output)) => {
+                    manager.finish_tool_output(&task_id, &name, *output).await;
+                }
+                Ok(ToolExecutionOutcome::Failed(error)) | Err(error) => {
+                    manager.finish_failed(&task_id, &name, error).await;
+                }
+            }
+        });
+        self.track(task_id.clone(), handle);
+        self.get(&task_id).await
+    }
+
+    /// Continue a direct tool future after its foreground window elapsed. The
+    /// future itself is preserved, so no work is restarted and no timeout is
+    /// treated as a failure.
+    pub(crate) async fn promote_running_tool(
+        self: &Arc<Self>,
+        name: String,
+        call_id: String,
+        execution: ToolExecutionFuture,
+    ) -> Result<String> {
+        let task_id = self.create_tool_task(name.clone()).await?;
+        self.set_running(&task_id).await?;
+        self.events
+            .emit(&RuntimeEvent::new(
+                &self.parent_run_id,
+                RuntimeEventKind::BackgroundTaskStarted {
+                    task_id: task_id.clone(),
+                    name: name.clone(),
+                },
+            ))
+            .await?;
+        self.events
+            .emit(&RuntimeEvent::new(
+                &self.parent_run_id,
+                RuntimeEventKind::BackgroundTaskSentToBackground {
+                    task_id: task_id.clone(),
+                    name: name.clone(),
+                    call_id,
+                },
+            ))
             .await?;
         let manager = self.clone();
         let task_id_for_future = task_id.clone();
-        let handle =
-            tokio::spawn(async move {
-                let task_id = task_id_for_future;
-                let permit =
-                    match tokio::time::timeout_at(deadline, manager.slots.clone().acquire_owned())
-                        .await
-                    {
-                        Ok(Ok(permit)) => permit,
-                        Err(_) => {
-                            manager.finish_timed_out(&task_id, &name).await;
-                            return;
-                        }
-                        Ok(Err(error)) => {
-                            manager.finish_failed(&task_id, &name, error.into()).await;
-                            return;
-                        }
-                    };
-                let outcome = tokio::time::timeout_at(deadline, async {
-                    manager.set_running(&task_id).await?;
-                    let _ = manager
-                        .events
-                        .emit(&RuntimeEvent::new(
-                            &manager.parent_run_id,
-                            RuntimeEventKind::BackgroundTaskStarted {
-                                task_id: task_id.clone(),
-                                name: name.clone(),
-                            },
-                        ))
-                        .await;
-                    let call = ToolCall {
-                        id: format!("background-{task_id}"),
-                        name: name.clone(),
-                        arguments,
-                    };
+        let handle = tokio::spawn(async move {
+            match execution.await {
+                Ok(ToolExecutionOutcome::Completed(output)) => {
                     manager
-                        .tool_executor()
-                        .execute(
-                            call,
-                            deadline.saturating_duration_since(tokio::time::Instant::now()),
-                            ToolExecutionMode::Background,
-                        )
-                        .await
-                })
-                .await;
-                drop(permit);
-                match outcome {
-                    Ok(Ok(ToolExecutionOutcome::Completed(output))) => {
-                        if let Err(error) = manager.complete(&task_id, *output).await {
-                            manager.finish_failed(&task_id, &name, error).await;
-                        } else {
-                            let _ = manager
-                                .events
-                                .emit(&RuntimeEvent::new(
-                                    &manager.parent_run_id,
-                                    RuntimeEventKind::BackgroundTaskCompleted { task_id, name },
-                                ))
-                                .await;
-                        }
-                    }
-                    Ok(Ok(ToolExecutionOutcome::Failed(error))) | Ok(Err(error)) => {
-                        manager.finish_failed(&task_id, &name, error).await;
-                    }
-                    Ok(Ok(ToolExecutionOutcome::TimedOut)) | Err(_) => {
-                        manager.finish_timed_out(&task_id, &name).await
-                    }
+                        .finish_tool_output(&task_id_for_future, &name, *output)
+                        .await;
                 }
-            });
-        self.track(handle);
-        self.get(&task_id).await
+                Ok(ToolExecutionOutcome::Failed(error)) | Err(error) => {
+                    manager
+                        .finish_failed(&task_id_for_future, &name, error)
+                        .await;
+                }
+            }
+        });
+        self.track(task_id.clone(), handle);
+        Ok(task_id)
+    }
+
+    async fn finish_tool_output(
+        &self,
+        task_id: &str,
+        name: &str,
+        output: crate::artifact::ToolOutput,
+    ) {
+        let state = if output.is_error {
+            self.fail_with_output(
+                task_id,
+                format!("tool `{name}` returned an error result"),
+                output,
+            )
+            .await
+        } else {
+            self.complete(task_id, output).await
+        };
+        match state {
+            Ok(record) if record.state == super::BackgroundTaskState::Completed => {
+                let _ = self
+                    .events
+                    .emit(&RuntimeEvent::new(
+                        &self.parent_run_id,
+                        RuntimeEventKind::BackgroundTaskCompleted {
+                            task_id: task_id.to_owned(),
+                            name: name.to_owned(),
+                        },
+                    ))
+                    .await;
+            }
+            Ok(record) if record.state == super::BackgroundTaskState::Failed => {
+                let _ = self
+                    .events
+                    .emit(&RuntimeEvent::new(
+                        &self.parent_run_id,
+                        RuntimeEventKind::BackgroundTaskFailed {
+                            task_id: task_id.to_owned(),
+                            name: name.to_owned(),
+                            error: record.error.unwrap_or_else(|| "tool failed".to_owned()),
+                        },
+                    ))
+                    .await;
+            }
+            Ok(_) => {}
+            Err(error) => self.finish_failed(task_id, name, error).await,
+        }
     }
 
     pub async fn spawn_agent(
         self: &Arc<Self>,
         profile: String,
         prompt: String,
-        timeout_seconds: Option<u64>,
     ) -> Result<BackgroundTaskRecord> {
         if profile != "general-task" {
             bail!("unknown agent profile `{profile}`; expected `general-task`");
@@ -119,19 +185,11 @@ impl TaskManager {
             bail!("agent prompt must not be empty");
         }
         let child_run_id = Ulid::new().to_string();
-        let timeout = self.execution_timeout(timeout_seconds);
-        let deadline = tokio::time::Instant::now() + timeout;
         let task_id = self
-            .create_agent_task(
-                profile.clone(),
-                child_run_id.clone(),
-                prompt.clone(),
-                timeout.as_secs(),
-            )
+            .create_agent_task(profile.clone(), child_run_id.clone(), prompt.clone())
             .await?;
-        let handle =
-            self.launch_agent_task(task_id.clone(), profile, child_run_id, prompt, deadline);
-        self.track(handle);
+        let handle = self.launch_agent_task(task_id.clone(), profile, child_run_id, prompt);
+        self.track(task_id.clone(), handle);
         self.get(&task_id).await
     }
 
@@ -161,14 +219,12 @@ impl TaskManager {
             self.validate_child_run(&record, &child)?;
         }
         let handle = self.launch_agent_task(
-            task.task_id,
+            task.task_id.clone(),
             record.name,
             task.child_run_id,
             task.prompt,
-            tokio::time::Instant::now()
-                + std::time::Duration::from_secs(task.timeout_seconds.max(1)),
         );
-        self.track(handle);
+        self.track(task.task_id, handle);
         Ok(())
     }
 
@@ -178,22 +234,12 @@ impl TaskManager {
         profile: String,
         child_run_id: String,
         prompt: String,
-        deadline: tokio::time::Instant,
     ) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
-            let permit = match tokio::time::timeout_at(
-                deadline,
-                manager.slots.clone().acquire_owned(),
-            )
-            .await
-            {
-                Ok(Ok(permit)) => permit,
-                Err(_) => {
-                    manager.finish_timed_out(&task_id, &profile).await;
-                    return;
-                }
-                Ok(Err(error)) => {
+            let permit = match manager.slots.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(error) => {
                     manager
                         .finish_failed(&task_id, &profile, error.into())
                         .await;
@@ -253,7 +299,7 @@ impl TaskManager {
                     return;
                 }
             }
-            let outcome = tokio::time::timeout_at(deadline, async {
+            let outcome = async {
                 if child_exists {
                     loop {
                         match manager
@@ -273,11 +319,11 @@ impl TaskManager {
                         .run_with_id(request, child_run_id.clone())
                         .await
                 }
-            })
+            }
             .await;
             drop(permit);
             match outcome {
-                Ok(Ok(result)) => {
+                Ok(result) => {
                     let context = ToolContext {
                         run_id: manager.parent_run_id.clone(),
                         call_id: format!("background-{task_id}"),
@@ -324,7 +370,7 @@ impl TaskManager {
                         Err(error) => manager.finish_failed(&task_id, &profile, error).await,
                     }
                 }
-                Ok(Err(error)) => {
+                Err(error) => {
                     let message = format!("{error:#}");
                     manager
                         .finish_failed(&task_id, &profile, anyhow::anyhow!(message.clone()))
@@ -336,23 +382,6 @@ impl TaskManager {
                             RuntimeEventKind::SubagentFailed {
                                 child_run_id,
                                 error: message,
-                            },
-                        ))
-                        .await;
-                }
-                Err(_) => {
-                    let _ = manager
-                        .store
-                        .update_state(&child_run_id, RunState::Failed)
-                        .await;
-                    manager.finish_timed_out(&task_id, &profile).await;
-                    let _ = manager
-                        .events
-                        .emit(&RuntimeEvent::new(
-                            &manager.parent_run_id,
-                            RuntimeEventKind::SubagentFailed {
-                                child_run_id,
-                                error: "background agent timed out".to_owned(),
                             },
                         ))
                         .await;

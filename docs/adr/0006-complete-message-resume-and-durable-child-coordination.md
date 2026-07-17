@@ -8,6 +8,12 @@ ADR 0009 removes the MemoryMaintenance child mentioned below. The durable
 GeneralTask resume and coordination contract remains accepted and now also
 covers delegated large memory updates.
 
+ADR 0010 refines task lifetime and live control below. Task records no longer
+carry execution timeouts, active work is parent-controlled, and in-process
+cancellation now settles durable cancelled state when the runtime remains
+available. Complete-message resume and separate child transcripts remain
+accepted.
+
 ## Context
 
 Main runs need to survive process loss. Subagents use the same runner and have

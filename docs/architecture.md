@@ -14,7 +14,7 @@ job/CLI
         -> built-in Tool
         -> MCP Tool adapter
         -> load_skill Tool
-        -> spawn / wait
+        -> spawn / task
            -> background Tool
            -> child AgentRunner
      -> ArtifactStore
@@ -25,7 +25,9 @@ job/CLI
 
 `AgentRunner` is the only model/tool loop. It calls a provider, executes the
 returned tool calls, appends complete tool results, and repeats until the model
-returns a final answer or the configured step limit is reached.
+returns a final answer with no unresolved background work. There is no model
+step limit; provider request deadlines and explicit cancellation remain real
+failure boundaries.
 
 ## Core Boundaries
 
@@ -134,7 +136,6 @@ Background tasks have a separate persisted state:
 ```text
 queued -> running -> completed
                   |-> failed
-                  |-> timed_out
                   |-> cancelled
                   `-> interrupted
 ```
@@ -234,10 +235,18 @@ project files; it is not a special second workspace abstraction. Child
 transcripts stay out of the parent context; only the bounded final result and
 artifact reference return to the parent.
 
-`spawn` is also the async wrapper for ordinary tools. Direct calls remain
-synchronous. This keeps async policy out of every individual tool schema while
-still letting the model parallelize independent work. `wait` is a bounded join;
-all background executions have a separate hard timeout.
+`spawn` starts an ordinary tool or GeneralTask child in the background
+immediately. A direct ordinary tool starts in the foreground; when its configured
+foreground window elapses, the same in-flight future moves into this task
+lifecycle without stopping or restarting. Explicit background work has no hard
+execution deadline.
+
+The `task` control surface provides status, bounded wait, inspect, steer, and
+stop. Inspect projects a bounded page of the child's durable messages in their
+native Chat-compatible form. Steer appends a durable pending ordinary user
+message after the child's current assistant response and complete tool-call
+batch, before its next provider request. Stop aborts the selected future and
+commits `cancelled`; it does not affect unrelated tasks.
 
 Each task record is durable coordination state only. Child messages remain in
 the child's run directory. Recovery derives delivered ids from the parent

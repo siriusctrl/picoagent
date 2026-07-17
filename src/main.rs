@@ -189,16 +189,13 @@ async fn run_action(
         memory,
         extra_events,
         options: RunnerOptions {
-            max_steps: config.runtime.max_steps,
             max_subagent_depth: config.runtime.max_subagent_depth,
             max_parallel_tasks: config.runtime.max_parallel_tasks,
             max_parallel_model_calls: config.runtime.max_parallel_model_calls,
             model_request_timeout_seconds: config.runtime.model_request_timeout_seconds,
             max_output_tokens: config.runtime.max_output_tokens,
-            direct_tool_timeout_seconds: config.tasks.direct_tool_timeout_seconds,
-            task_execution_timeout_seconds: config.tasks.default_execution_timeout_seconds,
-            task_wait_timeout_seconds: config.tasks.default_wait_timeout_seconds,
-            task_max_timeout_seconds: config.tasks.max_execution_timeout_seconds,
+            foreground_tool_timeout_seconds: config.tasks.foreground_tool_timeout_seconds,
+            task_wait_timeout_seconds: config.tasks.wait_timeout_seconds,
             compaction: picoagent::agent::CompactionOptions {
                 trigger_tokens: config.compaction.trigger_tokens,
                 keep_recent_tokens: config.compaction.keep_recent_tokens,
@@ -207,7 +204,6 @@ async fn run_action(
             },
             general_task: picoagent::agent::GeneralTaskProfile {
                 model: config.agents.general_task.model.clone(),
-                max_steps: config.agents.general_task.max_steps,
                 max_output_tokens: config.agents.general_task.max_output_tokens,
             },
         },

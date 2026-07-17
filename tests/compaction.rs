@@ -146,7 +146,6 @@ fn runner(
         tools.register(Arc::new(ReadTool)).unwrap();
     }
     let options = RunnerOptions {
-        max_steps: 4,
         compaction: CompactionOptions {
             trigger_tokens: Some(10),
             keep_recent_tokens: 1,

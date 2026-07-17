@@ -21,7 +21,6 @@ pub(super) enum RunMode {
 
 pub(super) struct RunPlan {
     pub(super) model: String,
-    pub(super) max_steps: usize,
     pub(super) max_output_tokens: Option<u32>,
     pub(super) may_delegate: bool,
 }
@@ -85,19 +84,14 @@ impl AgentRunner {
     }
 
     pub(super) fn plan(&self, request: &RunRequest) -> RunPlan {
-        let (model, max_steps, max_output_tokens) = match request.profile {
-            RunProfile::Root => (
-                self.model.clone(),
-                self.options.max_steps,
-                self.options.max_output_tokens,
-            ),
+        let (model, max_output_tokens) = match request.profile {
+            RunProfile::Root => (self.model.clone(), self.options.max_output_tokens),
             RunProfile::GeneralTaskDelegating | RunProfile::GeneralTaskLeaf => (
                 self.options
                     .general_task
                     .model
                     .clone()
                     .unwrap_or_else(|| self.model.clone()),
-                self.options.general_task.max_steps,
                 self.options.general_task.max_output_tokens,
             ),
         };
@@ -108,7 +102,6 @@ impl AgentRunner {
         };
         RunPlan {
             model,
-            max_steps,
             max_output_tokens,
             may_delegate,
         }

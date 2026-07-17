@@ -81,9 +81,7 @@ fn config(
         events: Arc::new(NoopEventSink),
         hooks: HookPipeline::new(),
         max_parallel_tasks: 2,
-        default_execution_timeout_seconds: 300,
-        default_wait_timeout_seconds: 30,
-        max_execution_timeout_seconds: 1_800,
+        wait_timeout_seconds: 30,
     }
 }
 
@@ -96,8 +94,7 @@ async fn restore_reconciles_tools_and_completed_children() {
     store.write_final("child", "child result").await.unwrap();
 
     let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
-    let mut tool =
-        BackgroundTaskRecord::queued_tool("tool-task".to_owned(), "bash".to_owned(), 300);
+    let mut tool = BackgroundTaskRecord::queued_tool("tool-task".to_owned(), "bash".to_owned());
     tool.state = BackgroundTaskState::Running;
     task_store.write(&tool).await.unwrap();
     let mut agent = BackgroundTaskRecord::queued_agent(
@@ -105,7 +102,6 @@ async fn restore_reconciles_tools_and_completed_children() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
-        300,
     );
     agent.state = BackgroundTaskState::Running;
     task_store.write(&agent).await.unwrap();
@@ -134,7 +130,7 @@ async fn restore_reconciles_tools_and_completed_children() {
 }
 
 #[tokio::test]
-async fn restore_prefers_a_durable_completed_child_over_an_expired_task_deadline() {
+async fn restore_prefers_a_durable_completed_child_regardless_of_task_age() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -149,7 +145,6 @@ async fn restore_prefers_a_durable_completed_child_over_an_expired_task_deadline
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
-        1,
     );
     agent.state = BackgroundTaskState::Running;
     agent.created_at = chrono::Utc::now() - chrono::Duration::minutes(10);
@@ -205,7 +200,6 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
         "general-task".to_owned(),
         "child".to_owned(),
         "resume me".to_owned(),
-        300,
     );
     agent.state = BackgroundTaskState::Running;
     task_store.write(&agent).await.unwrap();
@@ -216,7 +210,7 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
             content: "already delivered".to_owned(),
             metadata: crate::artifact::ResultMetadata::empty(),
         }),
-        ..BackgroundTaskRecord::queued_tool("done-task".to_owned(), "read".to_owned(), 300)
+        ..BackgroundTaskRecord::queued_tool("done-task".to_owned(), "read".to_owned())
     };
     task_store.write(&delivered).await.unwrap();
     store
@@ -284,8 +278,7 @@ async fn restore_reserves_preview_bytes_for_an_undelivered_completed_task() {
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
     let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
-    let mut task =
-        BackgroundTaskRecord::queued_tool("done-task".to_owned(), "read".to_owned(), 300);
+    let mut task = BackgroundTaskRecord::queued_tool("done-task".to_owned(), "read".to_owned());
     task.state = BackgroundTaskState::Completed;
     task.result = Some(record::BackgroundTaskOutput {
         content: "bounded result".to_owned(),
@@ -314,7 +307,6 @@ async fn resume_agent_task_creates_a_missing_child_run() {
         "general-task".to_owned(),
         "missing-child".to_owned(),
         "start after recovery".to_owned(),
-        300,
     );
     task_store.write(&task).await.unwrap();
 
@@ -351,7 +343,6 @@ async fn recovered_child_retries_a_busy_lease_and_reconciles_completion() {
         "general-task".to_owned(),
         "child".to_owned(),
         "resume me".to_owned(),
-        300,
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
@@ -410,7 +401,6 @@ async fn recovery_rejects_a_child_owned_by_another_parent() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
-        300,
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
@@ -423,12 +413,73 @@ async fn recovery_rejects_a_child_owned_by_another_parent() {
 }
 
 #[tokio::test]
-async fn expired_in_flight_tool_recovers_as_interrupted() {
+async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current_batch() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "do work", RunState::Running).await;
+    for index in 1..=8 {
+        let role = if index % 2 == 0 {
+            Role::Assistant
+        } else {
+            Role::User
+        };
+        store
+            .append_message("child", &Message::text(role, format!("message-{index}")))
+            .await
+            .unwrap();
+    }
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_agent(
+        "agent-task".to_owned(),
+        "general-task".to_owned(),
+        "child".to_owned(),
+        "do work".to_owned(),
+    );
+    task.state = BackgroundTaskState::Running;
+    task_store.write(&task).await.unwrap();
+    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+    assert_eq!(recoverable.len(), 1);
+
+    let latest = manager.inspect("agent-task", None, 6).await.unwrap();
+    assert_eq!(latest["messages"][0]["seq"], 3);
+    assert_eq!(latest["messages"][5]["seq"], 8);
+    assert_eq!(latest["messages"][0]["message"]["role"], "user");
+    assert_eq!(latest["messages"][5]["message"]["content"], "message-8");
+    assert_eq!(latest["has_earlier"], true);
+    assert_eq!(latest["next_before_seq"], 3);
+
+    let earlier = manager.inspect("agent-task", Some(3), 6).await.unwrap();
+    assert_eq!(earlier["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(earlier["messages"][0]["seq"], 1);
+    assert_eq!(earlier["messages"][1]["seq"], 2);
+    assert_eq!(earlier["has_earlier"], false);
+    assert!(earlier["next_before_seq"].is_null());
+
+    manager
+        .steer("agent-task", "change direction".to_owned())
+        .await
+        .unwrap();
+    let mut trajectory = store.load_trajectory("child").await.unwrap();
+    let appended = store
+        .append_pending_inputs("child", &mut trajectory)
+        .await
+        .unwrap();
+    assert_eq!(appended.len(), 1);
+    assert_eq!(appended[0].seq, 9);
+    assert_eq!(appended[0].message.role, Role::User);
+    assert_eq!(appended[0].message.visible_text(), "change direction");
+}
+
+#[tokio::test]
+async fn in_flight_tool_recovers_as_interrupted_regardless_of_task_age() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
     let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
-    let mut task = BackgroundTaskRecord::queued_tool("tool-task".to_owned(), "bash".to_owned(), 1);
+    let mut task = BackgroundTaskRecord::queued_tool("tool-task".to_owned(), "bash".to_owned());
     task.state = BackgroundTaskState::Running;
     task.created_at = chrono::Utc::now() - chrono::Duration::minutes(10);
     task_store.write(&task).await.unwrap();
@@ -468,7 +519,7 @@ impl crate::tools::Tool for FastTool {
 }
 
 #[tokio::test]
-async fn background_tool_deadline_includes_before_hooks() {
+async fn background_tool_has_no_execution_deadline() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -478,22 +529,22 @@ async fn background_tool_deadline_includes_before_hooks() {
         "slow-before",
         crate::hooks::HookEvent::ToolBefore,
         "sh",
-        vec!["-c".into(), "sleep 5".into()],
+        vec!["-c".into(), "sleep 0.05".into()],
     ));
     let manager = TaskManager::new(task_config);
 
     let task = manager
-        .spawn_tool("fast".to_owned(), serde_json::json!({}), Some(1))
+        .spawn_tool("fast".to_owned(), serde_json::json!({}))
         .await
         .unwrap();
-    let completed = tokio::time::timeout(Duration::from_secs(3), manager.wait_all())
+    let completed = tokio::time::timeout(Duration::from_secs(2), manager.wait_all())
         .await
         .unwrap()
         .unwrap();
 
     assert_eq!(completed.len(), 1);
     assert_eq!(completed[0].id, task.id);
-    assert_eq!(completed[0].state, BackgroundTaskState::TimedOut);
+    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
 }
 
 struct FailingTool;
@@ -534,7 +585,7 @@ async fn background_tool_errors_use_the_artifact_and_preview_contract() {
     let manager = TaskManager::new(task_config);
 
     manager
-        .spawn_tool("failing".to_owned(), serde_json::json!({}), None)
+        .spawn_tool("failing".to_owned(), serde_json::json!({}))
         .await
         .unwrap();
     let completed = manager.wait_all().await.unwrap();
@@ -547,7 +598,7 @@ async fn background_tool_errors_use_the_artifact_and_preview_contract() {
 }
 
 #[tokio::test]
-async fn cancellation_guard_aborts_handles_without_committing_outside_the_run_lease() {
+async fn cancellation_guard_aborts_handles_and_settles_their_durable_state() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     struct DropFlag(Arc<AtomicBool>);
@@ -561,10 +612,7 @@ async fn cancellation_guard_aborts_handles_without_committing_outside_the_run_le
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
     let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
-    let task_id = manager
-        .create_tool_task("never".to_owned(), 300)
-        .await
-        .unwrap();
+    let task_id = manager.create_tool_task("never".to_owned()).await.unwrap();
     manager.set_running(&task_id).await.unwrap();
     let dropped = Arc::new(AtomicBool::new(false));
     let started = Arc::new(tokio::sync::Notify::new());
@@ -577,7 +625,7 @@ async fn cancellation_guard_aborts_handles_without_committing_outside_the_run_le
             std::future::pending::<()>().await;
         }
     });
-    manager.track(handle);
+    manager.track(task_id.clone(), handle);
     started.notified().await;
 
     let guard = manager.cancellation_guard();
@@ -593,8 +641,173 @@ async fn cancellation_guard_aborts_handles_without_committing_outside_the_run_le
     .await
     .unwrap();
     assert!(dropped.load(Ordering::SeqCst));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if manager.get(&task_id).await.unwrap().state == BackgroundTaskState::Cancelled {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+struct SlowContinuationTool(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::tools::Tool for SlowContinuationTool {
+    fn spec(&self) -> crate::model::ToolSpec {
+        crate::model::ToolSpec {
+            name: "slow_continuation".to_owned(),
+            description: "Finish after the foreground window".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    async fn execute(
+        &self,
+        _context: crate::tools::ToolContext,
+        _arguments: serde_json::Value,
+    ) -> anyhow::Result<crate::tools::RawToolOutput> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        Ok(crate::tools::RawToolOutput::text("continued result"))
+    }
+}
+
+#[tokio::test]
+async fn foreground_timeout_promotes_the_same_tool_future_instead_of_stopping_or_restarting_it() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    store
+        .update_state("parent", RunState::Running)
+        .await
+        .unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut tools = ToolRegistry::default();
+    tools
+        .register(Arc::new(SlowContinuationTool(calls.clone())))
+        .unwrap();
+    let artifacts = ArtifactStore::new(ArtifactPolicy::default());
+    let preview_budget = Arc::new(Mutex::new(128 * 1024));
+    let hooks = HookPipeline::new();
+    let events: crate::events::SharedEventSink = Arc::new(NoopEventSink);
+    let mut task_config = config(workspace.path(), &store, "parent");
+    task_config.tools = tools.clone();
+    task_config.artifacts = artifacts.clone();
+    task_config.preview_budget = preview_budget.clone();
+    task_config.hooks = hooks.clone();
+    task_config.events = events.clone();
+    let manager = TaskManager::new(task_config);
+    let runtime = crate::agent::tool_execution::DirectToolRuntime {
+        registry: &tools,
+        hooks: &hooks,
+        artifacts: &artifacts,
+        preview_budget: &preview_budget,
+        events: &events,
+        workspace: workspace.path(),
+        run_id: "parent",
+        manager: manager.clone(),
+        foreground_timeout_seconds: 1,
+    };
+
+    let message = runtime
+        .execute(crate::model::ToolCall {
+            id: "slow-call".to_owned(),
+            name: "slow_continuation".to_owned(),
+            arguments: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+    let acknowledgement = match &message.content[0] {
+        MessageContent::ToolResult { content, .. } => {
+            serde_json::from_str::<serde_json::Value>(content).unwrap()
+        }
+        other => panic!("unexpected foreground acknowledgement: {other:?}"),
+    };
+    assert_eq!(acknowledgement["status"], "running");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let completed = tokio::time::timeout(Duration::from_secs(2), manager.wait_all())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
+    assert_eq!(completed[0].model_content(), "continued result");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+struct BlockingDropTool {
+    started: Arc<tokio::sync::Notify>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl crate::tools::Tool for BlockingDropTool {
+    fn spec(&self) -> crate::model::ToolSpec {
+        crate::model::ToolSpec {
+            name: "blocking_drop".to_owned(),
+            description: "Block until cancelled".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    async fn execute(
+        &self,
+        _context: crate::tools::ToolContext,
+        _arguments: serde_json::Value,
+    ) -> anyhow::Result<crate::tools::RawToolOutput> {
+        struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let _drop = DropFlag(self.dropped.clone());
+        self.started.notify_one();
+        std::future::pending::<()>().await;
+        unreachable!()
+    }
+}
+
+#[tokio::test]
+async fn stop_aborts_only_the_selected_background_task_and_commits_cancelled_state() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let started = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut task_config = config(workspace.path(), &store, "parent");
+    task_config
+        .tools
+        .register(Arc::new(BlockingDropTool {
+            started: started.clone(),
+            dropped: dropped.clone(),
+        }))
+        .unwrap();
+    let manager = TaskManager::new(task_config);
+    let task = manager
+        .spawn_tool("blocking_drop".to_owned(), serde_json::json!({}))
+        .await
+        .unwrap();
+    started.notified().await;
+
+    let stopped = manager.stop(&task.id).await.unwrap();
+    assert_eq!(stopped.state, BackgroundTaskState::Cancelled);
+    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
     assert_eq!(
-        manager.get(&task_id).await.unwrap().state,
-        BackgroundTaskState::Running
+        manager.get(&task.id).await.unwrap().state,
+        BackgroundTaskState::Cancelled
+    );
+    assert_eq!(
+        TaskRecordStore::new(store.paths("parent").directory.join("tasks"))
+            .load()
+            .await
+            .unwrap()[&task.id]
+            .state,
+        BackgroundTaskState::Cancelled
     );
 }

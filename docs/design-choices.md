@@ -113,12 +113,14 @@ automatic recording of every successful run, Rust-side semantic heuristics,
 and making raw transcripts or artifacts equivalent to curated memory. See
 [ADR 0009](adr/0009-memory-through-ordinary-tools.md).
 
-## One Async Wrapper
+## One Background Task Lifecycle
 
-Direct tool calls are synchronous. `spawn` can wrap any spawnable tool or the
-general-task agent profile, while `wait` provides a bounded join. This keeps
-execution policy out of individual tool schemas and avoids duplicate
-`foo`/`foo_async` capabilities.
+Direct tools start in the foreground and preserve the same future if their
+foreground window moves them to the background. `spawn` enters that lifecycle
+immediately for an ordinary tool or GeneralTask child. One `task` control tool
+provides status, bounded wait, child-message inspect, non-interrupting steer,
+and explicit stop. Agent loops have no arbitrary model-step cap, and background
+work has no hard execution deadline. See [ADR 0010](adr/0010-parent-controlled-background-work.md).
 
 ## Conservative File Mutation
 

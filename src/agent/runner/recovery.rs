@@ -54,8 +54,9 @@ impl AgentRunner {
             });
         }
         ensure!(
-            record.state != RunState::Completed,
-            "run `{run_id}` is already completed"
+            !matches!(record.state, RunState::Completed | RunState::Cancelled),
+            "run `{run_id}` is already {:?}",
+            record.state
         );
         ensure!(
             record.cwd == self.workspace,

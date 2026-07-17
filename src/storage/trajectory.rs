@@ -33,6 +33,16 @@ impl RunDirStore {
         run_id: &str,
         message: &Message,
     ) -> Result<TrajectoryMessage> {
+        self.append_message_with_ref(run_id, message, format!("msg_{}", ulid::Ulid::new()))
+            .await
+    }
+
+    pub(crate) async fn append_message_with_ref(
+        &self,
+        run_id: &str,
+        message: &Message,
+        message_ref: String,
+    ) -> Result<TrajectoryMessage> {
         let mut sequences = self.write_lock.lock().await;
         // Invalidate the fast path before any cancellable I/O. If this future is
         // dropped during either half of the commit, the next append must inspect
@@ -62,7 +72,7 @@ impl RunDirStore {
             }
         };
         let record = TrajectoryMessage {
-            message_ref: format!("msg_{}", ulid::Ulid::new()),
+            message_ref,
             seq: next,
             created_at: Utc::now(),
             message: message.clone(),

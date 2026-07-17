@@ -84,7 +84,12 @@ pub enum RuntimeEventKind {
         name: String,
         error: String,
     },
-    BackgroundTaskTimedOut {
+    BackgroundTaskSentToBackground {
+        task_id: String,
+        name: String,
+        call_id: String,
+    },
+    BackgroundTaskCancelled {
         task_id: String,
         name: String,
     },
@@ -100,12 +105,20 @@ pub enum RuntimeEventKind {
         child_run_id: String,
         task: String,
     },
+    SubagentSteered {
+        task_id: String,
+        child_run_id: String,
+        input_id: String,
+    },
     SubagentCompleted {
         child_run_id: String,
     },
     SubagentFailed {
         child_run_id: String,
         error: String,
+    },
+    SubagentCancelled {
+        child_run_id: String,
     },
     RunCompleted {
         final_output: String,

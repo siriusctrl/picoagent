@@ -80,7 +80,6 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 ```toml
 [runtime]
-max_steps = 32
 max_subagent_depth = 1
 max_parallel_tasks = 4
 max_parallel_model_calls = 1
@@ -88,19 +87,17 @@ model_request_timeout_seconds = 300
 max_output_tokens = 8192
 ```
 
-`max_steps` counts model calls, not individual tool calls. Child runs receive
-their own step budget. If the last allowed response waits for already-running
-background work, picoagent permits exactly one extra call so the model can see
-those terminal results; it cannot use that exception repeatedly.
+Normal and child agent loops have no model-step cap. They continue until the
+model returns a final response with no unresolved background work, the run is
+stopped, or a real provider/runtime error occurs.
 `max_parallel_model_calls` is shared by a parent and all of its child runs; the
 conservative default of one supports endpoints with a single-request
 concurrency limit, while higher-capacity deployments may raise it.
 `model_request_timeout_seconds` bounds each normal or compaction request;
 an expired normal request fails the run, while an expired compaction request
-leaves the current context unchanged. Step counts, both parallel capacities,
-configured output token limits, model request timeouts, and task timeouts must
-be greater than zero. The default task execution timeout must not exceed its
-configured maximum.
+leaves the current context unchanged. Both parallel capacities, configured
+output token limits, model request timeouts, and task wait/foreground limits
+must be greater than zero.
 
 The OpenAI-compatible adapter additionally retries initial HTTP 429 responses
 up to three times with bounded exponential backoff. It does not retry a partial
@@ -136,7 +133,7 @@ beside the summary. It uses a provider-neutral estimate for choosing completed
 message boundaries and keeps a tool call with its result. Compatible Chat
 `reasoning_content` and replayable opaque provider items are included.
 `summary_max_output_tokens` limits the summary request. Compaction requests are
-additional provider calls and do not consume a normal agent `max_steps` slot.
+additional tool-free provider calls.
 A fixed profile without both history tools and at least one of `read` or `bash`
 would keep its full context instead of compacting without an exact-recovery
 path.
@@ -165,28 +162,23 @@ provider's server-side compaction API.
 
 ```toml
 [tasks]
-default_execution_timeout_seconds = 300
-default_wait_timeout_seconds = 30
-max_execution_timeout_seconds = 1800
-direct_tool_timeout_seconds = 300
+foreground_tool_timeout_seconds = 300
+wait_timeout_seconds = 30
 
 [agents.general_task]
 # model = "smaller-compatible-model" # defaults to the primary provider model
-max_steps = 8
 max_output_tokens = 4096
 ```
 
-Background task deadlines include slot queueing plus the tool hooks/tool
-execution/successful tool-output capture or the child run itself. Committing the
-terminal task state and preserving a bounded error or child result is short
-durable cleanup after that execution outcome. Each `wait` call uses
-`default_wait_timeout_seconds`; the model cannot override it and can call
-`wait` again when necessary. This timeout only stops waiting and does not cancel
-the task. It must be strictly less than `direct_tool_timeout_seconds`, so the
-wait operation returns before its enclosing tool-call deadline. The runtime
-also enforces `max_parallel_tasks` across background tools and child agents in
-one parent run. On Unix, `bash` commands run in a dedicated process group so
-cancellation also terminates descendants.
+`foreground_tool_timeout_seconds` is a promotion window, not an execution
+deadline. When it expires, the already-running direct tool continues as a
+background task and the model receives its task id. Explicitly spawned tools
+and subagents have no harness execution deadline. Each `task wait` call returns
+after at most `wait_timeout_seconds` without cancelling work; this value must be
+strictly lower than the foreground window. `task stop` performs cancellation.
+The runtime enforces `max_parallel_tasks` across explicitly spawned tools and
+child agents in one parent run. On Unix, cancelling `bash` terminates its process
+group descendants too.
 
 Failed background tool and child results use the same artifact threshold and
 preview budget as successful results, so a large error is preserved without

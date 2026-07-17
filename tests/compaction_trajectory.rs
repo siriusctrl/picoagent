@@ -200,7 +200,6 @@ fn runner(
     tools.register(Arc::new(MarkerTool)).unwrap();
     tools.register(Arc::new(ReadTool)).unwrap();
     let options = RunnerOptions {
-        max_steps: 5,
         max_subagent_depth: 0,
         compaction: CompactionOptions {
             trigger_tokens: Some(10_000),

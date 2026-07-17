@@ -151,7 +151,6 @@ impl ProviderConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RuntimeConfig {
-    pub max_steps: usize,
     pub max_subagent_depth: usize,
     pub max_parallel_tasks: usize,
     pub max_parallel_model_calls: usize,
@@ -162,19 +161,15 @@ pub struct RuntimeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TaskConfig {
-    pub default_execution_timeout_seconds: u64,
-    pub default_wait_timeout_seconds: u64,
-    pub max_execution_timeout_seconds: u64,
-    pub direct_tool_timeout_seconds: u64,
+    pub foreground_tool_timeout_seconds: u64,
+    pub wait_timeout_seconds: u64,
 }
 
 impl Default for TaskConfig {
     fn default() -> Self {
         Self {
-            default_execution_timeout_seconds: 300,
-            default_wait_timeout_seconds: 30,
-            max_execution_timeout_seconds: 1_800,
-            direct_tool_timeout_seconds: 300,
+            foreground_tool_timeout_seconds: 300,
+            wait_timeout_seconds: 30,
         }
     }
 }
@@ -189,7 +184,6 @@ pub struct AgentProfilesConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct GeneralTaskConfig {
     pub model: Option<String>,
-    pub max_steps: usize,
     pub max_output_tokens: Option<u32>,
 }
 
@@ -197,7 +191,6 @@ impl Default for GeneralTaskConfig {
     fn default() -> Self {
         Self {
             model: None,
-            max_steps: 8,
             max_output_tokens: Some(4_096),
         }
     }
@@ -206,7 +199,6 @@ impl Default for GeneralTaskConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            max_steps: 32,
             max_subagent_depth: 1,
             max_parallel_tasks: 4,
             max_parallel_model_calls: 1,
@@ -313,9 +305,6 @@ impl AppConfig {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.runtime.max_steps == 0 {
-            bail!("`runtime.max_steps` must be greater than zero")
-        }
         if self.runtime.max_parallel_tasks == 0 {
             bail!("`runtime.max_parallel_tasks` must be greater than zero")
         }
@@ -328,42 +317,26 @@ impl AppConfig {
         if self.runtime.max_output_tokens == Some(0) {
             bail!("`runtime.max_output_tokens` must be greater than zero")
         }
-        if self.agents.general_task.max_steps == 0 {
-            bail!("`agents.general_task.max_steps` must be greater than zero")
-        }
         if self.agents.general_task.max_output_tokens == Some(0) {
             bail!("`agents.general_task.max_output_tokens` must be greater than zero")
         }
         for (name, value) in [
             (
-                "tasks.default_execution_timeout_seconds",
-                self.tasks.default_execution_timeout_seconds,
+                "tasks.foreground_tool_timeout_seconds",
+                self.tasks.foreground_tool_timeout_seconds,
             ),
             (
-                "tasks.default_wait_timeout_seconds",
-                self.tasks.default_wait_timeout_seconds,
-            ),
-            (
-                "tasks.max_execution_timeout_seconds",
-                self.tasks.max_execution_timeout_seconds,
-            ),
-            (
-                "tasks.direct_tool_timeout_seconds",
-                self.tasks.direct_tool_timeout_seconds,
+                "tasks.wait_timeout_seconds",
+                self.tasks.wait_timeout_seconds,
             ),
         ] {
             if value == 0 {
                 bail!("`{name}` must be greater than zero")
             }
         }
-        if self.tasks.default_execution_timeout_seconds > self.tasks.max_execution_timeout_seconds {
+        if self.tasks.wait_timeout_seconds >= self.tasks.foreground_tool_timeout_seconds {
             bail!(
-                "`tasks.default_execution_timeout_seconds` must not exceed `tasks.max_execution_timeout_seconds`"
-            )
-        }
-        if self.tasks.default_wait_timeout_seconds >= self.tasks.direct_tool_timeout_seconds {
-            bail!(
-                "`tasks.default_wait_timeout_seconds` must be strictly less than `tasks.direct_tool_timeout_seconds`"
+                "`tasks.wait_timeout_seconds` must be strictly less than `tasks.foreground_tool_timeout_seconds`"
             )
         }
         if self.compaction.trigger_tokens == Some(0) {
@@ -443,8 +416,6 @@ mod tests {
             protocol = "chat-completions"
             reasoning_effort = "high"
 
-            [runtime]
-            max_steps = 12
             "#,
         )
         .unwrap();
@@ -460,7 +431,6 @@ mod tests {
         };
         assert_eq!(api_key.as_deref(), Some("inline-token"));
         assert_eq!(reasoning_effort.as_deref(), Some("high"));
-        assert_eq!(config.runtime.max_steps, 12);
     }
 
     #[test]
@@ -580,19 +550,14 @@ mod tests {
     #[test]
     fn rejects_zero_runtime_and_task_limits() {
         for source in [
-            "[runtime]\nmax_steps = 0",
             "[runtime]\nmax_parallel_tasks = 0",
             "[runtime]\nmax_parallel_model_calls = 0",
             "[runtime]\nmodel_request_timeout_seconds = 0",
             "[runtime]\nmax_output_tokens = 0",
-            "[agents.general_task]\nmax_steps = 0",
             "[agents.general_task]\nmax_output_tokens = 0",
-            "[tasks]\ndefault_execution_timeout_seconds = 0",
-            "[tasks]\ndefault_wait_timeout_seconds = 0",
-            "[tasks]\nmax_execution_timeout_seconds = 0",
-            "[tasks]\ndirect_tool_timeout_seconds = 0",
-            "[tasks]\ndefault_execution_timeout_seconds = 2000\nmax_execution_timeout_seconds = 1000",
-            "[tasks]\ndefault_wait_timeout_seconds = 30\ndirect_tool_timeout_seconds = 30",
+            "[tasks]\nforeground_tool_timeout_seconds = 0",
+            "[tasks]\nwait_timeout_seconds = 0",
+            "[tasks]\nforeground_tool_timeout_seconds = 30\nwait_timeout_seconds = 30",
         ] {
             let config: AppConfig = toml::from_str(source).unwrap();
             assert!(config.validate().is_err(), "accepted {source}");

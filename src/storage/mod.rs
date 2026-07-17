@@ -13,6 +13,7 @@ use tokio::{fs::OpenOptions, io::AsyncWriteExt, sync::Mutex};
 
 use crate::events::{EventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink};
 
+mod input;
 mod message_log;
 mod trajectory;
 
@@ -28,6 +29,7 @@ pub enum RunState {
     Running,
     Completed,
     Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +123,7 @@ pub struct RunPaths {
     pub metadata: PathBuf,
     pub messages: PathBuf,
     pub message_metadata: PathBuf,
+    pub pending_inputs: PathBuf,
     pub compactions: PathBuf,
     pub events: PathBuf,
     pub final_output: PathBuf,
@@ -131,6 +134,7 @@ pub struct RunPaths {
 pub struct RunDirStore {
     workspace: PathBuf,
     write_lock: Arc<Mutex<HashMap<String, MessageCursor>>>,
+    input_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +149,7 @@ impl RunDirStore {
         Self {
             workspace: workspace.into(),
             write_lock: Arc::new(Mutex::new(HashMap::new())),
+            input_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -163,6 +168,7 @@ impl RunDirStore {
             metadata: directory.join("run.json"),
             messages: directory.join("messages.jsonl"),
             message_metadata: directory.join("message_metadata.jsonl"),
+            pending_inputs: directory.join("pending_inputs.jsonl"),
             compactions: directory.join("compactions.jsonl"),
             events: directory.join("events.jsonl"),
             final_output: directory.join("final.md"),

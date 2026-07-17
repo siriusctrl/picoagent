@@ -19,6 +19,7 @@ use crate::{
 
 use super::{runner::AgentRunner, tool_execution::ToolExecutor};
 
+mod control;
 mod execution;
 mod lifecycle;
 mod record;
@@ -28,7 +29,7 @@ mod tools;
 use record::TaskRecordStore;
 pub use record::{BackgroundTaskRecord, BackgroundTaskState};
 pub use recovery::RecoverableSubagent;
-pub use tools::{SpawnTool, WaitTool};
+pub use tools::{SpawnTool, TaskTool};
 
 pub struct TaskManager {
     runner: Arc<AgentRunner>,
@@ -45,12 +46,10 @@ pub struct TaskManager {
     records: Mutex<BTreeMap<String, BackgroundTaskRecord>>,
     delivered: Mutex<BTreeSet<String>>,
     task_store: TaskRecordStore,
-    handles: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+    handles: StdMutex<BTreeMap<String, tokio::task::JoinHandle<()>>>,
     notify: Notify,
     slots: Arc<Semaphore>,
-    default_execution_timeout: Duration,
     default_wait_timeout: Duration,
-    max_execution_timeout: Duration,
 }
 
 pub struct TaskManagerConfig {
@@ -66,9 +65,7 @@ pub struct TaskManagerConfig {
     pub events: SharedEventSink,
     pub hooks: HookPipeline,
     pub max_parallel_tasks: usize,
-    pub default_execution_timeout_seconds: u64,
-    pub default_wait_timeout_seconds: u64,
-    pub max_execution_timeout_seconds: u64,
+    pub wait_timeout_seconds: u64,
 }
 
 impl TaskManager {
@@ -103,24 +100,16 @@ impl TaskManager {
             records: Mutex::new(records),
             delivered: Mutex::new(delivered),
             task_store,
-            handles: StdMutex::new(Vec::new()),
+            handles: StdMutex::new(BTreeMap::new()),
             notify: Notify::new(),
             slots: Arc::new(Semaphore::new(config.max_parallel_tasks.max(1))),
-            default_execution_timeout: Duration::from_secs(
-                config.default_execution_timeout_seconds.max(1),
-            ),
-            default_wait_timeout: Duration::from_secs(config.default_wait_timeout_seconds.max(1)),
-            max_execution_timeout: Duration::from_secs(config.max_execution_timeout_seconds.max(1)),
+            default_wait_timeout: Duration::from_secs(config.wait_timeout_seconds.max(1)),
         })
     }
 
-    async fn create_tool_task(
-        self: &Arc<Self>,
-        name: String,
-        timeout_seconds: u64,
-    ) -> Result<String> {
+    async fn create_tool_task(self: &Arc<Self>, name: String) -> Result<String> {
         let task_id = Ulid::new().to_string();
-        let record = BackgroundTaskRecord::queued_tool(task_id.clone(), name, timeout_seconds);
+        let record = BackgroundTaskRecord::queued_tool(task_id.clone(), name);
         let mut records = self.records.lock().await;
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);
@@ -132,16 +121,10 @@ impl TaskManager {
         profile: String,
         child_run_id: String,
         prompt: String,
-        timeout_seconds: u64,
     ) -> Result<String> {
         let task_id = Ulid::new().to_string();
-        let record = BackgroundTaskRecord::queued_agent(
-            task_id.clone(),
-            profile,
-            child_run_id,
-            prompt,
-            timeout_seconds,
-        );
+        let record =
+            BackgroundTaskRecord::queued_agent(task_id.clone(), profile, child_run_id, prompt);
         let mut records = self.records.lock().await;
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);
@@ -150,7 +133,9 @@ impl TaskManager {
 
     async fn set_running(&self, task_id: &str) -> Result<BackgroundTaskRecord> {
         self.update(task_id, |record| {
-            record.state = BackgroundTaskState::Running
+            if !record.state.is_terminal() {
+                record.state = BackgroundTaskState::Running;
+            }
         })
         .await
     }
@@ -161,23 +146,29 @@ impl TaskManager {
             metadata: output.result_metadata(),
         };
         self.update(task_id, |record| {
-            record.state = BackgroundTaskState::Completed;
-            record.result = Some(result);
+            if !record.state.is_terminal() {
+                record.state = BackgroundTaskState::Completed;
+                record.result = Some(result);
+            }
         })
         .await
     }
 
     async fn fail(&self, task_id: &str, error: String) -> Result<BackgroundTaskRecord> {
         self.update(task_id, |record| {
-            record.state = BackgroundTaskState::Failed;
-            record.error = Some(error);
+            if !record.state.is_terminal() {
+                record.state = BackgroundTaskState::Failed;
+                record.error = Some(error);
+            }
         })
         .await
     }
 
     async fn fail_in_memory(&self, task_id: &str, error: String) {
         let mut records = self.records.lock().await;
-        if let Some(record) = records.get_mut(task_id) {
+        if let Some(record) = records.get_mut(task_id)
+            && !record.state.is_terminal()
+        {
             record.state = BackgroundTaskState::Failed;
             record.error = Some(error);
         }
@@ -185,25 +176,22 @@ impl TaskManager {
         self.notify.notify_one();
     }
 
-    async fn time_out(&self, task_id: &str) -> Result<BackgroundTaskRecord> {
-        self.update(task_id, |record| {
-            record.state = BackgroundTaskState::TimedOut
-        })
-        .await
-    }
-
     async fn interrupt(&self, task_id: &str, error: String) -> Result<BackgroundTaskRecord> {
         self.update(task_id, |record| {
-            record.state = BackgroundTaskState::Interrupted;
-            record.error = Some(error);
+            if !record.state.is_terminal() {
+                record.state = BackgroundTaskState::Interrupted;
+                record.error = Some(error);
+            }
         })
         .await
     }
 
     async fn cancel(&self, task_id: &str, reason: String) -> Result<BackgroundTaskRecord> {
         self.update(task_id, |record| {
-            record.state = BackgroundTaskState::Cancelled;
-            record.error = Some(reason);
+            if !record.state.is_terminal() {
+                record.state = BackgroundTaskState::Cancelled;
+                record.error = Some(reason);
+            }
         })
         .await
     }
@@ -230,13 +218,6 @@ impl TaskManager {
 
     async fn persist(&self, record: &BackgroundTaskRecord) -> Result<()> {
         self.task_store.write(record).await
-    }
-
-    fn execution_timeout(&self, requested_seconds: Option<u64>) -> Duration {
-        requested_seconds
-            .map(|seconds| Duration::from_secs(seconds.max(1)))
-            .unwrap_or(self.default_execution_timeout)
-            .min(self.max_execution_timeout)
     }
 
     fn tool_executor(&self) -> ToolExecutor<'_> {
@@ -286,6 +267,10 @@ impl TaskManager {
         }
     }
 
+    pub async fn status(&self, task_ids: &[String]) -> Result<Vec<BackgroundTaskRecord>> {
+        self.select(task_ids).await
+    }
+
     async fn select(&self, task_ids: &[String]) -> Result<Vec<BackgroundTaskRecord>> {
         let records = self.records.lock().await;
         if task_ids.is_empty() {
@@ -331,48 +316,64 @@ impl TaskManager {
             .collect())
     }
 
-    pub async fn settle_before_finish(&self) -> Result<Vec<BackgroundTaskRecord>> {
-        let records = self.select(&[]).await?;
-        let ready = records
-            .iter()
-            .filter(|record| record.state.is_terminal())
-            .cloned()
-            .collect::<Vec<_>>();
-        let delivered = self.delivered.lock().await.clone();
-        let ready = ready
-            .into_iter()
-            .filter(|record| !delivered.contains(&record.id))
-            .collect::<Vec<_>>();
-        if !ready.is_empty() {
-            return Ok(ready);
+    /// Return anything the model must see before it can finish: first unseen
+    /// terminal results, otherwise the currently active tasks after one
+    /// bounded wait interval. The pause prevents a fast final-answer loop from
+    /// filling the trajectory with duplicate running snapshots.
+    pub async fn pending_before_finish(&self) -> Result<Vec<BackgroundTaskRecord>> {
+        let deadline = tokio::time::Instant::now() + self.default_wait_timeout;
+        loop {
+            let records = self.select(&[]).await?;
+            let delivered = self.delivered.lock().await.clone();
+            let ready = records
+                .iter()
+                .filter(|record| record.state.is_terminal() && !delivered.contains(&record.id))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !ready.is_empty() {
+                return Ok(ready);
+            }
+            let active = records
+                .into_iter()
+                .filter(|record| !record.state.is_terminal())
+                .collect::<Vec<_>>();
+            if active.is_empty() {
+                return Ok(Vec::new());
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero()
+                || tokio::time::timeout(remaining, self.notify.notified())
+                    .await
+                    .is_err()
+            {
+                return Ok(active);
+            }
         }
-        if records.iter().any(|record| !record.state.is_terminal()) {
-            return self.wait_all().await;
-        }
-        self.join_all().await;
-        Ok(Vec::new())
     }
 
-    fn track(&self, handle: tokio::task::JoinHandle<()>) {
+    fn track(&self, task_id: String, handle: tokio::task::JoinHandle<()>) {
+        let mut handles = self
+            .handles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        handles.retain(|_, handle| !handle.is_finished());
+        handles.insert(task_id, handle);
+    }
+
+    fn take_handles(&self) -> BTreeMap<String, tokio::task::JoinHandle<()>> {
+        std::mem::take(
+            &mut *self
+                .handles
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    fn take_handle(&self, task_id: &str) -> Option<tokio::task::JoinHandle<()>> {
         self.handles
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(handle);
-    }
-
-    async fn join_all(&self) {
-        let handles = self.take_handles();
-        for handle in handles {
-            let _ = handle.await;
-        }
-    }
-
-    fn take_handles(&self) -> Vec<tokio::task::JoinHandle<()>> {
-        self.handles
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .drain(..)
-            .collect()
+            .remove(task_id)
     }
 
     pub async fn wait_all(&self) -> Result<Vec<BackgroundTaskRecord>> {

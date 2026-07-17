@@ -8,22 +8,18 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct GeneralTaskProfile {
     pub model: Option<String>,
-    pub max_steps: usize,
     pub max_output_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RunnerOptions {
-    pub max_steps: usize,
     pub max_subagent_depth: usize,
     pub max_parallel_tasks: usize,
     pub max_parallel_model_calls: usize,
     pub model_request_timeout_seconds: u64,
     pub max_output_tokens: Option<u32>,
-    pub direct_tool_timeout_seconds: u64,
-    pub task_execution_timeout_seconds: u64,
+    pub foreground_tool_timeout_seconds: u64,
     pub task_wait_timeout_seconds: u64,
-    pub task_max_timeout_seconds: u64,
     pub compaction: CompactionOptions,
     pub general_task: GeneralTaskProfile,
 }
@@ -50,20 +46,16 @@ impl Default for CompactionOptions {
 impl Default for RunnerOptions {
     fn default() -> Self {
         Self {
-            max_steps: 32,
             max_subagent_depth: 1,
             max_parallel_tasks: 4,
             max_parallel_model_calls: 1,
             model_request_timeout_seconds: 300,
             max_output_tokens: None,
-            direct_tool_timeout_seconds: 300,
-            task_execution_timeout_seconds: 300,
+            foreground_tool_timeout_seconds: 300,
             task_wait_timeout_seconds: 30,
-            task_max_timeout_seconds: 1_800,
             compaction: CompactionOptions::default(),
             general_task: GeneralTaskProfile {
                 model: None,
-                max_steps: 8,
                 max_output_tokens: Some(4_096),
             },
         }

@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use picoagent::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
@@ -407,7 +407,7 @@ async fn resume_keeps_preview_budget_reserved_for_undelivered_tasks() {
     tokio::fs::write(
         task_directory.join("reserved.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 2,
+            "version": 3,
             "id": "reserved",
             "kind": "tool",
             "name": "earlier-tool",
@@ -419,7 +419,6 @@ async fn resume_keeps_preview_budget_reserved_for_undelivered_tasks() {
             "error": null,
             "child_run_id": null,
             "prompt": null,
-            "timeout_seconds": 60,
             "created_at": chrono::Utc::now()
         }))
         .unwrap(),
@@ -791,7 +790,7 @@ impl ModelProvider for LastStepBackgroundProvider {
 }
 
 #[tokio::test]
-async fn last_step_background_completion_gets_one_reconciliation_call() {
+async fn background_completion_gets_a_reconciliation_call_without_a_step_cap() {
     let workspace = TempDir::new().unwrap();
     let store = RunDirStore::new(workspace.path());
     let runner = AgentRunner::new(AgentRunnerConfig {
@@ -806,7 +805,6 @@ async fn last_step_background_completion_gets_one_reconciliation_call() {
         memory: None,
         extra_events: Arc::new(NoopEventSink),
         options: RunnerOptions {
-            max_steps: 2,
             max_parallel_model_calls: 2,
             ..RunnerOptions::default()
         },
@@ -883,8 +881,8 @@ impl ModelProvider for WaitingProvider {
             return Ok(tool_response(
                 vec![ToolCall {
                     id: "wait-call".to_owned(),
-                    name: "wait".to_owned(),
-                    arguments: json!({"task_ids": [task_id]}),
+                    name: "task".to_owned(),
+                    arguments: json!({"action": "wait", "task_ids": [task_id]}),
                 }],
                 ModelUsage::default(),
             ));
@@ -905,7 +903,7 @@ impl ModelProvider for WaitingProvider {
 }
 
 #[tokio::test]
-async fn wait_joins_a_background_tool_without_duplicate_result_injection() {
+async fn task_wait_joins_a_background_tool_without_duplicate_result_injection() {
     let workspace = TempDir::new().unwrap();
     let store = RunDirStore::new(workspace.path());
     let mut tools = ToolRegistry::default();
@@ -973,6 +971,257 @@ async fn wait_joins_a_background_tool_without_duplicate_result_injection() {
         .unwrap();
     assert!(hooks.contains("\"name\":\"slow_output\""));
     assert!(hooks.contains("\"background\":true"));
+}
+
+struct LongLoopProvider(Arc<AtomicUsize>);
+
+#[async_trait]
+impl ModelProvider for LongLoopProvider {
+    fn name(&self) -> &str {
+        "long-loop"
+    }
+
+    async fn complete(
+        &self,
+        _request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        let call = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+        if call <= 40 {
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: format!("long-call-{call}"),
+                    name: "side_effect".to_owned(),
+                    arguments: json!({}),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        Ok(text_response(
+            "finished after 40 tools",
+            ModelUsage::default(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn agent_loop_has_no_model_step_cap() {
+    let workspace = TempDir::new().unwrap();
+    let model_calls = Arc::new(AtomicUsize::new(0));
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let mut tools = ToolRegistry::default();
+    tools
+        .register(Arc::new(CountingTool(tool_calls.clone())))
+        .unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(LongLoopProvider(model_calls.clone())),
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_path_buf(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::default(),
+        store: RunDirStore::new(workspace.path()),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions {
+            max_subagent_depth: 0,
+            ..RunnerOptions::default()
+        },
+    });
+
+    let result = runner.run(RunRequest::root("keep going")).await.unwrap();
+    assert_eq!(result.final_output, "finished after 40 tools");
+    assert_eq!(model_calls.load(Ordering::SeqCst), 41);
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 40);
+}
+
+struct SteeringGateTool;
+
+#[async_trait]
+impl Tool for SteeringGateTool {
+    fn spec(&self) -> picoagent::model::ToolSpec {
+        picoagent::model::ToolSpec {
+            name: "steering_gate".to_owned(),
+            description: "Hold a child tool batch briefly".to_owned(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    async fn execute(&self, _context: ToolContext, _arguments: Value) -> Result<RawToolOutput> {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        Ok(RawToolOutput::text("gate complete"))
+    }
+}
+
+struct SteeringProvider {
+    child_started: Arc<tokio::sync::Notify>,
+    verified: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl ModelProvider for SteeringProvider {
+    fn name(&self) -> &str {
+        "steering"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        if first_user_text(&request) == "child steer target" {
+            let steer_index = request.messages.iter().position(|message| {
+                message.role == Role::User && message.visible_text() == "take the steered path"
+            });
+            if let Some(steer_index) = steer_index {
+                let tool_index = request
+                    .messages
+                    .iter()
+                    .position(|message| {
+                        message.content.iter().any(|content| {
+                            matches!(
+                                content,
+                                MessageContent::ToolResult { call_id, .. }
+                                    if call_id == "child-gate-call"
+                            )
+                        })
+                    })
+                    .context("steered child request omitted the completed tool result")?;
+                if steer_index <= tool_index {
+                    bail!("steering was inserted before the child's tool batch completed");
+                }
+                self.verified
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return Ok(text_response(
+                    "steered child complete",
+                    ModelUsage::default(),
+                ));
+            }
+            self.child_started.notify_one();
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "child-gate-call".to_owned(),
+                    name: "steering_gate".to_owned(),
+                    arguments: json!({}),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+
+        let tool_results = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|content| match content {
+                MessageContent::ToolResult {
+                    call_id, content, ..
+                } => Some((call_id.as_str(), content.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if request.messages.iter().any(|message| {
+            message
+                .content
+                .iter()
+                .any(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
+        }) {
+            return Ok(text_response(
+                "parent received steered child",
+                ModelUsage::default(),
+            ));
+        }
+        if tool_results
+            .iter()
+            .any(|(call_id, _)| *call_id == "steer-call")
+        {
+            let task_id = tool_results
+                .iter()
+                .find(|(call_id, _)| *call_id == "spawn-steered-child")
+                .and_then(|(_, content)| serde_json::from_str::<Value>(content).ok())
+                .and_then(|value| value["task_id"].as_str().map(str::to_owned))
+                .context("spawn result omitted task_id")?;
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "wait-steered-child".to_owned(),
+                    name: "task".to_owned(),
+                    arguments: json!({"action": "wait", "task_ids": [task_id]}),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        if let Some((_, content)) = tool_results
+            .iter()
+            .find(|(call_id, _)| *call_id == "spawn-steered-child")
+        {
+            self.child_started.notified().await;
+            let task_id = serde_json::from_str::<Value>(content)?["task_id"]
+                .as_str()
+                .context("spawn result omitted task_id")?
+                .to_owned();
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "steer-call".to_owned(),
+                    name: "task".to_owned(),
+                    arguments: json!({
+                        "action": "steer",
+                        "task_id": task_id,
+                        "message": "take the steered path"
+                    }),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        Ok(tool_response(
+            vec![ToolCall {
+                id: "spawn-steered-child".to_owned(),
+                name: "spawn".to_owned(),
+                arguments: json!({
+                    "kind": "agent",
+                    "profile": "general-task",
+                    "prompt": "child steer target"
+                }),
+            }],
+            ModelUsage::default(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn steer_is_delivered_after_the_childs_current_tool_batch_before_its_next_model_call() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let child_started = Arc::new(tokio::sync::Notify::new());
+    let verified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut tools = ToolRegistry::default();
+    tools.register(Arc::new(SteeringGateTool)).unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(SteeringProvider {
+            child_started,
+            verified: verified.clone(),
+        }),
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_path_buf(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions {
+            max_parallel_model_calls: 2,
+            ..RunnerOptions::default()
+        },
+    });
+
+    let result = runner.run(RunRequest::root("steer child")).await.unwrap();
+    assert_eq!(result.final_output, "parent received steered child");
+    assert!(verified.load(std::sync::atomic::Ordering::SeqCst));
+    let events = tokio::fs::read_to_string(store.paths(&result.run_id).events)
+        .await
+        .unwrap();
+    assert!(events.contains("\"type\":\"subagent_steered\""));
 }
 
 struct HangingTool;

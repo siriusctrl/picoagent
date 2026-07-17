@@ -105,8 +105,14 @@ immediately aborting the loop. Runtime/store/provider failures fail the run.
 `spawn` runs independent tools or general-task child agents concurrently up to
 the configured limit. Each child creates a normal run with a parent id. Children
 share the workspace, provider, and base tools. The default maximum depth of one
-keeps the initial execution model predictable. `wait` is a bounded join; a wait
-timeout does not cancel the task.
+keeps the initial execution model predictable. `task wait` is a bounded join; a
+wait timeout does not cancel the task. `task stop` is the explicit cancellation
+operation.
+
+`task inspect` returns a child's latest durable Chat-compatible messages and can
+page backward by sequence. `task steer` queues a normal user message after the
+current assistant/tool batch and before the next provider call. It does not
+interrupt the current tool batch.
 
 Task JSON is coordination state, not a second transcript. Delivery is derived
 from `BackgroundTaskResult` entries already committed to the parent message

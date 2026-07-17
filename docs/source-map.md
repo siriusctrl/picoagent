@@ -6,14 +6,16 @@
 - `src/agent/compaction.rs`: local checkpoint planning, summary calls, and
   active-context assembly.
 - `src/agent/tool_execution.rs`: shared direct/background ordinary-tool hooks,
-  events, timeouts, and artifact-backed output persistence.
+  events, foreground promotion, and artifact-backed output persistence.
 - `src/agent/types.rs`: runner configuration, request, and result contracts.
 - `src/agent/task.rs`: background task coordination and delivery state.
+- `src/agent/task/control.rs`: status, message inspection, steering, and targeted stop.
 - `src/agent/task/execution.rs`: background tool and child-run execution.
-- `src/agent/task/lifecycle.rs`: failed/timed-out task state and events.
+- `src/agent/task/lifecycle.rs`: failed task state and events.
 - `src/agent/task/record.rs`: persisted background task state and model envelope.
 - `src/agent/task/recovery.rs`: task reload, child reconciliation, and cancellation.
-- `src/agent/task/tools.rs`: model-facing `spawn` and `wait` schemas.
+- `src/agent/task/tools.rs`: model-facing `spawn` plus status/wait/inspect/steer/stop schemas.
+- `src/storage/input.rs`: durable pending user input used by non-interrupting child steering.
 - `src/agent/context.rs`: deterministic prompt framing and dynamic reminder assembly.
 - `src/prompts.rs`: typed access to the embedded agent prompt registry.
 - `prompts/agents.yaml`: folded agent instructions for every fixed profile.

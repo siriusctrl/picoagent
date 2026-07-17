@@ -61,3 +61,5 @@ Use these sections:
   registry](0008-typed-agent-prompt-registry.md)
 - [ADR 0009: Maintain memory through ordinary
   tools](0009-memory-through-ordinary-tools.md)
+- [ADR 0010: Use parent-controlled background work without step or execution
+  caps](0010-parent-controlled-background-work.md)

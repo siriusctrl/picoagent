@@ -200,7 +200,7 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
             "marker",
             "read",
             "spawn",
-            "wait",
+            "task",
             "write"
         ]
     );
@@ -217,11 +217,9 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
     let memory = MemoryPaths::new(home.path(), workspace.path());
     let provider = Arc::new(ProfileContractProvider::default());
     let options = RunnerOptions {
-        max_steps: 4,
         max_subagent_depth: 2,
         general_task: picoagent::agent::GeneralTaskProfile {
             model: None,
-            max_steps: 4,
             max_output_tokens: Some(4_096),
         },
         ..RunnerOptions::default()
@@ -249,7 +247,7 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
             "marker",
             "read",
             "spawn",
-            "wait",
+            "task",
             "write",
         ],
     );
@@ -262,7 +260,7 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
             "marker",
             "read",
             "spawn",
-            "wait",
+            "task",
             "write",
         ],
     );
@@ -274,6 +272,7 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
             "history_search",
             "marker",
             "read",
+            "task",
             "write",
         ],
     );
@@ -299,7 +298,6 @@ async fn history_search_without_a_checkpoint_returns_an_empty_result() {
         provider.clone(),
         None,
         RunnerOptions {
-            max_steps: 2,
             max_subagent_depth: 0,
             ..RunnerOptions::default()
         },

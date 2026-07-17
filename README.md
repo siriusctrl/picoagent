@@ -22,7 +22,7 @@ system.
 - Agent Skills discovery with progressive `SKILL.md` loading
 - MCP stdio servers adapted into the same tool registry
 - command hooks for run and tool lifecycle events
-- synchronous tools plus generic `spawn`/`wait` background execution
+- foreground tools that can continue through generic background task control
 - in-process general-task subagents that reuse the same runner
 - ordinary Markdown user/project memory maintained with normal file tools
 - self-contained run directories and optional NDJSON events
@@ -65,6 +65,7 @@ Runtime output is stored beneath the current project:
   run.json
   messages.jsonl
   message_metadata.jsonl
+  pending_inputs.jsonl # created when a running child is steered
   compactions.jsonl  # created after the first checkpoint
   events.jsonl
   final.md
@@ -305,7 +306,8 @@ The launch built-ins are intentionally small:
 - `web_search`: optional Brave-backed public web search
 
 Root and depth-eligible GeneralTask delegation capabilities are selected before
-the run starts; a leaf GeneralTask has no delegation tools. Memory adds paths to
+the run starts; a leaf GeneralTask cannot spawn another child but retains task
+control for automatically backgrounded tools. Memory adds paths to
 the reminder, not a tool schema. `web_search` and MCP tools depend on startup
 configuration. The resulting schemas are sorted and frozen before the run's
 first normal provider call.
@@ -315,12 +317,27 @@ the original file. It tries exact matching first, then a conservative whole-line
 indentation normalization. It does not use broad fuzzy similarity that could
 silently modify the wrong code.
 
-Every direct tool call is synchronous. `spawn` is the single asynchronous
-wrapper: it can start either an existing tool or the `general-task` agent
-profile and immediately returns a task id. `wait` is a bounded join. Completed
-background results are appended as new runtime messages at the next model
-boundary, which preserves provider tool-call validity and keeps prior prompt
-prefixes reusable.
+Every direct tool call starts in the foreground. If it exceeds
+`tasks.foreground_tool_timeout_seconds`, picoagent preserves that same future,
+moves it into the background task lifecycle, and returns its task id; the tool
+is neither stopped nor restarted. `spawn` starts an existing tool or the
+`general-task` agent profile in the background immediately. The `task` tool
+provides `status`, bounded `wait`, subagent `inspect`, non-interrupting `steer`,
+and `stop`. Terminal results are appended as new runtime messages at the next
+model boundary, preserving provider tool-call validity.
+
+The task-control calls are intentionally small:
+
+```json
+{"action":"status","task_ids":[]}
+{"action":"wait","task_ids":["..."]}
+{"action":"inspect","task_id":"...","limit":6,"before_seq":42}
+{"action":"steer","task_id":"...","message":"check the failing test first"}
+{"action":"stop","task_id":"..."}
+```
+
+An empty `task_ids` means all tasks owned by that run. `before_seq` is exclusive
+and optional; inspect returns `next_before_seq` when older messages exist.
 
 ## Skills
 
@@ -348,7 +365,7 @@ child:
 - has a separate run id, transcript, events, and artifacts
 - records its parent run id
 - shares the working project, so it can inspect and modify the same files
-- receives its own model/step/output budget profile
+- receives its own model/output profile
 - cannot spawn another child at the default depth limit
 
 Parent and child model requests share `runtime.max_parallel_model_calls`, which
@@ -363,6 +380,12 @@ in their own run directories. The parent stores only coordination state under
 transcript, while queued/running child runs continue from their own last
 complete messages. This recovery guarantee applies to every durable GeneralTask
 task record, including one used for a large memory update.
+
+The parent can inspect a child's latest messages (six by default), page
+backward by sequence, and queue steering while it runs. Steering is stored as
+an ordinary user message after the child's current assistant response and full
+tool-call batch, immediately before its next model request. It does not
+interrupt or discard in-flight tools.
 
 ## Long-Term Memory
 
@@ -400,7 +423,7 @@ CLI/job
         -> built-in tools
         -> MCP tools
         -> load_skill
-        -> spawn / wait
+        -> spawn / task
            -> background Tool
            -> child AgentRunner
      -> ArtifactStore

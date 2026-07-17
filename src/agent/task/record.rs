@@ -7,7 +7,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::artifact::ResultMetadata;
 
-const TASK_RECORD_VERSION: u32 = 2;
+const TASK_RECORD_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -16,7 +16,6 @@ pub enum BackgroundTaskState {
     Running,
     Completed,
     Failed,
-    TimedOut,
     Cancelled,
     /// The process stopped while a non-resumable operation was in flight. Its
     /// side effects are unknown, so recovery must never execute it again.
@@ -27,7 +26,7 @@ impl BackgroundTaskState {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            Self::Completed | Self::Failed | Self::TimedOut | Self::Cancelled | Self::Interrupted
+            Self::Completed | Self::Failed | Self::Cancelled | Self::Interrupted
         )
     }
 }
@@ -51,7 +50,6 @@ pub struct BackgroundTaskRecord {
     /// Needed only when an agent task was durably queued but its child run was
     /// not created before the process stopped.
     pub prompt: Option<String>,
-    pub timeout_seconds: u64,
     pub created_at: DateTime<Utc>,
 }
 
@@ -63,7 +61,7 @@ pub struct BackgroundTaskOutput {
 }
 
 impl BackgroundTaskRecord {
-    pub(super) fn queued_tool(id: String, name: String, timeout_seconds: u64) -> Self {
+    pub(super) fn queued_tool(id: String, name: String) -> Self {
         Self {
             version: TASK_RECORD_VERSION,
             id,
@@ -74,7 +72,6 @@ impl BackgroundTaskRecord {
             error: None,
             child_run_id: None,
             prompt: None,
-            timeout_seconds,
             created_at: Utc::now(),
         }
     }
@@ -84,7 +81,6 @@ impl BackgroundTaskRecord {
         profile: String,
         child_run_id: String,
         prompt: String,
-        timeout_seconds: u64,
     ) -> Self {
         Self {
             version: TASK_RECORD_VERSION,
@@ -96,7 +92,6 @@ impl BackgroundTaskRecord {
             error: None,
             child_run_id: Some(child_run_id),
             prompt: Some(prompt),
-            timeout_seconds,
             created_at: Utc::now(),
         }
     }
@@ -118,9 +113,6 @@ impl BackgroundTaskRecord {
                         self.error.as_deref().unwrap_or("unknown error")
                     )
                 }),
-            BackgroundTaskState::TimedOut => {
-                "background task exceeded its execution timeout".to_owned()
-            }
             BackgroundTaskState::Cancelled => "background task was cancelled".to_owned(),
             BackgroundTaskState::Interrupted => format!(
                 "background task was interrupted; its side effects are unknown: {}",
@@ -145,7 +137,6 @@ impl BackgroundTaskRecord {
             BackgroundTaskState::Running => "running",
             BackgroundTaskState::Completed => "completed",
             BackgroundTaskState::Failed => "failed",
-            BackgroundTaskState::TimedOut => "timed_out",
             BackgroundTaskState::Cancelled => "cancelled",
             BackgroundTaskState::Interrupted => "interrupted",
         }
@@ -158,7 +149,6 @@ impl BackgroundTaskRecord {
             self.version
         );
         ensure!(!self.id.is_empty(), "task id must not be empty");
-        ensure!(self.timeout_seconds > 0, "task timeout must be positive");
         match self.kind.as_str() {
             "tool" => ensure!(
                 self.child_run_id.is_none() && self.prompt.is_none(),
@@ -284,7 +274,6 @@ mod tests {
             "general-task".to_owned(),
             "child-1".to_owned(),
             "inspect the workspace".to_owned(),
-            60,
         );
         record.state = BackgroundTaskState::Completed;
         record.result = Some(BackgroundTaskOutput {
@@ -311,7 +300,7 @@ mod tests {
     async fn task_record_filename_must_match_its_id() {
         let workspace = tempfile::tempdir().unwrap();
         let store = TaskRecordStore::new(workspace.path().join("tasks"));
-        let record = BackgroundTaskRecord::queued_tool("task-1".to_owned(), "read".to_owned(), 60);
+        let record = BackgroundTaskRecord::queued_tool("task-1".to_owned(), "read".to_owned());
         tokio::fs::create_dir_all(workspace.path().join("tasks"))
             .await
             .unwrap();
