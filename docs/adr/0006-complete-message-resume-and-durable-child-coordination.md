@@ -4,6 +4,10 @@
 - Date: 2026-07-16
 - Refines: ADR 0001 (resume behavior)
 
+ADR 0009 removes the MemoryMaintenance child mentioned below. The durable
+GeneralTask resume and coordination contract remains accepted and now also
+covers delegated large memory updates.
+
 ## Context
 
 Main runs need to survive process loss. Subagents use the same runner and have

@@ -137,11 +137,14 @@ fn tool_call_response_with_usage(id: &str, label: &str, input_tokens: u64) -> Mo
 fn runner(
     workspace: &TempDir,
     provider: Arc<ScriptedCompactionProvider>,
+    exact_recovery_available: bool,
 ) -> (Arc<AgentRunner>, RunDirStore) {
     let store = RunDirStore::new(workspace.path());
     let mut tools = ToolRegistry::default();
     tools.register(Arc::new(MarkerTool)).unwrap();
-    tools.register(Arc::new(ReadTool)).unwrap();
+    if exact_recovery_available {
+        tools.register(Arc::new(ReadTool)).unwrap();
+    }
     let options = RunnerOptions {
         max_steps: 4,
         compaction: CompactionOptions {
@@ -172,7 +175,7 @@ fn runner(
 async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     let workspace = TempDir::new().unwrap();
     let provider = ScriptedCompactionProvider::new(false);
-    let (runner, store) = runner(&workspace, provider.clone());
+    let (runner, store) = runner(&workspace, provider.clone(), true);
 
     let result = runner
         .run(RunRequest::root("exercise compaction"))
@@ -311,7 +314,7 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
 async fn summary_failure_is_recorded_and_does_not_abort_the_run() {
     let workspace = TempDir::new().unwrap();
     let provider = ScriptedCompactionProvider::new(true);
-    let (runner, store) = runner(&workspace, provider.clone());
+    let (runner, store) = runner(&workspace, provider.clone(), true);
 
     let result = runner
         .run(RunRequest::root("survive summary failure"))
@@ -350,6 +353,36 @@ async fn summary_failure_is_recorded_and_does_not_abort_the_run() {
     assert_eq!(count_events(&events, EventClass::Started), 1);
     assert_eq!(count_events(&events, EventClass::Completed), 0);
     assert_eq!(count_events(&events, EventClass::Failed), 1);
+}
+
+#[tokio::test]
+async fn automatic_compaction_requires_an_exact_artifact_reader() {
+    let workspace = TempDir::new().unwrap();
+    let provider = ScriptedCompactionProvider::new(false);
+    let (runner, store) = runner(&workspace, provider.clone(), false);
+
+    let result = runner
+        .run(RunRequest::root("keep full context without read or bash"))
+        .await
+        .unwrap();
+    assert_eq!(result.final_output, "finished after compaction");
+    assert!(
+        store
+            .load_compactions(&result.run_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests.iter().all(|request| !request.tools.is_empty()));
+    let final_request = requests.last().unwrap();
+    assert!(final_request.messages.iter().any(|message| has_tool_result(
+        message,
+        "call-old",
+        "result-old"
+    )));
 }
 
 fn text_content(message: &Message) -> String {

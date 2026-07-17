@@ -141,13 +141,13 @@ A fixed profile without both history tools and at least one of `read` or `bash`
 would keep its full context instead of compacting without an exact-recovery
 path.
 
-Root, a delegating or leaf GeneralTask, and MemoryMaintenance each assemble a
-sorted tool registry and freeze it before their first normal provider call. A
-GeneralTask's variant is selected from the remaining delegation depth before
-its run starts. The compaction summary profile deliberately has no tools.
-Memory/delegation capabilities depend on configured memory and the selected
-depth variant; optional `web_search` and MCP schemas depend on startup
-configuration. None changes during the run.
+Root and a delegating or leaf GeneralTask each assemble a sorted tool registry
+and freeze it before their first normal provider call. A GeneralTask's variant
+is selected from the remaining delegation depth before its run starts. The
+compaction summary profile deliberately has no tools. Delegation depends on the
+selected depth variant; optional `web_search` and MCP schemas depend on startup
+configuration. Memory uses the ordinary file tools and adds no schema. None
+changes during the run.
 
 `history_search_max_matches` is a positive, per-query cap for newest-first
 regex matches over messages removed from the active context. It is not an
@@ -214,10 +214,13 @@ enabled = true
 # global_root = "/persistent/pico-home"
 ```
 
-`global_root` is the base containing `memory/user/`. Project memory always lives
-at `<workspace>/.pico/memory/project/`. Memory is never written merely because a
-run succeeded; the model must call `memory_update`, directly or through
-`spawn`.
+`global_root` must be an absolute path and is the base containing
+`memory/user/`. A relative `PICO_HOME` environment value is resolved against the
+launch working directory. Project memory always lives at
+`<workspace>/.pico/memory/project/`. Memory is never written merely because a
+run succeeded. When enabled, the resolved paths enter the initial reminder; the
+model uses `read`, `write`, and `bash` directly, or delegates a large independent
+update through an ordinary GeneralTask child.
 
 ## Web Search
 

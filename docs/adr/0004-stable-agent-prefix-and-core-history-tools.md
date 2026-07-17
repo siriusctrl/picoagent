@@ -8,6 +8,10 @@ ADR 0007 refines only the recovery-guidance placement below. The initial
 reminder now omits that prose, while active-context assembly emits it beside an
 actual checkpoint. Stable system and tool-schema decisions remain accepted.
 
+ADR 0009 refines only the memory-specific capability parts below. The dedicated
+`memory_update` tool and MemoryMaintenance profile are removed; normal profile
+schema stability remains accepted.
+
 ## Context
 
 ADR 0003 established append-only local compaction and exact history retrieval.

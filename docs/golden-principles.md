@@ -2,7 +2,7 @@
 
 1. Keep one agent loop for root and child runs.
 2. Keep provider wire formats outside the loop.
-3. Keep one sorted tool registry for built-ins, MCP, memory, skills, and background work.
+3. Keep one sorted tool registry for built-ins, MCP, skills, and background work.
 4. Preserve large outputs as artifacts; bound what enters model context.
 5. Persist complete messages, not partial stream deltas.
 6. Keep run directories portable and inspectable.

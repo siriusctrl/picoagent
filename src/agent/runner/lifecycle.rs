@@ -24,7 +24,6 @@ pub(super) struct RunPlan {
     pub(super) max_steps: usize,
     pub(super) max_output_tokens: Option<u32>,
     pub(super) may_delegate: bool,
-    pub(super) may_update_memory: bool,
 }
 
 impl AgentRunner {
@@ -92,9 +91,7 @@ impl AgentRunner {
                 self.options.max_steps,
                 self.options.max_output_tokens,
             ),
-            RunProfile::GeneralTaskDelegating
-            | RunProfile::GeneralTaskLeaf
-            | RunProfile::MemoryMaintenance => (
+            RunProfile::GeneralTaskDelegating | RunProfile::GeneralTaskLeaf => (
                 self.options
                     .general_task
                     .model
@@ -107,19 +104,13 @@ impl AgentRunner {
         let may_delegate = match request.profile {
             RunProfile::Root => request.depth < self.options.max_subagent_depth,
             RunProfile::GeneralTaskDelegating => true,
-            RunProfile::GeneralTaskLeaf | RunProfile::MemoryMaintenance => false,
+            RunProfile::GeneralTaskLeaf => false,
         };
-        let may_update_memory = self.memory.is_some()
-            && matches!(
-                request.profile,
-                RunProfile::Root | RunProfile::GeneralTaskDelegating
-            );
         RunPlan {
             model,
             max_steps,
             max_output_tokens,
             may_delegate,
-            may_update_memory,
         }
     }
 

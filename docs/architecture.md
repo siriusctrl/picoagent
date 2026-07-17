@@ -13,7 +13,7 @@ job/CLI
      -> ToolRegistry
         -> built-in Tool
         -> MCP Tool adapter
-        -> skill / memory_update Tool
+        -> load_skill Tool
         -> spawn / wait
            -> background Tool
            -> child AgentRunner
@@ -44,10 +44,10 @@ Initial adapters:
 
 ### Tool registry
 
-Every model-callable action implements `Tool`. Built-ins, skills, MCP, memory
-updates, and background control share the same registry. The registry is sorted
-and frozen before the first normal provider call so tool schema order and
-membership remain deterministic across requests.
+Every model-callable action implements `Tool`. Built-ins, skills, MCP, and
+background control share the same registry. Memory uses the ordinary file
+tools. The registry is sorted and frozen before the first normal provider call
+so tool schema order and membership remain deterministic across requests.
 
 This registry is the capability router: it maps a model-returned tool name to
 one implementation and one schema. It does not decide what to do or create a
@@ -58,16 +58,16 @@ silently replacing an existing capability.
 Standalone base tools live in flat `src/tools/<tool>/` modules. Their
 model-facing description is compile-time Markdown beside the implementation;
 their name, input schema, argument validation, and execution stay together in
-Rust. Tools coupled to task supervision, memory, skills, or MCP remain owned by
-those subsystems and adapt into the same registry.
+Rust. Tools coupled to task supervision, skills, or MCP remain owned by those
+subsystems and adapt into the same registry.
 
-Root, delegating/leaf GeneralTask, and MemoryMaintenance have explicit
-capability sets. Each normal profile registers `history_search` and
+Root and delegating/leaf GeneralTask have explicit capability sets. Each normal
+profile registers `history_search` and
 `history_read` before its first call regardless of whether automatic compaction
 is configured. A GeneralTask's delegating or leaf variant is selected from its
-remaining depth before the run starts. Memory and delegation tools depend on
-the selected profile and configured memory; optional `web_search` and MCP tools
-depend on startup configuration. The selected schemas do not appear or
+remaining depth before the run starts. Delegation depends on the selected
+profile; optional `web_search` and MCP tools depend on startup configuration.
+Memory paths do not add a tool schema. The selected schemas do not appear or
 disappear during one run.
 
 ### Run storage
@@ -210,15 +210,19 @@ precedence, section ordering, dynamic values, and runtime-reminder framing. The
 first user message's ordinary text `content` carries a `<runtime-reminder>`
 block with the workspace `AGENTS.md`, sorted skill metadata, memory paths, and
 optional delegated instructions, followed by the original request. A skill
-body enters the conversation only after the model calls `load_skill`.
+body enters the conversation only after the model calls `load_skill`. That
+result omits the already-catalogued name and description, and includes the
+absolute `SKILL.md` path and skill directory so relative references remain
+resolvable.
 
 ### Memory
 
 Memory is durable knowledge about the user and projects. An ordinary agent's
-runtime reminder exposes two Markdown locations; `read` and `bash` inspect them.
-`memory_update` invokes the focused MemoryMaintenance profile to make semantic
-changes, and an external cron or job scheduler can invoke the same profile for
-model-driven consolidation. See [memory.md](memory.md).
+runtime reminder exposes two Markdown locations. The normal `read`, `write`,
+and `bash` tools inspect and update them. A large independent consolidation can
+use the same durable GeneralTask child mechanism as other delegated work; an
+external cron or job scheduler can invoke the convenience consolidation
+command. See [memory.md](memory.md).
 
 ### Subagents
 
@@ -242,10 +246,8 @@ effects, reconciles terminal children, and resumes queued/running children
 through the same runner.
 
 The durable child guarantee belongs to `spawn(kind="agent")` GeneralTask
-records, and the parent run is the only resume entrypoint. The synchronous
-MemoryMaintenance child inside `memory_update` is intentionally a direct-tool
-implementation detail: interruption produces an unknown direct-tool result and
-does not replay that child.
+records, and the parent run is the only resume entrypoint. Memory consolidation
+uses this same path rather than a special direct-tool child.
 
 ## Prompt And Cache Shape
 
@@ -257,9 +259,8 @@ runtime reminder at the start of each run. The reminder is frozen for that run.
 When a checkpoint exists, recovery guidance appears in the synthetic active
 context immediately before the `<compacted-history>` block; it is absent from
 runs without compacted history. Optional schemas and a GeneralTask's
-delegating/leaf variant are selected before the run starts; MemoryMaintenance
-has its own narrow toolset. Summary calls intentionally use a separate tool-free
-profile.
+delegating/leaf variant are selected before the run starts. Summary calls
+intentionally use a separate tool-free profile.
 
 The durable trajectory remains append-only; before a normal model call, an
 optional compaction checkpoint can replace its older active prefix with one

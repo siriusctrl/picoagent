@@ -375,6 +375,14 @@ impl AppConfig {
         if self.compaction.history_search_max_matches == 0 {
             bail!("`compaction.history_search_max_matches` must be greater than zero")
         }
+        if self
+            .memory
+            .global_root
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            bail!("`memory.global_root` must be an absolute path")
+        }
         Ok(())
     }
 }
@@ -589,6 +597,12 @@ mod tests {
             let config: AppConfig = toml::from_str(source).unwrap();
             assert!(config.validate().is_err(), "accepted {source}");
         }
+    }
+
+    #[test]
+    fn rejects_a_relative_memory_root() {
+        let config: AppConfig = toml::from_str("[memory]\nglobal_root = 'relative'").unwrap();
+        assert!(config.validate().is_err());
     }
 
     #[test]

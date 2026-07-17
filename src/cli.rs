@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use picoagent::memory::MemoryScope;
 
 #[derive(Parser)]
 #[command(name = "pico", version, about = "A small headless agent harness")]
@@ -60,7 +59,7 @@ pub(crate) enum AuthCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum MemoryCommand {
-    /// Ask the configured general-task model to semantically compact memory.
+    /// Run semantic memory consolidation through the ordinary agent.
     Consolidate {
         #[arg(long, value_enum)]
         scope: Option<ScopeArg>,
@@ -71,15 +70,6 @@ pub(crate) enum MemoryCommand {
 pub(crate) enum ScopeArg {
     User,
     Project,
-}
-
-impl From<ScopeArg> for MemoryScope {
-    fn from(value: ScopeArg) -> Self {
-        match value {
-            ScopeArg::User => Self::User,
-            ScopeArg::Project => Self::Project,
-        }
-    }
 }
 
 #[derive(Subcommand)]

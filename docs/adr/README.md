@@ -59,3 +59,5 @@ Use these sections:
   boundary](0007-compacted-history-guidance-at-active-boundary.md)
 - [ADR 0008: Consolidate agent prompts in a typed YAML
   registry](0008-typed-agent-prompt-registry.md)
+- [ADR 0009: Maintain memory through ordinary
+  tools](0009-memory-through-ordinary-tools.md)

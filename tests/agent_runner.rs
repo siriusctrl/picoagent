@@ -14,13 +14,12 @@ use picoagent::{
     artifact::{ArtifactPolicy, ArtifactStore},
     events::{NoopEventSink, SharedEventSink},
     hooks::{CommandHook, HookEvent, HookPipeline},
-    memory::MemoryPaths,
     model::{
         Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
         ToolCall, echo::EchoProvider,
     },
     storage::{RunDirStore, RunRecord, RunState},
-    tools::{RawToolOutput, Tool, ToolContext, ToolRegistry, WriteTool},
+    tools::{RawToolOutput, Tool, ToolContext, ToolRegistry},
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -1068,8 +1067,6 @@ async fn parent_failure_aborts_and_settles_background_tasks() {
     assert!(task["error"].as_str().unwrap().contains("parent run ended"));
 }
 
-struct MemoryTimeoutProvider;
-
 struct SlowModelProvider;
 
 #[async_trait]
@@ -1128,182 +1125,5 @@ async fn model_requests_have_a_runtime_deadline() {
     assert_eq!(
         store.load_run(&run_id).await.unwrap().state,
         RunState::Failed
-    );
-}
-
-#[async_trait]
-impl ModelProvider for MemoryTimeoutProvider {
-    fn name(&self) -> &str {
-        "memory-timeout"
-    }
-
-    async fn complete(
-        &self,
-        request: ModelRequest,
-        _events: SharedEventSink,
-    ) -> Result<ModelResponse> {
-        let first_user = first_user_text(&request);
-        if first_user.starts_with("Update durable") {
-            tokio::time::sleep(Duration::from_secs(30)).await;
-        }
-        if request
-            .messages
-            .iter()
-            .any(|message| message.role == Role::Tool)
-        {
-            return Ok(text_response(
-                "continued after timeout",
-                ModelUsage::default(),
-            ));
-        }
-        Ok(tool_response(
-            vec![ToolCall {
-                id: "memory-call".to_owned(),
-                name: "memory_update".to_owned(),
-                arguments: json!({"scope": "project", "instruction": "remember this"}),
-            }],
-            ModelUsage::default(),
-        ))
-    }
-}
-
-#[tokio::test]
-async fn timed_out_memory_update_marks_its_child_run_failed() {
-    let workspace = TempDir::new().unwrap();
-    let home = TempDir::new().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let runner = AgentRunner::new(AgentRunnerConfig {
-        provider: Arc::new(MemoryTimeoutProvider),
-        model: "scripted".to_owned(),
-        workspace: workspace.path().to_path_buf(),
-        skill_catalog: String::new(),
-        tools: ToolRegistry::default(),
-        artifacts: ArtifactStore::default(),
-        store: store.clone(),
-        hooks: HookPipeline::new(),
-        memory: Some(MemoryPaths::new(home.path(), workspace.path())),
-        extra_events: Arc::new(NoopEventSink),
-        options: RunnerOptions {
-            direct_tool_timeout_seconds: 1,
-            ..RunnerOptions::default()
-        },
-    });
-
-    let parent = runner
-        .run(RunRequest::root("memory timeout"))
-        .await
-        .unwrap();
-    assert_eq!(parent.final_output, "continued after timeout");
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let mut children = Vec::new();
-    for entry in std::fs::read_dir(workspace.path().join(".pico/runs")).unwrap() {
-        let id = entry.unwrap().file_name().to_string_lossy().into_owned();
-        if id != parent.run_id {
-            children.push(store.load_run(&id).await.unwrap());
-        }
-    }
-    assert_eq!(children.len(), 1);
-    assert_eq!(children[0].state, RunState::Failed);
-}
-
-struct MemorySuccessProvider;
-
-#[async_trait]
-impl ModelProvider for MemorySuccessProvider {
-    fn name(&self) -> &str {
-        "memory-success"
-    }
-
-    async fn complete(
-        &self,
-        request: ModelRequest,
-        _events: SharedEventSink,
-    ) -> Result<ModelResponse> {
-        let first_user = first_user_text(&request);
-        let has_tool_result = request
-            .messages
-            .iter()
-            .any(|message| message.role == Role::Tool);
-        if first_user.starts_with("Update durable") {
-            if has_tool_result {
-                return Ok(text_response("updated profile.md", ModelUsage::default()));
-            }
-            let root = first_user
-                .split_once("stored at ")
-                .and_then(|(_, rest)| rest.split_once(".\n\nInstruction"))
-                .map(|(path, _)| path)
-                .unwrap_or_default();
-            return Ok(tool_response(
-                vec![ToolCall {
-                    id: "write-memory".to_owned(),
-                    name: "write".to_owned(),
-                    arguments: json!({
-                        "path": Path::new(root).join("profile.md"),
-                        "content": "# Preferences\n\n- Prefers concise output.\n"
-                    }),
-                }],
-                ModelUsage::default(),
-            ));
-        }
-        if has_tool_result {
-            return Ok(text_response("remembered", ModelUsage::default()));
-        }
-        Ok(tool_response(
-            vec![ToolCall {
-                id: "memory-call".to_owned(),
-                name: "memory_update".to_owned(),
-                arguments: json!({
-                    "scope": "user",
-                    "instruction": "Record that the user prefers concise output"
-                }),
-            }],
-            ModelUsage::default(),
-        ))
-    }
-}
-
-#[tokio::test]
-async fn memory_update_uses_a_restricted_child_run_to_write_markdown() {
-    let workspace = TempDir::new().unwrap();
-    let home = TempDir::new().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let mut tools = ToolRegistry::default();
-    tools.register(Arc::new(WriteTool::default())).unwrap();
-    let memory = MemoryPaths::new(home.path(), workspace.path());
-    let runner = AgentRunner::new(AgentRunnerConfig {
-        provider: Arc::new(MemorySuccessProvider),
-        model: "scripted".to_owned(),
-        workspace: workspace.path().to_path_buf(),
-        skill_catalog: String::new(),
-        tools,
-        artifacts: ArtifactStore::default(),
-        store: store.clone(),
-        hooks: HookPipeline::new(),
-        memory: Some(memory.clone()),
-        extra_events: Arc::new(NoopEventSink),
-        options: RunnerOptions::default(),
-    });
-
-    let parent = runner
-        .run(RunRequest::root("remember preference"))
-        .await
-        .unwrap();
-    assert_eq!(parent.final_output, "remembered");
-    assert_eq!(
-        tokio::fs::read_to_string(memory.user.join("profile.md"))
-            .await
-            .unwrap(),
-        "# Preferences\n\n- Prefers concise output.\n"
-    );
-    let children = std::fs::read_dir(workspace.path().join(".pico/runs"))
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|id| id != &parent.run_id)
-        .collect::<Vec<_>>();
-    assert_eq!(children.len(), 1);
-    assert_eq!(
-        store.load_run(&children[0]).await.unwrap().state,
-        RunState::Completed
     );
 }

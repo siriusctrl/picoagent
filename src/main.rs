@@ -13,7 +13,7 @@ use picoagent::{
     events::{NdjsonEventSink, NoopEventSink, SharedEventSink},
     hooks::{CommandHook, HookEvent, HookPipeline},
     mcp::{McpStdioClient, McpStdioConfig},
-    memory::{MemoryPaths, MemoryScope},
+    memory::MemoryPaths,
     model::{
         ModelProvider,
         anthropic_compatible::{AnthropicCompatibleOptions, AnthropicCompatibleProvider},
@@ -21,7 +21,6 @@ use picoagent::{
         openai_compatible::{OpenAiCompatibleOptions, OpenAiCompatibleProvider},
         openai_oauth::{DEFAULT_OPENAI_OAUTH_BASE_URL, OpenAiOAuthProvider},
     },
-    prompts::agent_prompts,
     skills::{LoadSkillTool, SkillRegistry},
     storage::RunDirStore,
     tools::{ToolRegistry, WebSearchTool, register_defaults},
@@ -356,11 +355,11 @@ async fn memory_command(
         MemoryCommand::Consolidate { scope } => {
             let memory_home = config.memory.global_root.as_deref().unwrap_or(pico_home);
             let paths = MemoryPaths::new(memory_home, workspace);
-            let target = match scope.map(Into::into) {
-                Some(MemoryScope::User) => {
+            let target = match scope {
+                Some(cli::ScopeArg::User) => {
                     format!("global user memory at {}", paths.user.display())
                 }
-                Some(MemoryScope::Project) => {
+                Some(cli::ScopeArg::Project) => {
                     format!("project memory at {}", paths.project.display())
                 }
                 None => format!(
@@ -370,13 +369,13 @@ async fn memory_command(
                 ),
             };
             let prompt = format!(
-                "Semantically consolidate {target}. Read the existing Markdown files, remove stale duplication, merge related durable facts, preserve useful provenance, and keep the result concise and searchable. Do not use mechanical similarity as a substitute for judgment. Return a short summary of changed files."
+                "Semantically consolidate {target}. Read the existing Markdown files, remove stale duplication, merge related durable facts, preserve useful provenance, and keep the result concise and searchable. Verify the changes and return a short summary of changed files."
             );
             run_request(
                 workspace,
                 pico_home,
                 config,
-                RunRequest::memory_maintenance(prompt, &agent_prompts().memory_consolidation),
+                RunRequest::root(prompt),
                 OutputFormat::Text,
             )
             .await?;
@@ -396,11 +395,20 @@ fn list_skills(workspace: &Path) -> Result<()> {
 }
 
 fn pico_home() -> Result<PathBuf> {
-    if let Some(path) = env::var_os("PICO_HOME") {
-        return Ok(PathBuf::from(path));
+    let path = match env::var_os("PICO_HOME") {
+        Some(path) => PathBuf::from(path),
+        None => {
+            PathBuf::from(env::var_os("HOME").context("HOME is not set; set PICO_HOME explicitly")?)
+                .join(".pico")
+        }
+    };
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(env::current_dir()
+            .context("resolve relative PICO_HOME")?
+            .join(path))
     }
-    let home = env::var_os("HOME").context("HOME is not set; set PICO_HOME explicitly")?;
-    Ok(PathBuf::from(home).join(".pico"))
 }
 
 fn dunce_canonicalize(path: &Path) -> Result<PathBuf> {

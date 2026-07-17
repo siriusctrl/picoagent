@@ -84,7 +84,6 @@ pub(crate) enum RunProfile {
     Root,
     GeneralTaskDelegating,
     GeneralTaskLeaf,
-    MemoryMaintenance,
 }
 
 impl RunRequest {
@@ -118,34 +117,6 @@ impl RunRequest {
         }
     }
 
-    pub(crate) fn memory_maintenance_child(
-        prompt: impl Into<String>,
-        parent_run_id: String,
-        depth: usize,
-        additional_instructions: String,
-    ) -> Self {
-        Self {
-            prompt: prompt.into(),
-            parent_run_id: Some(parent_run_id),
-            depth,
-            additional_instructions: Some(additional_instructions),
-            profile: RunProfile::MemoryMaintenance,
-        }
-    }
-
-    pub fn memory_maintenance(
-        prompt: impl Into<String>,
-        additional_instructions: impl Into<String>,
-    ) -> Self {
-        Self {
-            prompt: prompt.into(),
-            parent_run_id: None,
-            depth: 0,
-            additional_instructions: Some(additional_instructions.into()),
-            profile: RunProfile::MemoryMaintenance,
-        }
-    }
-
     pub(crate) fn from_stored(
         prompt: String,
         parent_run_id: Option<String>,
@@ -157,7 +128,6 @@ impl RunRequest {
             "root" => RunProfile::Root,
             "general_task_delegating" => RunProfile::GeneralTaskDelegating,
             "general_task_leaf" => RunProfile::GeneralTaskLeaf,
-            "memory_maintenance" => RunProfile::MemoryMaintenance,
             value => anyhow::bail!("unknown stored run profile `{value}`"),
         };
         Ok(Self {
@@ -176,7 +146,6 @@ impl RunProfile {
             Self::Root => "root",
             Self::GeneralTaskDelegating => "general_task_delegating",
             Self::GeneralTaskLeaf => "general_task_leaf",
-            Self::MemoryMaintenance => "memory_maintenance",
         }
     }
 }

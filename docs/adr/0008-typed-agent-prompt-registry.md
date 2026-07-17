@@ -5,6 +5,9 @@
 - Refines: ADR 0002 (agent-prompt packaging only)
 - Refines: ADR 0007 (source-wrap handling only)
 
+ADR 0009 removes the two memory-specific prompt fields. The typed YAML registry
+and folding decision remain accepted.
+
 ## Context
 
 Six short fixed agent prompts lived in six Markdown files and were included by

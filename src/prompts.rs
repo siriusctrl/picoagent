@@ -12,8 +12,6 @@ pub struct AgentPrompts {
     pub compacted_history: String,
     pub compaction: String,
     pub general_task: String,
-    pub memory_maintenance: String,
-    pub memory_consolidation: String,
 }
 
 pub fn agent_prompts() -> &'static AgentPrompts {
@@ -31,8 +29,6 @@ fn parse_agent_prompts(source: &str) -> Result<AgentPrompts> {
         ("compacted_history", &prompts.compacted_history),
         ("compaction", &prompts.compaction),
         ("general_task", &prompts.general_task),
-        ("memory_maintenance", &prompts.memory_maintenance),
-        ("memory_consolidation", &prompts.memory_consolidation),
     ] {
         if value.trim().is_empty() {
             bail!("agent prompt `{name}` must not be empty")
@@ -64,7 +60,8 @@ mod tests {
         let unknown = format!("{AGENT_PROMPTS_YAML}\nunknown: value\n");
         assert!(parse_agent_prompts(&unknown).is_err());
 
-        let empty = "system: value\ncompacted_history: value\ncompaction: value\ngeneral_task: ''\nmemory_maintenance: value\nmemory_consolidation: value\n";
+        let empty =
+            "system: value\ncompacted_history: value\ncompaction: value\ngeneral_task: ''\n";
         assert!(parse_agent_prompts(empty).is_err());
     }
 }

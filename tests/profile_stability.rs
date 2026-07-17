@@ -129,10 +129,9 @@ impl ModelProvider for ProfileContractProvider {
             "delegating profile contract" if !already_spawned => {
                 Ok(spawn_response("spawn-leaf", "leaf profile contract"))
             }
-            "root profile contract"
-            | "delegating profile contract"
-            | "leaf profile contract"
-            | "memory profile contract" => Ok(final_response(&format!("finished {prompt}"))),
+            "root profile contract" | "delegating profile contract" | "leaf profile contract" => {
+                Ok(final_response(&format!("finished {prompt}")))
+            }
             unexpected => bail!("unexpected profile-contract prompt `{unexpected}`"),
         }
     }
@@ -233,23 +232,13 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
         .run(RunRequest::root("root profile contract"))
         .await
         .unwrap();
-    runner
-        .run(RunRequest::memory_maintenance(
-            "memory profile contract",
-            "Maintain memory for this test.",
-        ))
-        .await
-        .unwrap();
-
     let requests = provider.requests.lock().unwrap();
     let root = requests_for_prompt(&requests, "root profile contract");
     let delegating = requests_for_prompt(&requests, "delegating profile contract");
     let leaf = requests_for_prompt(&requests, "leaf profile contract");
-    let memory = requests_for_prompt(&requests, "memory profile contract");
     assert!(!root.is_empty());
     assert!(!delegating.is_empty());
     assert!(!leaf.is_empty());
-    assert_eq!(memory.len(), 1);
 
     assert_profile_tools(
         &root,
@@ -258,7 +247,6 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
             "history_read",
             "history_search",
             "marker",
-            "memory_update",
             "read",
             "spawn",
             "wait",
@@ -272,7 +260,6 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
             "history_read",
             "history_search",
             "marker",
-            "memory_update",
             "read",
             "spawn",
             "wait",
@@ -290,20 +277,16 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
             "write",
         ],
     );
-    assert_profile_tools(
-        &memory,
-        &["bash", "history_read", "history_search", "read", "write"],
-    );
     assert_eq!(serialized(&root[0].tools), serialized(&delegating[0].tools));
 
     let root_reminder = text_content(&root[0].messages[0]);
     let delegating_reminder = text_content(&delegating[0].messages[0]);
     let leaf_reminder = text_content(&leaf[0].messages[0]);
-    assert!(root_reminder.contains("Use `memory_update`"));
-    assert!(delegating_reminder.contains("Use `memory_update`"));
-    assert!(leaf_reminder.contains("Treat these memory files as read-only"));
-    assert!(!leaf_reminder.contains("Use `memory_update`"));
-    assert!(!text_content(&memory[0].messages[0]).contains("<memory>"));
+    for reminder in [root_reminder, delegating_reminder, leaf_reminder] {
+        assert!(reminder.contains("<memory>\nuser:"));
+        assert!(reminder.contains("project:"));
+        assert!(!reminder.contains("memory_update"));
+    }
 }
 
 #[tokio::test]

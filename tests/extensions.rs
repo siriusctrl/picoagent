@@ -4,7 +4,7 @@ use picoagent::{
     hooks::{CommandHook, HookEvent, HookPipeline},
     memory::MemoryPaths,
     skills::{LoadSkillTool, SkillRegistry},
-    tools::{Tool, ToolContext},
+    tools::{Tool, ToolContext, WriteTool},
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -34,11 +34,12 @@ async fn skills_load_on_demand_and_memory_uses_ordinary_paths() {
         )
         .await
         .unwrap();
-    assert!(
-        String::from_utf8(loaded.content)
-            .unwrap()
-            .contains("Use primary sources.")
-    );
+    let loaded = String::from_utf8(loaded.content).unwrap();
+    assert!(loaded.contains("Use primary sources."));
+    assert!(loaded.contains(skill_dir.join("SKILL.md").to_string_lossy().as_ref()));
+    assert!(loaded.contains(skill_dir.to_string_lossy().as_ref()));
+    assert!(!loaded.contains("name: research"));
+    assert!(!loaded.contains("Research carefully."));
 
     let memory = MemoryPaths::new(home.path(), workspace.path());
     assert_eq!(memory.user, home.path().join("memory/user"));
@@ -46,10 +47,29 @@ async fn skills_load_on_demand_and_memory_uses_ordinary_paths() {
         memory.project,
         workspace.path().join(".pico/memory/project")
     );
-    let prompt = memory.runtime_reminder_section(true);
+    let prompt = memory.runtime_reminder_section();
     assert!(prompt.contains(memory.user.to_string_lossy().as_ref()));
-    assert!(prompt.contains("memory_update"));
-    assert!(prompt.contains("Use `read` and `bash`"));
+    assert!(!prompt.contains("memory_update"));
+    assert_eq!(prompt.lines().count(), 2);
+
+    WriteTool::default()
+        .execute(
+            ToolContext {
+                run_id: "run".into(),
+                call_id: "write-memory".into(),
+                workspace: workspace.path().to_path_buf(),
+            },
+            json!({
+                "path": memory.user.join("profile.md"),
+                "content": "# Preferences\n\n- Keep it simple.\n"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(memory.user.join("profile.md")).unwrap(),
+        "# Preferences\n\n- Keep it simple.\n"
+    );
 }
 
 #[tokio::test]

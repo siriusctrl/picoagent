@@ -24,7 +24,7 @@ system.
 - command hooks for run and tool lifecycle events
 - synchronous tools plus generic `spawn`/`wait` background execution
 - in-process general-task subagents that reuse the same runner
-- ordinary Markdown user/project memory maintained by a focused subagent
+- ordinary Markdown user/project memory maintained with normal file tools
 - self-contained run directories and optional NDJSON events
 
 ## Important Security Boundary
@@ -304,11 +304,11 @@ The launch built-ins are intentionally small:
 - `history_read`: a bounded message window around a returned history ref
 - `web_search`: optional Brave-backed public web search
 
-Root and depth-eligible GeneralTask capabilities such as memory and delegation
-tools are selected before the run starts; a leaf GeneralTask and
-MemoryMaintenance have narrower fixed sets. `web_search` and MCP tools depend
-on startup configuration. The resulting schemas are sorted and frozen before
-the run's first normal provider call.
+Root and depth-eligible GeneralTask delegation capabilities are selected before
+the run starts; a leaf GeneralTask has no delegation tools. Memory adds paths to
+the reminder, not a tool schema. `web_search` and MCP tools depend on startup
+configuration. The resulting schemas are sorted and frozen before the run's
+first normal provider call.
 
 `write` requires every edit target to identify one non-overlapping region in
 the original file. It tries exact matching first, then a conservative whole-line
@@ -330,8 +330,9 @@ Picoagent discovers Agent Skills from lowest to highest precedence:
 2. `<workspace>/.agents/skills/*/SKILL.md`
 3. `<workspace>/skills/*/SKILL.md`
 
-Only skill name and description enter the stable prompt prefix. The full skill
-body is loaded through `load_skill` when needed.
+Only skill name and description enter the stable prompt prefix. `load_skill`
+returns the instruction body without repeating that metadata, plus the absolute
+`SKILL.md` and skill-directory paths needed to resolve referenced files.
 
 ```bash
 pico skills list
@@ -360,10 +361,8 @@ Only child results return to the parent context; full child transcripts remain
 in their own run directories. The parent stores only coordination state under
 `tasks/`. On parent resume, terminal-result delivery is derived from the parent
 transcript, while queued/running child runs continue from their own last
-complete messages. This recovery guarantee applies to durable GeneralTask task
-records. A synchronous MemoryMaintenance child used inside `memory_update` is
-part of that direct tool call: if interrupted, the parent records an unknown
-tool outcome and does not replay or separately resume the maintenance child.
+complete messages. This recovery guarantee applies to every durable GeneralTask
+task record, including one used for a large memory update.
 
 ## Long-Term Memory
 
@@ -374,11 +373,10 @@ an ordinary agent's initial runtime reminder:
 - `$PICO_HOME/memory/user/` for cross-project user knowledge
 - `<workspace>/.pico/memory/project/` for project-specific knowledge
 
-The model uses `read` and `bash` to inspect memory—there are no special memory
-search/read tools. `memory_update` delegates semantic editing to the configured
-general-task model under the focused MemoryMaintenance profile and returns its
-summary. Call it directly to wait, or wrap it with `spawn` to let the update run
-in the background.
+There are no special memory tools. The model uses `read`, `write`, and `bash`
+for small focused changes. For a large independent update, it can spawn an
+ordinary `general-task` child, continue useful work, and reconcile the child
+result before finishing.
 
 ```bash
 pico memory consolidate
@@ -401,7 +399,7 @@ CLI/job
      -> ToolRegistry
         -> built-in tools
         -> MCP tools
-        -> skills and memory_update
+        -> load_skill
         -> spawn / wait
            -> background Tool
            -> child AgentRunner

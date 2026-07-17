@@ -69,12 +69,25 @@ impl SkillRegistry {
             .skills
             .get(name)
             .with_context(|| format!("unknown skill `{name}`"))?;
-        std::fs::read_to_string(&skill.path).with_context(|| {
+        let content = std::fs::read_to_string(&skill.path).with_context(|| {
             format!(
                 "failed to load skill `{name}` from {}",
                 skill.path.display()
             )
-        })
+        })?;
+        let (_, _, body) = parse_skill_document(&content)
+            .with_context(|| format!("invalid skill metadata in {}", skill.path.display()))?;
+        let path = std::fs::canonicalize(&skill.path)
+            .with_context(|| format!("failed to resolve skill path {}", skill.path.display()))?;
+        let directory = path
+            .parent()
+            .context("skill path has no parent directory")?;
+        Ok(format!(
+            "SKILL.md: {}\nSkill directory: {}\n\n{}",
+            path.display(),
+            directory.display(),
+            body
+        ))
     }
 
     /// Compact prompt material: metadata only, never the skill body.
@@ -105,7 +118,7 @@ impl SkillRegistry {
         for path in files {
             let content = std::fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            let (name, description) = parse_frontmatter(&content)
+            let (name, description, _) = parse_skill_document(&content)
                 .with_context(|| format!("invalid skill metadata in {}", path.display()))?;
             self.skills.insert(
                 name.clone(),
@@ -121,77 +134,49 @@ impl SkillRegistry {
     }
 }
 
-fn parse_frontmatter(content: &str) -> Result<(String, String)> {
-    let mut lines = content.lines();
-    if lines.next().map(str::trim) != Some("---") {
+#[derive(Deserialize)]
+struct SkillFrontmatter {
+    name: String,
+    description: String,
+}
+
+fn parse_skill_document(content: &str) -> Result<(String, String, &str)> {
+    let mut lines = content.split_inclusive('\n');
+    let first = lines.next().context("SKILL.md is empty")?;
+    if first.trim() != "---" {
         bail!("SKILL.md must begin with `---` frontmatter");
     }
 
-    let mut frontmatter = Vec::new();
-    let mut closed = false;
+    let frontmatter_start = first.len();
+    let mut frontmatter_end = None;
+    let mut body_start = None;
+    let mut offset = first.len();
     for line in lines {
         if line.trim() == "---" {
-            closed = true;
+            frontmatter_end = Some(offset);
+            body_start = Some(offset + line.len());
             break;
         }
-        frontmatter.push(line);
+        offset += line.len();
     }
-    if !closed {
-        bail!("frontmatter is missing its closing `---`");
+    let frontmatter_end = frontmatter_end.context("frontmatter is missing its closing `---`")?;
+    let body_start = body_start.context("frontmatter is missing its closing `---`")?;
+    let metadata: SkillFrontmatter =
+        serde_yaml_ng::from_str(&content[frontmatter_start..frontmatter_end])
+            .context("parse SKILL.md frontmatter")?;
+    let name = metadata.name.trim().to_owned();
+    if name.is_empty() {
+        bail!("frontmatter `name` must not be empty");
     }
-
-    let mut name = None;
-    let mut description = None;
-    let mut index = 0;
-    while index < frontmatter.len() {
-        let line = frontmatter[index];
-        let Some((key, raw_value)) = line.split_once(':') else {
-            index += 1;
-            continue;
-        };
-        let key = key.trim();
-        let raw_value = raw_value.trim();
-        if key == "name" {
-            name = Some(unquote(raw_value).to_owned());
-        } else if key == "description" {
-            if matches!(raw_value, ">" | ">-" | "|" | "|-") {
-                let mut parts = Vec::new();
-                index += 1;
-                while index < frontmatter.len() {
-                    let continuation = frontmatter[index];
-                    if !continuation.chars().next().is_some_and(char::is_whitespace) {
-                        index -= 1;
-                        break;
-                    }
-                    parts.push(continuation.trim());
-                    index += 1;
-                }
-                description = Some(parts.join(" "));
-            } else {
-                description = Some(unquote(raw_value).to_owned());
-            }
-        }
-        index += 1;
+    let description = metadata
+        .description
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if description.is_empty() {
+        bail!("frontmatter `description` must not be empty");
     }
-    let name = name
-        .filter(|value| !value.is_empty())
-        .context("frontmatter is missing `name`")?;
-    let description = description
-        .filter(|value| !value.is_empty())
-        .context("frontmatter is missing `description`")?;
-    Ok((name, description))
-}
-
-fn unquote(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .or_else(|| {
-            value
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-        })
-        .unwrap_or(value)
+    Ok((name, description, &content[body_start..]))
 }
 
 #[derive(Clone)]
@@ -271,7 +256,11 @@ mod tests {
         assert_eq!(metadata.description, "workspace");
         assert_eq!(metadata.source, SkillSource::Workspace);
         assert!(!registry.prompt_index().contains("workspace body"));
-        assert!(registry.load("demo").unwrap().contains("workspace body"));
+        let loaded = registry.load("demo").unwrap();
+        assert!(loaded.contains("workspace body"));
+        assert!(loaded.contains("SKILL.md:"));
+        assert!(loaded.contains("Skill directory:"));
+        assert!(!loaded.contains("description: workspace"));
     }
 
     #[test]
@@ -285,10 +274,57 @@ mod tests {
 
     #[test]
     fn folded_frontmatter_description_is_supported() {
-        let content = "---\nname: demo\ndescription: >-\n  First line.\n  Second line.\n---\nbody";
+        let content = "---\nname: demo\ndescription: >-\n  First line.\n  Second line.\nlicense: MIT\nmetadata:\n  version: 1\n---\nbody";
         assert_eq!(
-            parse_frontmatter(content).unwrap(),
-            ("demo".to_owned(), "First line. Second line.".to_owned())
+            parse_skill_document(content).unwrap(),
+            (
+                "demo".to_owned(),
+                "First line. Second line.".to_owned(),
+                "body"
+            )
         );
+    }
+
+    #[test]
+    fn loading_omits_catalog_metadata_and_exposes_resource_root() {
+        let workspace = TempDir::new().unwrap();
+        let skill_root = workspace.path().join("skills/composite");
+        fs::create_dir_all(skill_root.join("references")).unwrap();
+        fs::write(skill_root.join("references/checklist.md"), "check details").unwrap();
+        write_skill(
+            &workspace.path().join("skills"),
+            "composite",
+            "composite",
+            "Already catalogued description.",
+            "Read references/checklist.md before proceeding.",
+        );
+
+        let registry = SkillRegistry::discover(workspace.path(), None).unwrap();
+        let loaded = registry.load("composite").unwrap();
+
+        assert!(!loaded.contains("name: composite"));
+        assert!(!loaded.contains("Already catalogued description."));
+        assert!(loaded.contains(skill_root.join("SKILL.md").to_string_lossy().as_ref()));
+        assert!(loaded.contains(skill_root.to_string_lossy().as_ref()));
+        assert!(loaded.contains("Read references/checklist.md before proceeding."));
+    }
+
+    #[test]
+    fn loading_preserves_the_instruction_body_verbatim() {
+        let workspace = TempDir::new().unwrap();
+        let body = "\n    indented instruction\n\n";
+        write_skill(
+            &workspace.path().join("skills"),
+            "verbatim",
+            "verbatim",
+            "Catalog metadata.",
+            body,
+        );
+
+        let registry = SkillRegistry::discover(workspace.path(), None).unwrap();
+        let loaded = registry.load("verbatim").unwrap();
+        let (_, loaded_body) = loaded.split_once("\n\n").unwrap();
+
+        assert_eq!(loaded_body, body);
     }
 }

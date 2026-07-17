@@ -90,11 +90,6 @@ impl ToolRegistry {
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.tools.keys().map(String::as_str)
     }
-
-    pub fn retain(&mut self, names: &[String]) {
-        self.tools
-            .retain(|name, _| names.iter().any(|item| item == name));
-    }
 }
 
 pub fn register_defaults(registry: &mut ToolRegistry) -> Result<()> {

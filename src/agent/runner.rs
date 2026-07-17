@@ -8,7 +8,7 @@ use crate::{
     artifact::ArtifactStore,
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::{HookEvent, HookPipeline},
-    memory::{MemoryPaths, MemoryUpdateTool},
+    memory::MemoryPaths,
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role},
     storage::{RunDirStore, RunState},
     tools::{ToolRegistry, register_history_tools},
@@ -20,7 +20,6 @@ use super::{
     context::{build_runtime_reminder, build_system_prompt},
     task::{SpawnTool, TaskManager, TaskManagerConfig, WaitTool},
     tool_execution::DirectToolRuntime,
-    types::RunProfile,
 };
 
 pub use super::types::{AgentRunnerConfig, RunRequest, RunResult, RunnerOptions};
@@ -121,22 +120,11 @@ impl AgentRunner {
         };
 
         let system = build_system_prompt();
-        let reminder_memory = if request.profile == RunProfile::MemoryMaintenance {
-            None
-        } else {
-            self.memory.as_ref()
-        };
         if needs_initial_message {
-            let skill_catalog = if request.profile == RunProfile::MemoryMaintenance {
-                ""
-            } else {
-                &self.skill_catalog
-            };
             let runtime_reminder = build_runtime_reminder(
                 &self.workspace,
-                skill_catalog,
-                reminder_memory,
-                plan.may_update_memory,
+                &self.skill_catalog,
+                self.memory.as_ref(),
                 request.additional_instructions.as_deref(),
             )?;
             let user_message = Message {
@@ -158,32 +146,12 @@ impl AgentRunner {
             Arc::new(LocalTrajectoryReader::new(self.store.clone())),
             self.options.compaction.history_search_max_matches,
         )?;
-        if request.profile == RunProfile::MemoryMaintenance {
-            registry.retain(&[
-                "read".to_owned(),
-                "write".to_owned(),
-                "bash".to_owned(),
-                "history_search".to_owned(),
-                "history_read".to_owned(),
-            ]);
-        }
         let automatic_compaction_enabled = self
             .options
             .compaction
             .trigger_tokens
-            .is_some_and(|tokens| tokens > 0);
-
-        if plan.may_update_memory
-            && let Some(memory) = &self.memory
-        {
-            registry.register(Arc::new(MemoryUpdateTool::new(
-                self.clone(),
-                memory.clone(),
-                run_id.clone(),
-                request.depth,
-                events.clone(),
-            )))?;
-        }
+            .is_some_and(|tokens| tokens > 0)
+            && (registry.get("read").is_some() || registry.get("bash").is_some());
 
         let tool_preview_budget = Arc::new(tokio::sync::Mutex::new(remaining_preview_budget(
             self.artifacts.policy().max_inline_bytes_per_run,

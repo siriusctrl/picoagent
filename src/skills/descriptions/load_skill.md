@@ -1,1 +1,1 @@
-Load the complete instructions for one skill by name. Skill metadata is available before loading; use this only when the skill applies.
+Load one applicable skill's instruction body and filesystem location by name. Name and description metadata are already available in the skill catalog and are not repeated.

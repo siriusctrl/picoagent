@@ -27,7 +27,7 @@ navigation, invariants, verification, and handoff.
 - `src/skills/`: Agent Skills discovery and progressive `SKILL.md` loading.
 - `src/mcp.rs`: MCP stdio connection lifecycle and tool adapters.
 - `src/hooks.rs`: command hook discovery and lifecycle invocation.
-- `src/memory.rs`: user/project Markdown paths and model-driven `memory_update`.
+- `src/memory.rs`: user/project Markdown paths exposed to ordinary agent tools.
 - `src/config.rs`: `.pico/config.toml` loading and runtime/provider settings.
 - `src/events.rs`: transport-neutral runtime events and event sinks.
 - `src/cli.rs`: command-line shape; `src/main.rs`: headless composition root.
@@ -68,15 +68,16 @@ navigation, invariants, verification, and handoff.
 - Register `history_search` and `history_read` before the first normal provider
   call regardless of `compaction.trigger_tokens`. That setting controls
   checkpoint creation only; sorted tool schemas stay frozen per run.
-- Keep Root, delegating/leaf GeneralTask, and MemoryMaintenance as explicit
-  capability profiles, and keep compaction summary calls on a separate
-  tool-free request profile. Select the GeneralTask variant from remaining
-  depth before its run starts; do not add or remove schemas during a run.
+- Keep Root and delegating/leaf GeneralTask as explicit capability profiles,
+  and keep compaction summary calls on a separate tool-free request profile.
+  Select the GeneralTask variant from remaining depth before its run starts;
+  do not add or remove schemas during a run.
 - Keep stable agent prose in the typed compile-time YAML registry and tool
   descriptions beside their owners. Keep prompt assembly, schemas, validation,
   and execution contracts in Rust.
 - Memory is durable user/project knowledge outside the live transcript. Inspect
-  its ordinary Markdown with `read`/`bash`; do not inject the tree into every prompt.
+  and update its ordinary Markdown with the general tools; do not inject the
+  tree into every prompt or add a memory-specific tool.
 - Keep user memory and project memory distinct. Raw artifacts and transcripts
   are sources, not automatically curated memory.
 - The launch runtime intentionally has no security sandbox or approval engine.

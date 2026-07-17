@@ -52,8 +52,8 @@ prevents concurrent advancement. Missing direct-tool results become explicit
 `interrupted` error results rather than replaying potentially side-effecting
 work. Durable task records coordinate parent and child state, while each child
 keeps its own transcript and result delivery is derived from the parent log.
-The parent is the recovery entrypoint; synchronous MemoryMaintenance children
-remain direct-tool work and are not independently resumed.
+The parent is the recovery entrypoint for every GeneralTask child, including
+one delegated to a large memory update.
 
 Rejected: replaying incomplete tools, copying child messages into task JSON,
 and maintaining a second durable `delivered` boolean. See
@@ -103,13 +103,15 @@ unbounded stdout in every subsequent model request.
 
 ## Markdown Memory
 
-Memory is human-editable Markdown outside the transcript. Ordinary `read` and
-`bash` capabilities inspect it; a focused general-task child performs semantic
-updates and cron-friendly consolidation.
+Memory is human-editable Markdown outside the transcript. Ordinary `read`,
+`write`, and `bash` capabilities inspect and update it. Small changes stay in
+the current run; a large independent consolidation uses an ordinary durable
+GeneralTask child.
 
-Rejected for launch: vector databases, automatic recording of every successful
-run, Rust-side semantic heuristics, and making raw transcripts or artifacts
-equivalent to curated memory.
+Rejected for launch: a dedicated memory tool or profile, vector databases,
+automatic recording of every successful run, Rust-side semantic heuristics,
+and making raw transcripts or artifacts equivalent to curated memory. See
+[ADR 0009](adr/0009-memory-through-ordinary-tools.md).
 
 ## One Async Wrapper
 
@@ -150,10 +152,11 @@ each run. Compacted-history recovery guidance appears only beside an actual
 synthetic checkpoint boundary; it never changes the normal system prompt. Tool
 descriptions remain in sorted tool schemas rather than being duplicated in the
 system prompt. Core history schemas are present from the first normal call.
-Root, delegating/leaf GeneralTask, and MemoryMaintenance each freeze their
-assembled registry for the run; checkpoint summaries use a separate tool-free
-profile. Optional capabilities and a GeneralTask's depth variant are resolved
-before its run starts rather than changing its schema set mid-run.
+Root and delegating/leaf GeneralTask each freeze their assembled registry for
+the run; checkpoint summaries use a separate tool-free profile. Optional
+capabilities and a GeneralTask's depth variant are resolved before its run
+starts rather than changing its schema set mid-run. Memory paths do not alter
+the tool schema.
 
 Rejected for launch: conditionally adding history tools and hot-reloading
 project context or tool definitions inside a run. Appending revisions would

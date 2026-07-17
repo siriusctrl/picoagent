@@ -117,9 +117,8 @@ into the parent exactly once.
 
 The CLI resumes the parent, not a child id. Parent recovery owns durable
 GeneralTask child reconciliation, which avoids two processes racing to advance
-the same child. A focused MemoryMaintenance child invoked synchronously by
-`memory_update` follows direct-tool semantics instead: an interrupted call is
-reported as unknown and is not replayed.
+the same child. Large memory updates use this same child path and need no
+separate recovery case.
 
 Parent, child, and compaction requests share one model-call semaphore. Its
 default capacity is one so a child can run against single-concurrency compatible
@@ -143,12 +142,12 @@ Reasoning is not included in `final.md`.
 
 The normal agent's built-in system prompt is workspace-independent, loaded from
 the embedded typed YAML registry, and invariant across its calls. Sorted tool
-schemas form the other stable request prefix and are frozen before the first call. Core
-history schemas are included regardless of `trigger_tokens`. Root and a
-depth-eligible GeneralTask may include memory and delegation schemas; each
+schemas form the other stable request prefix and are frozen before the first
+call. Core history schemas are included regardless of `trigger_tokens`. Root
+and a depth-eligible GeneralTask may include delegation schemas; each
 GeneralTask is assigned a delegating or leaf variant before it starts. Optional
-web and MCP schemas depend on startup configuration. MemoryMaintenance uses a
-narrow fixed profile. Compaction summaries use a separate tool-free profile.
+web and MCP schemas depend on startup configuration. Memory adds reminder paths,
+not a schema. Compaction summaries use a separate tool-free profile.
 
 The first user message begins with a `<runtime-reminder>` text block containing
 the workspace snapshot: path, `AGENTS.md`, sorted skill metadata, memory paths,

@@ -40,10 +40,10 @@
   persistence helpers.
 - `src/storage/trajectory.rs`: append-only messages and compaction checkpoints,
   compacted-history loading, and torn-tail JSONL recovery.
-- `src/skills/mod.rs`: Agent Skills metadata discovery and `load_skill`.
+- `src/skills/mod.rs`: Agent Skills metadata discovery and body/path loading.
 - `src/mcp.rs`: rmcp stdio client and tool adapters.
 - `src/hooks.rs`: deterministic command-hook pipeline.
-- `src/memory.rs`: Markdown memory paths and model-driven `memory_update`.
+- `src/memory.rs`: user/project Markdown memory paths and reminder text.
 - `src/config.rs`: TOML configuration.
 - `src/events.rs`: runtime event contract and sinks.
 - `src/cli.rs`: CLI command schema.
