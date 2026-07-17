@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crate::events::{RuntimeEvent, RuntimeEventKind};
+use crate::{
+    events::{RuntimeEvent, RuntimeEventKind},
+    storage::RunLease,
+};
 
 use super::{BackgroundTaskRecord, TaskManager, TaskManagerConfig, TaskRecordStore};
 
@@ -21,11 +24,13 @@ pub struct RecoverableSubagent {
 #[must_use = "the guard must live for the full agent loop"]
 pub(crate) struct TaskCancellationGuard {
     manager: Option<Arc<TaskManager>>,
+    lease: Option<RunLease>,
 }
 
 impl TaskCancellationGuard {
     pub(crate) fn disarm(&mut self) {
         self.manager = None;
+        self.lease = None;
     }
 }
 
@@ -34,6 +39,7 @@ impl Drop for TaskCancellationGuard {
         let Some(manager) = self.manager.take() else {
             return;
         };
+        let lease = self.lease.take();
         let handles = manager.abort_handles();
         // Cancellation can drop an agent-loop future, so the guard cannot
         // await cleanup itself. Abort descendants synchronously, then finish
@@ -41,6 +47,7 @@ impl Drop for TaskCancellationGuard {
         // crash still falls back to restart reconciliation.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
+                let _lease = lease;
                 manager
                     .settle_aborted(handles, "owning agent run was cancelled")
                     .await;
@@ -97,9 +104,10 @@ impl TaskManager {
         *remaining = remaining.saturating_sub(used);
     }
 
-    pub(crate) fn cancellation_guard(self: &Arc<Self>) -> TaskCancellationGuard {
+    pub(crate) fn cancellation_guard(self: &Arc<Self>, lease: RunLease) -> TaskCancellationGuard {
         TaskCancellationGuard {
             manager: Some(self.clone()),
+            lease: Some(lease),
         }
     }
 

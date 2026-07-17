@@ -7,7 +7,7 @@ use ulid::Ulid;
 use crate::{
     events::{CompositeEventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::HookEvent,
-    storage::{RunRecord, RunState},
+    storage::{RunLease, RunRecord, RunState},
 };
 
 use super::{AgentRunner, RunRequest, RunResult};
@@ -52,8 +52,9 @@ impl AgentRunner {
         .with_provider_resume_fingerprint(self.provider.resume_fingerprint());
         self.store.create_run(&record).await?;
 
-        let _lease = self.store.acquire_run_lease(&run_id).await?;
-        self.run_with_mode(request, run_id, RunMode::New).await
+        let lease = self.store.acquire_run_lease(&run_id).await?;
+        self.run_with_mode(request, run_id, RunMode::New, lease.clone())
+            .await
     }
 
     pub(super) async fn run_with_mode(
@@ -61,13 +62,20 @@ impl AgentRunner {
         request: RunRequest,
         run_id: String,
         mode: RunMode,
+        cancellation_lease: RunLease,
     ) -> Result<RunResult> {
         let events: SharedEventSink = Arc::new(CompositeEventSink::new(vec![
             self.store.event_sink(),
             self.extra_events.clone(),
         ]));
         let outcome = self
-            .run_loop(request, run_id.clone(), events.clone(), mode)
+            .run_loop(
+                request,
+                run_id.clone(),
+                events.clone(),
+                mode,
+                cancellation_lease,
+            )
             .await;
         if let Err(error) = &outcome {
             let _ = self.store.update_state(&run_id, RunState::Failed).await;

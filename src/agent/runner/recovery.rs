@@ -31,7 +31,7 @@ impl AgentRunner {
         run_id: String,
         expected_parent_run_id: Option<&str>,
     ) -> Result<RunResult> {
-        let _lease = self.store.acquire_run_lease(&run_id).await?;
+        let lease = self.store.acquire_run_lease(&run_id).await?;
         let record = self.store.load_run(&run_id).await?;
         match expected_parent_run_id {
             Some(parent_run_id) => ensure!(
@@ -85,7 +85,8 @@ impl AgentRunner {
             record.model,
             plan.model
         );
-        self.run_with_mode(request, run_id, RunMode::Resume).await
+        self.run_with_mode(request, run_id, RunMode::Resume, lease.clone())
+            .await
     }
 }
 

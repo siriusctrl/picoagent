@@ -848,15 +848,8 @@ async fn committed_steering_succeeds_when_its_observation_event_fails() {
 }
 
 #[tokio::test]
-async fn cancellation_guard_aborts_handles_and_settles_their_durable_state() {
+async fn cancellation_cleanup_holds_the_parent_lease_until_tasks_are_settled() {
     use std::sync::atomic::{AtomicBool, Ordering};
-
-    struct DropFlag(Arc<AtomicBool>);
-    impl Drop for DropFlag {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
-        }
-    }
 
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
@@ -864,43 +857,57 @@ async fn cancellation_guard_aborts_handles_and_settles_their_durable_state() {
     let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
     let task_id = manager.create_tool_task("never".to_owned()).await.unwrap();
     manager.set_running(&task_id).await.unwrap();
-    let dropped = Arc::new(AtomicBool::new(false));
-    let started = Arc::new(tokio::sync::Notify::new());
-    let handle = tokio::spawn({
-        let dropped = dropped.clone();
+    let started = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let handle = tokio::task::spawn_blocking({
         let started = started.clone();
-        async move {
-            let _flag = DropFlag(dropped);
-            started.notify_one();
-            std::future::pending::<()>().await;
+        let release = release.clone();
+        move || {
+            started.store(true, Ordering::SeqCst);
+            while !release.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
         }
     });
     manager.track(task_id.clone(), handle);
-    started.notified().await;
+    while !started.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
 
-    let guard = manager.cancellation_guard();
+    let guard = manager.cancellation_guard(store.acquire_run_lease("parent").await.unwrap());
     drop(guard);
-    tokio::time::timeout(Duration::from_secs(2), async {
+    let busy = store.acquire_run_lease("parent").await.unwrap_err();
+    assert!(
+        busy.downcast_ref::<crate::storage::RunLeaseBusy>()
+            .is_some()
+    );
+
+    release.store(true, Ordering::SeqCst);
+    let _lease = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if dropped.load(Ordering::SeqCst) {
-                break;
+            if manager.get(&task_id).await.unwrap().state != BackgroundTaskState::Cancelled {
+                tokio::task::yield_now().await;
+                continue;
             }
-            tokio::task::yield_now().await;
+            match store.acquire_run_lease("parent").await {
+                Ok(lease) => break lease,
+                Err(error)
+                    if error
+                        .downcast_ref::<crate::storage::RunLeaseBusy>()
+                        .is_some() =>
+                {
+                    tokio::task::yield_now().await;
+                }
+                Err(error) => panic!("acquire failed after cleanup: {error:#}"),
+            }
         }
     })
     .await
     .unwrap();
-    assert!(dropped.load(Ordering::SeqCst));
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if manager.get(&task_id).await.unwrap().state == BackgroundTaskState::Cancelled {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    assert_eq!(
+        manager.get(&task_id).await.unwrap().state,
+        BackgroundTaskState::Cancelled
+    );
 }
 
 struct SlowContinuationTool(Arc<std::sync::atomic::AtomicUsize>);

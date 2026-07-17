@@ -284,7 +284,9 @@ impl RunDirStore {
                 }
                 .into());
             }
-            Ok(RunLease { _file: file })
+            Ok(RunLease {
+                _file: Arc::new(file),
+            })
         })
         .await
         .context("join run execution lock task")?
@@ -295,9 +297,9 @@ impl RunDirStore {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RunLease {
-    _file: std::fs::File,
+    _file: Arc<std::fs::File>,
 }
 
 #[derive(Debug)]

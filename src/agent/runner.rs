@@ -10,7 +10,7 @@ use crate::{
     hooks::{HookEvent, HookPipeline},
     memory::MemoryPaths,
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role},
-    storage::{RunDirStore, RunState},
+    storage::{RunDirStore, RunLease, RunState},
     tools::{ToolRegistry, register_history_tools},
     trajectory::LocalTrajectoryReader,
 };
@@ -79,6 +79,7 @@ impl AgentRunner {
         run_id: String,
         events: SharedEventSink,
         mode: RunMode,
+        cancellation_lease: RunLease,
     ) -> Result<RunResult> {
         let plan = self.plan(&request);
         let model = plan.model.clone();
@@ -181,7 +182,7 @@ impl AgentRunner {
         }
         registry.register(Arc::new(TaskTool::new(manager.clone())))?;
         let task_manager = manager;
-        let mut task_guard = task_manager.cancellation_guard();
+        let mut task_guard = task_manager.cancellation_guard(cancellation_lease);
         let direct_tools = DirectToolRuntime {
             registry: &registry,
             hooks: &self.hooks,
