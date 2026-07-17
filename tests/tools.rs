@@ -1,6 +1,9 @@
-use picoagent::tools::{
-    BashTool, ReadTool, Tool, ToolContext, ToolRegistry, WebSearchTool, WriteTool,
-    register_defaults,
+use picoagent::{
+    artifact::ArtifactStore,
+    tools::{
+        BashTool, ReadTool, Tool, ToolContext, ToolRegistry, WebSearchTool, WriteTool,
+        register_defaults,
+    },
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -15,6 +18,17 @@ fn context(workspace: &std::path::Path, call_id: &str) -> ToolContext {
         call_id: call_id.to_owned(),
         workspace: workspace.to_owned(),
     }
+}
+
+async fn bash_text(workspace: &std::path::Path, call_id: &str, command: &str) -> (bool, String) {
+    let output = BashTool
+        .execute(context(workspace, call_id), json!({ "command": command }))
+        .await
+        .unwrap();
+    assert!(output.content.is_empty());
+    let source_path = output.source_path.expect("bash output should be spooled");
+    let text = tokio::fs::read_to_string(source_path).await.unwrap();
+    (output.is_error, text)
 }
 
 #[test]
@@ -255,22 +269,56 @@ async fn write_follows_an_existing_symlink_without_replacing_it() {
 }
 
 #[tokio::test]
-async fn bash_captures_stdout_stderr_and_exit_code() {
+async fn bash_combines_streams_in_capture_order_and_marks_nonzero_exit() {
     let workspace = tempdir().unwrap();
-    let output = BashTool
-        .execute(
-            context(workspace.path(), "bash"),
-            json!({ "command": "pwd; echo warning >&2; exit 7" }),
-        )
+    let (is_error, text) = bash_text(
+        workspace.path(),
+        "bash-order",
+        "printf 'stdout-1\\n'; printf 'stderr-1\\n' >&2; printf 'stdout-2'; exit 7",
+    )
+    .await;
+
+    assert!(is_error);
+    assert!(
+        text.ends_with("stdout-1\nstderr-1\nstdout-2\n\nCommand exited with code 7"),
+        "unexpected bash output: {text}"
+    );
+}
+
+#[tokio::test]
+async fn bash_returns_success_output_without_a_status_line() {
+    let workspace = tempdir().unwrap();
+    let (is_error, text) = bash_text(workspace.path(), "bash-success", "printf done").await;
+
+    assert!(!is_error);
+    assert!(text.ends_with("done"), "unexpected bash output: {text}");
+    assert!(!text.contains("Command exited with code"));
+}
+
+#[tokio::test]
+async fn bash_large_combined_output_uses_the_artifact_contract() {
+    let workspace = tempdir().unwrap();
+    let context = context(workspace.path(), "bash-large");
+    let raw = BashTool
+        .execute(context.clone(), json!({ "command": "printf '%40000s' x" }))
         .await
         .unwrap();
-    assert!(output.content.is_empty());
-    let source_path = output.source_path.expect("bash output should be spooled");
-    let text = tokio::fs::read_to_string(source_path).await.unwrap();
-    assert!(output.is_error);
-    assert!(text.contains("Exit code: 7"));
-    assert!(text.contains(workspace.path().to_string_lossy().as_ref()));
-    assert!(text.contains("warning"));
+    let output = ArtifactStore::default()
+        .persist_output(&context, raw)
+        .await
+        .unwrap();
+
+    assert!(!output.is_error);
+    assert!(output.truncated);
+    assert!(output.preview.ends_with('x'));
+    assert!(output.preview.contains("bytes omitted"));
+    let artifact = output.artifact.unwrap();
+    assert!(artifact.bytes >= 40_000);
+    let stored = tokio::fs::read(workspace.path().join(artifact.path))
+        .await
+        .unwrap();
+    assert!(stored.len() >= 40_000);
+    assert_eq!(stored.last(), Some(&b'x'));
 }
 
 #[cfg(unix)]

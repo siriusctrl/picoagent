@@ -48,7 +48,7 @@ An artifact may have `truncated: false` when its configured preview contains
 all source bytes; artifact-backed and truncated are separate properties.
 
 The normal textual preview retains both the beginning and ending because
-compiler and command failures commonly appear at the end of stdout or stderr.
+compiler and command failures commonly appear at the end of command output.
 The byte counts directly describe what the model received: head bytes come from
 the start, tail bytes from the end, and `omitted` is everything not shown. This
 avoids storing separate strategy and omitted-region fields that can be derived

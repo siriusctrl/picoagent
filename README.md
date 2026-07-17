@@ -300,7 +300,8 @@ The launch built-ins are intentionally small:
 
 - `read`: bounded UTF-8 reads for a known path
 - `write`: full-file creation/replacement or an atomic list of targeted edits
-- `bash`: local discovery, `rg`, tests, builds, and other Bash commands
+- `bash`: local discovery, `rg`, tests, builds, and other Bash commands; returns
+  combined stdout/stderr and adds a status line only for unsuccessful completion
 - `history_search`: regex search over the compacted trajectory prefix
 - `history_read`: a bounded message window around a returned history ref
 - `web_search`: optional Brave-backed public web search
