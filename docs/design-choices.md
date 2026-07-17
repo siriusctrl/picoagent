@@ -1,5 +1,16 @@
 # Design Choices
 
+## Internal Harness First
+
+Picoagent currently has no external users or compatibility commitments. It is
+an internal harness for its maintainers' own workflows, so operator convenience,
+code readability, and fast iteration take priority over broad configurability,
+backward compatibility, and abstractions for hypothetical consumers.
+
+Rejected: carrying compatibility layers, packaging indirection, or generalized
+extension points without a concrete internal need. Revisit this boundary only
+when an actual external consumer or distribution requirement exists.
+
 ## One Rust Runner
 
 Main tasks and subagents use one `AgentRunner`. Child runs differ only by parent

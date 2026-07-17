@@ -81,6 +81,9 @@ navigation, invariants, verification, and handoff.
 - The launch runtime intentionally has no security sandbox or approval engine.
   Tools and hooks inherit the picoagent process permissions; document this
   plainly and do not imply otherwise.
+- Treat picoagent as an internal harness with no external compatibility promise.
+  Optimize for maintainer convenience, readability, and fast iteration; do not
+  add compatibility layers or generality for hypothetical users.
 - Do not add a TUI, frontend framework, built-in scheduler, vector database,
   native dynamic plugin ABI, or distributed worker system without a concrete
   request.
