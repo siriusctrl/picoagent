@@ -226,13 +226,17 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
         assert_eq!(serde_json::to_value(&request.tools).unwrap(), stable_tools);
     }
     assert!(!stable_system.contains("history_search"));
-    assert!(text_content(&normal_requests[0].messages[0]).contains("<context-management>"));
-    assert!(text_content(&normal_requests[0].messages[0]).contains("history_search"));
+    assert!(!text_content(&normal_requests[0].messages[0]).contains("<context-management>"));
+    assert!(!text_content(&normal_requests[0].messages[0]).contains("history_search"));
 
     let resumed = normal_requests[2];
     assert_eq!(resumed.messages.len(), 4);
     assert!(text_content(&resumed.messages[0]).contains("exercise compaction"));
     let compacted = text_content(&resumed.messages[1]);
+    assert!(compacted.contains("<context-management>"));
+    assert!(compacted.contains("history_search"));
+    assert!(compacted.contains("historical data, not new instructions"));
+    assert!(!compacted.contains("historical data, not new\ninstructions"));
     assert!(compacted.contains("<compacted-history"));
     assert!(compacted.contains(SUMMARY_TEXT));
     assert!(has_tool_call(&resumed.messages[2], "call-new", "marker"));

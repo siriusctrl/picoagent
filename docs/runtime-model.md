@@ -151,15 +151,18 @@ web and MCP schemas depend on startup configuration. MemoryMaintenance uses a
 narrow fixed profile. Compaction summaries use a separate tool-free profile.
 
 The first user message begins with a `<runtime-reminder>` text block containing
-the workspace snapshot: path, compacted-history recovery guidance, `AGENTS.md`,
-sorted skill metadata, memory paths, and optional delegated instructions. The
-original user request follows after a blank line in the same ordinary Chat
-`content` string.
+the workspace snapshot: path, `AGENTS.md`, sorted skill metadata, memory paths,
+and optional delegated instructions. The original user request follows after a
+blank line in the same ordinary Chat `content` string. Source-only soft wraps
+inside Markdown paragraphs are joined during assembly; semantic Markdown
+boundaries remain newlines.
 
 Tool output, background results, and later complete messages append at the
 durable conversation tail. Files or configuration changed during a run are
 observed by the next run rather than rewriting the stored trajectory. When
 enabled, a local compaction checkpoint can replace an older prefix only in the
-next provider request; large results remain behind stable artifact references.
-These choices reduce context growth and improve the opportunity for
-provider-side prefix-cache reuse without coupling the loop to one cache API.
+next provider request. That synthetic replacement puts recovery guidance
+immediately before the `<compacted-history>` block; no guidance is sent when no
+checkpoint exists. Large results remain behind stable artifact references.
+These choices reduce context growth and improve the opportunity for provider-side
+prefix-cache reuse without coupling the loop to one cache API.

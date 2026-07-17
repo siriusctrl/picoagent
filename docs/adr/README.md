@@ -55,3 +55,5 @@ Use these sections:
   sidecar](0005-openai-chat-compatible-message-log.md)
 - [ADR 0006: Resume at complete-message boundaries and keep child coordination
   separate](0006-complete-message-resume-and-durable-child-coordination.md)
+- [ADR 0007: Emit compacted-history guidance only at its active
+  boundary](0007-compacted-history-guidance-at-active-boundary.md)

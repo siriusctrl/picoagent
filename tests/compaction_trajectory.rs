@@ -283,10 +283,19 @@ async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
         normal_requests[1],
         "<compacted-history checkpoint="
     ));
+    assert!(!request_contains(
+        normal_requests[0],
+        "<context-management>"
+    ));
+    assert!(!request_contains(
+        normal_requests[1],
+        "<context-management>"
+    ));
     assert!(request_contains(
         normal_requests[2],
         "<compacted-history checkpoint="
     ));
+    assert!(request_contains(normal_requests[2], "<context-management>"));
     assert!(request_contains(normal_requests[2], SUMMARY_TEXT));
     assert!(
         !normal_requests[2]

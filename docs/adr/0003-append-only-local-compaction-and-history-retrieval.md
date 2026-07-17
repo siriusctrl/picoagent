@@ -9,6 +9,9 @@ history tools before their first call, and fixed profiles replace a generic
 run-level allowlist. The append-only checkpoint, retrieval, and persistence
 decisions below remain accepted.
 
+ADR 0007 further refines guidance placement: the initial reminder omits it, and
+active-context assembly emits it only beside an actual compacted-history block.
+
 ADR 0005 further refines the trajectory's physical layout: Chat-compatible
 message lines are paired with `message_metadata.jsonl`, where stable refs,
 sequence numbers, integrity hashes, and reconstruction layout now live. The

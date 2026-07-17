@@ -62,9 +62,9 @@ navigation, invariants, verification, and handoff.
   identity is a contract violation.
 - Keep prompt prefixes deterministic: stable section order, sorted tools and
   skills, and dynamic memory/tool results near the tail.
-- Keep the normal agent system prompt invariant. Put compacted-history recovery
-  guidance in the initial runtime reminder, not in a conditionally changing
-  system prompt.
+- Keep the normal agent system prompt invariant. Emit compacted-history recovery
+  guidance beside an actual compacted-history boundary, not in the system prompt
+  or a run that has no checkpoint.
 - Register `history_search` and `history_read` before the first normal provider
   call regardless of `compaction.trigger_tokens`. That setting controls
   checkpoint creation only; sorted tool schemas stay frozen per run.

@@ -206,9 +206,14 @@ The system prompt contains only stable built-in instructions loaded from
 compile-time Markdown under `prompts/agents/`. Rust owns prompt precedence,
 section ordering, dynamic values, and runtime-reminder framing. The first user
 message's ordinary text `content` carries a `<runtime-reminder>` block with
-compacted-history recovery guidance, the workspace `AGENTS.md`, and sorted
-skill metadata, followed by the original request. A skill body enters the
-conversation only after the model calls `load_skill`.
+the workspace `AGENTS.md`, sorted skill metadata, memory paths, and optional
+delegated instructions, followed by the original request. A skill body enters
+the conversation only after the model calls `load_skill`.
+
+Prompt assembly joins source-only soft wraps within Markdown paragraphs while
+preserving semantic boundaries such as blank lines, headings, list items,
+tables, explicit breaks, and fenced code. This keeps authored Markdown readable
+without sending arbitrary editor wrapping to the model.
 
 ### Memory
 
@@ -250,12 +255,14 @@ does not replay that child.
 Normal agent calls use one invariant built-in system prompt and one sorted,
 frozen tool-schema set. The history schemas are included from the first call;
 automatic compaction never mutates this prefix. Project instructions,
-compacted-history guidance, skill metadata, memory paths, and delegated
-instructions form a deterministic runtime reminder at the start of each run.
-The reminder is frozen for that run. Optional schemas and a GeneralTask's
+skill metadata, memory paths, and delegated instructions form a deterministic
+runtime reminder at the start of each run. The reminder is frozen for that run.
+When a checkpoint exists, recovery guidance appears in the synthetic active
+context immediately before the `<compacted-history>` block; it is absent from
+runs without compacted history. Optional schemas and a GeneralTask's
 delegating/leaf variant are selected before the run starts; MemoryMaintenance
-has its own narrow toolset. Summary calls intentionally use a separate
-tool-free profile.
+has its own narrow toolset. Summary calls intentionally use a separate tool-free
+profile.
 
 The durable trajectory remains append-only; before a normal model call, an
 optional compaction checkpoint can replace its older active prefix with one

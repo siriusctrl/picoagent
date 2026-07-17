@@ -4,6 +4,10 @@
 - Date: 2026-07-16
 - Refines: ADR 0003 (conditional prompt and history-tool placement only)
 
+ADR 0007 refines only the recovery-guidance placement below. The initial
+reminder now omits that prose, while active-context assembly emits it beside an
+actual checkpoint. Stable system and tool-schema decisions remain accepted.
+
 ## Context
 
 ADR 0003 established append-only local compaction and exact history retrieval.

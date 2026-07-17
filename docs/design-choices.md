@@ -135,19 +135,19 @@ modules.
 The built-in system prompt contains only product identity and stable operating
 rules. Workspace `AGENTS.md`, skill metadata, memory paths, and delegated-task
 instructions are snapshotted into a synthetic runtime reminder at the start of
-each run. The reminder also carries compacted-history recovery guidance so the
-normal system prompt does not change when compaction is configured or occurs.
-Tool descriptions remain in sorted tool schemas rather than being duplicated
-in the system prompt. Core history schemas are present from the first normal
-call. Root, delegating/leaf GeneralTask, and MemoryMaintenance each freeze their
+each run. Compacted-history recovery guidance appears only beside an actual
+synthetic checkpoint boundary; it never changes the normal system prompt. Tool
+descriptions remain in sorted tool schemas rather than being duplicated in the
+system prompt. Core history schemas are present from the first normal call.
+Root, delegating/leaf GeneralTask, and MemoryMaintenance each freeze their
 assembled registry for the run; checkpoint summaries use a separate tool-free
 profile. Optional capabilities and a GeneralTask's depth variant are resolved
 before its run starts rather than changing its schema set mid-run.
 
-Rejected for launch: conditionally adding history tools or compaction prose
-after a checkpoint, and hot-reloading project context or tool definitions
-inside a run. Appending revisions would grow context, while replacing earlier
-messages would break the durable transcript boundary and provider prefix-cache
+Rejected for launch: conditionally adding history tools and hot-reloading
+project context or tool definitions inside a run. Appending revisions would
+grow context, while replacing earlier messages would break the durable
+transcript boundary and provider prefix-cache
 reuse. See [ADR 0004](adr/0004-stable-agent-prefix-and-core-history-tools.md).
 
 ## Compile-Time Prompt Assets

@@ -207,8 +207,8 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
     );
     assert!(!requests[0].system.contains("history_search"));
     let reminder = text_content(&requests[0].messages[0]);
-    assert!(reminder.contains("<context-management>"));
-    assert!(reminder.contains("history_search"));
+    assert!(!reminder.contains("<context-management>"));
+    assert!(!reminder.contains("history_search"));
 }
 
 #[tokio::test]
