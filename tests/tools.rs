@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{io::Cursor, sync::Arc};
 
 use picoagent::{
     artifact::ArtifactStore,
@@ -75,11 +75,11 @@ fn app_registry_uses_the_embedded_tool_manifests() {
 #[tokio::test]
 async fn read_returns_a_bounded_line_range() {
     let workspace = tempdir().unwrap();
-    let content = (0..202)
+    let content = (0..402)
         .map(|line| format!("line-{line}"))
         .collect::<Vec<_>>()
         .join("\n");
-    tokio::fs::write(workspace.path().join("sample.txt"), content)
+    tokio::fs::write(workspace.path().join("sample.txt"), &content)
         .await
         .unwrap();
     let output = ReadTool
@@ -91,12 +91,15 @@ async fn read_returns_a_bounded_line_range() {
         .unwrap();
     let text = String::from_utf8(output.content).unwrap();
     let (selected, marker) = text.split_once("\n[read truncated:").unwrap();
-    assert_eq!(selected.lines().count(), 200);
+    assert_eq!(selected.lines().count(), 400);
     assert!(selected.starts_with("line-1\n"));
-    assert!(selected.ends_with("line-200"));
+    assert!(selected.ends_with("line-400"));
     assert_eq!(
         marker,
-        " line limit reached; continue with line_offset=201]"
+        format!(
+            " line limit reached; total_bytes={}; continue with line_offset=401]",
+            content.len()
+        )
     );
 }
 
@@ -135,7 +138,10 @@ async fn read_continues_a_single_long_utf8_line_by_bytes() {
     let (first_content, marker) = first.split_once("\n[read truncated:").unwrap();
     assert_eq!(
         marker,
-        " internal byte limit reached; continue with byte_offset=65535]"
+        format!(
+            " internal byte limit reached; total_bytes={}; continue with byte_offset=65535]",
+            content.len()
+        )
     );
     assert!(!first.contains('\u{fffd}'));
 
@@ -148,6 +154,47 @@ async fn read_continues_a_single_long_utf8_line_by_bytes() {
         .unwrap();
     let second = String::from_utf8(second.content).unwrap();
     assert_eq!(format!("{first_content}{second}"), content);
+}
+
+#[tokio::test]
+async fn read_rounds_byte_limited_multiline_text_to_a_complete_line() {
+    let workspace = tempdir().unwrap();
+    let lines = (0..300)
+        .map(|line| format!("line-{line:03}-{}", "x".repeat(300)))
+        .collect::<Vec<_>>();
+    tokio::fs::write(workspace.path().join("multiline.txt"), lines.join("\n"))
+        .await
+        .unwrap();
+
+    let output = ReadTool
+        .execute(
+            context(workspace.path(), "read-multiline"),
+            json!({ "path": "multiline.txt" }),
+        )
+        .await
+        .unwrap();
+    let text = String::from_utf8(output.content).unwrap();
+    let (selected, marker) = text.split_once("\n[read truncated:").unwrap();
+    let selected_lines = selected.lines().count();
+    assert!(selected_lines > 1 && selected_lines < lines.len());
+    assert_eq!(selected, lines[..selected_lines].join("\n"));
+    assert_eq!(
+        marker,
+        format!(
+            " internal byte limit reached after a complete line; total_bytes={}; continue with line_offset={selected_lines}]",
+            lines.join("\n").len()
+        )
+    );
+
+    let remainder = ReadTool
+        .execute(
+            context(workspace.path(), "read-multiline-next"),
+            json!({ "path": "multiline.txt", "line_offset": selected_lines }),
+        )
+        .await
+        .unwrap();
+    let remainder = String::from_utf8(remainder.content).unwrap();
+    assert_eq!(format!("{selected}\n{remainder}"), lines.join("\n"));
 }
 
 #[tokio::test]
@@ -165,6 +212,60 @@ async fn read_rejects_combined_line_and_byte_offsets() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("mutually exclusive"));
+}
+
+#[tokio::test]
+async fn read_attaches_png_and_normalizes_bmp_to_png() {
+    let workspace = tempdir().unwrap();
+    let png = b"\x89PNG\r\n\x1a\nfixture";
+    tokio::fs::write(workspace.path().join("image.png"), png)
+        .await
+        .unwrap();
+    let png_output = ReadTool
+        .execute(
+            context(workspace.path(), "read-png"),
+            json!({ "path": "image.png" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(png_output.content, png);
+    assert_eq!(png_output.media_type, "image/png");
+    assert!(png_output.attach_to_model);
+
+    let mut bmp = Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(2, 2)
+        .write_to(&mut bmp, image::ImageFormat::Bmp)
+        .unwrap();
+    tokio::fs::write(workspace.path().join("image.bmp"), bmp.into_inner())
+        .await
+        .unwrap();
+    let bmp_output = ReadTool
+        .execute(
+            context(workspace.path(), "read-bmp"),
+            json!({ "path": "image.bmp" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bmp_output.media_type, "image/png");
+    assert!(bmp_output.content.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(bmp_output.attach_to_model);
+}
+
+#[tokio::test]
+async fn read_rejects_offsets_for_images() {
+    let workspace = tempdir().unwrap();
+    tokio::fs::write(workspace.path().join("image.webp"), b"image")
+        .await
+        .unwrap();
+
+    let error = ReadTool
+        .execute(
+            context(workspace.path(), "read-image-offset"),
+            json!({ "path": "image.webp", "byte_offset": 1 }),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("do not accept"));
 }
 
 #[tokio::test]

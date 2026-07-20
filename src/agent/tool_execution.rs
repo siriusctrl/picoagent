@@ -12,7 +12,7 @@ use crate::{
     artifact::{ArtifactStore, ResultMetadata, ToolOutput},
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::{HookEvent, HookPipeline},
-    model::{Message, MessageContent, Role, ToolCall},
+    model::{ImageAttachment, Message, MessageContent, Role, ToolCall},
     tools::{RawToolOutput, ToolContext, ToolRegistry},
 };
 use anyhow::{Result, anyhow};
@@ -218,12 +218,12 @@ impl DirectToolRuntime<'_> {
 
         let mut results = (0..pending.len())
             .map(|_| None)
-            .collect::<Vec<Option<Result<Message>>>>();
+            .collect::<Vec<Option<Result<DirectToolResult>>>>();
         let mut promotions = Vec::new();
         for (index, mut execution) in pending.into_iter().enumerate() {
             match execution.outcome.take() {
                 Some(Ok(output)) => {
-                    results[index] = Some(self.completed_message(execution.call_id, output));
+                    results[index] = Some(self.completed_result(execution.call_id, output));
                 }
                 Some(Err(error)) => results[index] = Some(Err(error)),
                 None => {
@@ -252,15 +252,21 @@ impl DirectToolRuntime<'_> {
                 self.manager
                     .announce_tool_promotion(promotion)
                     .await
-                    .and_then(|(task_id, name)| self.promoted_message(call_id, task_id, name)),
+                    .and_then(|(task_id, name)| self.promoted_result(call_id, task_id, name)),
             );
         }
 
         let mut messages = Vec::with_capacity(results.len());
+        let mut attachments = Vec::new();
         let mut first_error = None;
         for result in results {
             match result.expect("every direct tool call must produce a result or promotion") {
-                Ok(message) => messages.push(message),
+                Ok(result) => {
+                    messages.push(result.message);
+                    if let Some(attachment) = result.attachment {
+                        attachments.push(attachment);
+                    }
+                }
                 Err(error) => {
                     if first_error.is_none() {
                         first_error = Some(error);
@@ -270,6 +276,27 @@ impl DirectToolRuntime<'_> {
         }
         if let Some(error) = first_error {
             return Err(error);
+        }
+        if !attachments.is_empty() {
+            let call_ids = attachments
+                .iter()
+                .map(|(call_id, _)| call_id.as_str())
+                .collect::<Vec<_>>();
+            let mut content = vec![MessageContent::RuntimeReminder {
+                text: format!(
+                    "<runtime-reminder>\nImages attached from tool results in this order: {}\n</runtime-reminder>",
+                    serde_json::to_string(&call_ids)?
+                ),
+            }];
+            content.extend(
+                attachments
+                    .into_iter()
+                    .map(|(_, attachment)| MessageContent::Image { attachment }),
+            );
+            messages.push(Message {
+                role: Role::User,
+                content,
+            });
         }
         Ok(messages)
     }
@@ -297,30 +324,54 @@ impl DirectToolRuntime<'_> {
         }
     }
 
-    fn completed_message(&self, call_id: String, output: ToolOutput) -> Result<Message> {
+    fn completed_result(
+        &self,
+        call_id: String,
+        mut output: ToolOutput,
+    ) -> Result<DirectToolResult> {
+        let attachment = output
+            .attachment
+            .take()
+            .map(|attachment| (call_id.clone(), attachment));
         let metadata = output.result_metadata();
-        Ok(Message {
-            role: Role::Tool,
-            content: vec![MessageContent::ToolResult {
-                call_id,
-                content: output.model_content(),
-                is_error: output.is_error,
-                metadata,
-            }],
+        Ok(DirectToolResult {
+            message: Message {
+                role: Role::Tool,
+                content: vec![MessageContent::ToolResult {
+                    call_id,
+                    content: output.model_content(),
+                    is_error: output.is_error,
+                    metadata,
+                }],
+            },
+            attachment,
         })
     }
 
-    fn promoted_message(&self, call_id: String, task_id: String, name: String) -> Result<Message> {
-        Ok(Message {
-            role: Role::Tool,
-            content: vec![MessageContent::ToolResult {
-                call_id,
-                content: crate::model::background_task_started_reminder(&task_id, &name),
-                is_error: false,
-                metadata: ResultMetadata::empty(),
-            }],
+    fn promoted_result(
+        &self,
+        call_id: String,
+        task_id: String,
+        name: String,
+    ) -> Result<DirectToolResult> {
+        Ok(DirectToolResult {
+            message: Message {
+                role: Role::Tool,
+                content: vec![MessageContent::ToolResult {
+                    call_id,
+                    content: crate::model::background_task_started_reminder(&task_id, &name),
+                    is_error: false,
+                    metadata: ResultMetadata::empty(),
+                }],
+            },
+            attachment: None,
         })
     }
+}
+
+struct DirectToolResult {
+    message: Message,
+    attachment: Option<(String, ImageAttachment)>,
 }
 
 struct PendingDirectTool {
@@ -372,5 +423,6 @@ fn failed_tool_output(name: &str, error: &str) -> RawToolOutput {
         source_path: None,
         media_type: "text/plain; charset=utf-8".to_owned(),
         is_error: true,
+        attach_to_model: false,
     }
 }

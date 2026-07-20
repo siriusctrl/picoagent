@@ -2,7 +2,7 @@ use std::path::Path;
 
 use picoagent::{
     artifact::{ArtifactRef, ResultMetadata},
-    model::{Message, MessageContent, Role},
+    model::{ImageAttachment, Message, MessageContent, Role},
     storage::{MESSAGE_FORMAT, RunDirStore, RunRecord},
 };
 
@@ -238,6 +238,17 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
                 metadata: ResultMetadata::empty(),
             }],
         },
+        Message {
+            role: Role::User,
+            content: vec![
+                MessageContent::RuntimeReminder {
+                    text: "<runtime-reminder>image from call_opaque</runtime-reminder>".into(),
+                },
+                MessageContent::Image {
+                    attachment: ImageAttachment::from_bytes("image/png", b"png"),
+                },
+            ],
+        },
     ];
     for message in &expected {
         store.append_message("run-1", message).await.unwrap();
@@ -266,6 +277,12 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
     assert_eq!(native[2]["reasoning_content"], "先检查");
     assert!(!native[2].to_string().contains("encrypted_content"));
     assert_eq!(native[3]["content"], "command failed");
+    assert_eq!(native[4]["content"][0]["type"], "text");
+    assert_eq!(native[4]["content"][1]["type"], "image_url");
+    assert_eq!(
+        native[4]["content"][1]["image_url"]["url"],
+        "data:image/png;base64,cG5n"
+    );
 }
 
 #[tokio::test]
@@ -273,7 +290,7 @@ async fn rejects_legacy_provider_neutral_message_records() {
     let workspace = tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     let paths = store.create_run(&record(workspace.path())).await.unwrap();
-    let legacy = serde_json::to_string(&Message::text(Role::User, "legacy")).unwrap();
+    let legacy = serde_json::to_string(&Message::text(Role::Assistant, "legacy")).unwrap();
     tokio::fs::write(&paths.messages, format!("{legacy}\n"))
         .await
         .unwrap();

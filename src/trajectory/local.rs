@@ -165,6 +165,7 @@ fn project_readable_messages(
                     !hidden_result_messages.contains(&message_index)
                 }
                 MessageContent::BackgroundTask { .. } => true,
+                MessageContent::Image { .. } => true,
                 MessageContent::Text { .. } => true,
             });
             (!record.message.content.is_empty()).then_some(record)
@@ -244,6 +245,7 @@ fn match_message(record: &TrajectoryMessage, pattern: &Regex) -> Option<HistoryM
     record.message.content.iter().find_map(|content| {
         let searchable = match content {
             MessageContent::Text { text } => text.clone(),
+            MessageContent::Image { .. } => return None,
             MessageContent::ToolCall {
                 name, arguments, ..
             } => format!("{name} {}", serde_json::to_string(arguments).ok()?),

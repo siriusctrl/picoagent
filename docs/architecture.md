@@ -46,6 +46,10 @@ Initial adapters:
 - Anthropic-compatible Messages
 - deterministic echo for tests and smoke runs
 
+Canonical user content can include image attachments. Adapters project those
+to native Chat `image_url`, Responses `input_image`, or Anthropic base64 source
+blocks; the agent loop does not assemble provider wire shapes.
+
 ### Tool registry
 
 Every model-callable action implements `Tool`. Local adapters and MCP adapters
@@ -70,6 +74,10 @@ standard provider description. Its Rust module owns arguments, semantic
 validation, and execution.
 The base `bash` adapter uses a non-login shell and inherits the picoagent
 process environment, avoiding per-call profile output and PATH rewrites.
+The base `read` adapter returns up to 400 text lines under a 65,536-byte cap.
+When the byte cap lands inside a multi-line range, it backs up to the newest
+complete line and returns an exact continuation offset. Supported images are
+artifacted and carried separately as canonical model attachments.
 The loader rejects unknown manifest fields, empty or padded prose, and
 non-object input schemas. Domain engines remain separate: task state is owned
 by `TaskManager`, skills by `SkillRegistry`, and trajectory retrieval by
@@ -107,6 +115,11 @@ runtime reminder text is part of the first user message's `content`, not a
 custom JSON variant. Assistant reasoning explicitly returned by a compatible
 endpoint uses the optional `reasoning_content` extension. This extension is not
 part of the official OpenAI Chat Completions schema.
+
+Text-only user messages keep string `content`. User image messages use the
+native Chat content-part array with text followed by `image_url` data URLs;
+their internal image layout is committed in `message_metadata.jsonl` so resume
+reconstructs the canonical attachments exactly.
 
 Picoagent-only state lives in the paired `message_metadata.jsonl` sidecar. Each
 line carries a run-local `m<N>` message id whose number equals its one-based
@@ -190,6 +203,11 @@ path it can inspect in pages. Terminal background output is artifact-only even
 when small, so batched notices remain bounded. Each result is limited
 independently; earlier output and compaction do not change later representation.
 See [artifacts.md](artifacts.md).
+
+For immediate image reads, the runner commits every tool result from the batch
+first, in assistant call order, then commits one user attachment message. This
+keeps native tool-call/result adjacency valid while still allowing several
+concurrently read images to share one model input message.
 
 ### Context compaction and trajectory retrieval
 

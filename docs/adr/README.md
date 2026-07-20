@@ -82,3 +82,5 @@ Use these sections:
   notices](0020-unify-background-task-runtime-notices.md)
 - [ADR 0021: Mark an active compacted state as continuation
   context](0021-compacted-state-continuation-reminder.md)
+- [ADR 0022: Send native image attachments after ordered tool
+  results](0022-native-image-attachments-after-tool-results.md)

@@ -179,6 +179,13 @@ The loop understands canonical messages and tool calls only. OAuth refresh,
 provider headers, SSE event shapes, and prompt-cache hints stay in provider
 modules.
 
+Image reads use one canonical attachment block. Each provider adapter owns its
+native multimodal projection, while the Chat-compatible log stores native user
+content parts and the sidecar commits reconstruction layout. Direct batches
+emit all paired tool results before one attachment message, avoiding ambiguous
+interleaving under concurrent completion. See
+[ADR 0022](adr/0022-native-image-attachments-after-tool-results.md).
+
 ## Stable Prompt Prefix
 
 The built-in system prompt contains only product identity and stable operating

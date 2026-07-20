@@ -96,6 +96,7 @@ async fn spills_small_binary_results_without_lossy_inline_decoding() {
                 source_path: None,
                 media_type: "application/octet-stream".into(),
                 is_error: false,
+                attach_to_model: false,
             },
         )
         .await
@@ -108,6 +109,27 @@ async fn spills_small_binary_results_without_lossy_inline_decoding() {
     assert!(model_content.contains("preview_limitation: binary_or_non_utf8"));
     assert!(!model_content.contains("[Preview]"));
     assert!(output.artifact.unwrap().path.contains("call-binary-"));
+}
+
+#[tokio::test]
+async fn image_results_are_artifacts_with_model_attachments() {
+    let workspace = tempdir().unwrap();
+    let bytes = b"\x89PNG\r\n\x1a\nimage";
+    let output = ArtifactStore::default()
+        .persist_output(
+            &context(workspace.path()),
+            RawToolOutput::image(bytes.to_vec(), "image/png"),
+        )
+        .await
+        .unwrap();
+
+    let artifact = output.artifact.as_ref().unwrap();
+    assert_eq!(artifact.media_type, "image/png");
+    assert!(artifact.path.ends_with(".png"));
+    let attachment = output.attachment.as_ref().unwrap();
+    assert_eq!(attachment.media_type, "image/png");
+    assert_eq!(attachment.data, "iVBORw0KGgppbWFnZQ==");
+    assert!(output.model_content().contains("media_type: image/png"));
 }
 
 #[tokio::test]

@@ -11,9 +11,9 @@ use async_trait::async_trait;
 use picoagent::{
     events::{EventSink, NoopEventSink, RuntimeEvent, RuntimeEventKind},
     model::{
-        AnthropicCompatibleOptions, AnthropicCompatibleProvider, Message, ModelProvider,
-        ModelRequest, OAuthCredentials, OpenAiCompatibleOptions, OpenAiCompatibleProvider,
-        OpenAiOAuthOptions, OpenAiOAuthProvider, OpenAiProtocol, Role,
+        AnthropicCompatibleOptions, AnthropicCompatibleProvider, ImageAttachment, Message,
+        MessageContent, ModelProvider, ModelRequest, OAuthCredentials, OpenAiCompatibleOptions,
+        OpenAiCompatibleProvider, OpenAiOAuthOptions, OpenAiOAuthProvider, OpenAiProtocol, Role,
     },
 };
 use wiremock::{
@@ -202,6 +202,67 @@ async fn chat_stream_preserves_provider_tool_call_id() {
         &response.assistant.content[0],
         picoagent::model::MessageContent::ToolCall { id, .. } if id == "call_provider_1"
     ));
+}
+
+#[tokio::test]
+async fn chat_sends_images_as_native_user_content_parts() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"seen\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+
+    let options = OpenAiCompatibleOptions::new(
+        format!("{}/v1", server.uri()),
+        "test-key",
+        OpenAiProtocol::ChatCompletions,
+    );
+    let mut request = request();
+    request.messages = vec![Message {
+        role: Role::User,
+        content: vec![
+            MessageContent::Text {
+                text: "inspect".to_owned(),
+            },
+            MessageContent::Image {
+                attachment: ImageAttachment::from_bytes("image/png", b"png"),
+            },
+        ],
+    }];
+    let response = OpenAiCompatibleProvider::with_options(options)
+        .complete(request, Arc::new(NoopEventSink))
+        .await
+        .expect("response should parse");
+
+    assert_eq!(response.text(), "seen");
+    let requests = server.received_requests().await.unwrap();
+    let request_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(
+        request_body["messages"],
+        serde_json::json!([
+            {"role": "system", "content": "Be concise."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "inspect"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,cG5n"}
+                    }
+                ]
+            }
+        ])
+    );
 }
 
 #[tokio::test]

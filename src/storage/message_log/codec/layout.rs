@@ -5,8 +5,10 @@ use serde_json::Value;
 use crate::{
     artifact::ResultMetadata,
     model::{
-        Message, MessageContent, Role,
-        openai_chat::{ChatMessage, ChatToolCall, ChatToolCallKind},
+        ImageAttachment, Message, MessageContent, Role,
+        openai_chat::{
+            ChatMessage, ChatToolCall, ChatToolCallKind, ChatUserContent, ChatUserContentPart,
+        },
     },
 };
 
@@ -20,6 +22,9 @@ pub(super) enum ContentLayout {
     Text {
         start: usize,
         end: usize,
+    },
+    Image {
+        part_index: usize,
     },
     Reasoning {
         start: usize,
@@ -69,12 +74,28 @@ pub(super) fn encode(message: &Message, native: &ChatMessage) -> Result<Vec<Cont
     }
 }
 
-fn encode_user(message: &Message, expected: &str) -> Result<Vec<ContentLayout>> {
+fn encode_user(message: &Message, expected: &ChatUserContent) -> Result<Vec<ContentLayout>> {
+    let expected_text = user_text(expected)?;
     if crate::model::render_background_task_content(&message.content).is_some() {
-        return encode_background_tasks(message, expected);
+        ensure!(
+            matches!(expected, ChatUserContent::Text(_)),
+            "background task reminders cannot contain image parts"
+        );
+        return encode_background_tasks(message, expected_text);
     }
+    let image_part_indexes = match expected {
+        ChatUserContent::Text(_) => Vec::new(),
+        ChatUserContent::Parts(parts) => parts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, part)| {
+                matches!(part, ChatUserContentPart::ImageUrl { .. }).then_some(index)
+            })
+            .collect(),
+    };
     let mut rendered = String::new();
     let mut previous_was_reminder = false;
+    let mut image_index = 0_usize;
     let mut layout = Vec::with_capacity(message.content.len());
     for block in &message.content {
         match block {
@@ -88,12 +109,35 @@ fn encode_user(message: &Message, expected: &str) -> Result<Vec<ContentLayout>> 
                     append_visible(&mut rendered, text, false, &mut previous_was_reminder);
                 layout.push(ContentLayout::Text { start, end });
             }
-            _ => bail!("user messages contain only runtime context, text, or background results"),
+            MessageContent::Image { attachment } => {
+                let part_index = *image_part_indexes
+                    .get(image_index)
+                    .context("user image is missing from its Chat projection")?;
+                let ChatUserContent::Parts(parts) = expected else {
+                    bail!("user image requires Chat content parts");
+                };
+                let ChatUserContentPart::ImageUrl { image_url } = &parts[part_index] else {
+                    bail!("user image layout references a non-image Chat part");
+                };
+                ensure!(
+                    image_url.url == attachment.data_url(),
+                    "user image disagrees with its Chat projection"
+                );
+                layout.push(ContentLayout::Image { part_index });
+                image_index += 1;
+            }
+            _ => bail!(
+                "user messages contain only runtime context, text, images, or background results"
+            ),
         }
     }
     ensure!(
-        rendered == expected,
+        rendered == expected_text,
         "user layout disagrees with Chat projection"
+    );
+    ensure!(
+        image_index == image_part_indexes.len(),
+        "Chat projection contains an image absent from user layout"
     );
     Ok(layout)
 }
@@ -246,16 +290,34 @@ pub(super) fn decode(native: &ChatMessage, layout: Vec<ContentLayout>) -> Result
     Ok(Message { role, content })
 }
 
-fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageContent>> {
+fn decode_user(
+    content: &ChatUserContent,
+    layout: Vec<ContentLayout>,
+) -> Result<Vec<MessageContent>> {
+    let text = user_text(content)?;
     let decoded = layout
         .into_iter()
         .map(|entry| match entry {
             ContentLayout::RuntimeContext { start, end } => Ok(MessageContent::RuntimeReminder {
-                text: span(content, start, end)?.to_owned(),
+                text: span(text, start, end)?.to_owned(),
             }),
             ContentLayout::Text { start, end } => Ok(MessageContent::Text {
-                text: span(content, start, end)?.to_owned(),
+                text: span(text, start, end)?.to_owned(),
             }),
+            ContentLayout::Image { part_index } => {
+                let ChatUserContent::Parts(parts) = content else {
+                    bail!("user image metadata requires Chat content parts");
+                };
+                let ChatUserContentPart::ImageUrl { image_url } = parts
+                    .get(part_index)
+                    .context("user image metadata references a missing Chat part")?
+                else {
+                    bail!("user image metadata references a non-image Chat part");
+                };
+                Ok(MessageContent::Image {
+                    attachment: ImageAttachment::from_data_url(&image_url.url)?,
+                })
+            }
             ContentLayout::BackgroundTask {
                 task_id,
                 name,
@@ -270,7 +332,7 @@ fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageC
                     start <= content_start && content_end <= end,
                     "background result content span lies outside its block"
                 );
-                let raw = span(content, content_start, content_end)?.to_owned();
+                let raw = span(text, content_start, content_end)?.to_owned();
                 let expected = crate::model::runtime::render_background_task_block(
                     &task_id,
                     &name,
@@ -278,7 +340,7 @@ fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageC
                     &raw,
                 );
                 ensure!(
-                    span(content, start, end)? == expected,
+                    span(text, start, end)? == expected,
                     "background result envelope disagrees with its metadata"
                 );
                 Ok(MessageContent::BackgroundTask {
@@ -297,11 +359,29 @@ fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageC
         .any(|entry| matches!(entry, MessageContent::BackgroundTask { .. }))
     {
         ensure!(
-            crate::model::render_background_task_content(&decoded).as_deref() == Some(content),
+            crate::model::render_background_task_content(&decoded).as_deref() == Some(text),
             "background task reminder envelope disagrees with its metadata"
         );
     }
     Ok(decoded)
+}
+
+fn user_text(content: &ChatUserContent) -> Result<&str> {
+    match content {
+        ChatUserContent::Text(text) => Ok(text),
+        ChatUserContent::Parts(parts) => {
+            let mut text = parts.iter().filter_map(|part| match part {
+                ChatUserContentPart::Text { text } => Some(text.as_str()),
+                ChatUserContentPart::ImageUrl { .. } => None,
+            });
+            let first = text.next().unwrap_or_default();
+            ensure!(
+                text.next().is_none(),
+                "picoagent Chat projection supports at most one user text part"
+            );
+            Ok(first)
+        }
+    }
 }
 
 fn decode_assistant(

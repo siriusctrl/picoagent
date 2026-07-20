@@ -187,6 +187,7 @@ async fn task_activity_broadcast_wakes_every_waiter_for_its_completed_task() {
         truncated: false,
         is_error: false,
         preview_info: None,
+        attachment: None,
     };
     manager.complete(&first, output()).await.unwrap();
     for waiter in first_waiters {
@@ -913,6 +914,7 @@ async fn cancelled_agent_does_not_emit_completion_events_when_its_output_arrives
                 truncated: false,
                 is_error: false,
                 preview_info: None,
+                attachment: None,
             },
         )
         .await;

@@ -78,6 +78,7 @@ impl TaskManager {
             source_path: None,
             media_type: "text/plain; charset=utf-8".to_owned(),
             is_error: true,
+            attach_to_model: false,
         };
         let state_result = match self.persist_output(&context, raw).await {
             Ok(output) => self.fail_with_output(task_id, error.clone(), output).await,

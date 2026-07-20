@@ -42,6 +42,9 @@ pub struct RawToolOutput {
     pub source_path: Option<PathBuf>,
     pub media_type: String,
     pub is_error: bool,
+    /// Send this binary result to the model as a native image attachment in
+    /// addition to preserving it as an artifact.
+    pub attach_to_model: bool,
 }
 
 impl RawToolOutput {
@@ -51,6 +54,17 @@ impl RawToolOutput {
             source_path: None,
             media_type: "text/plain; charset=utf-8".to_owned(),
             is_error: false,
+            attach_to_model: false,
+        }
+    }
+
+    pub fn image(content: Vec<u8>, media_type: impl Into<String>) -> Self {
+        Self {
+            content,
+            source_path: None,
+            media_type: media_type.into(),
+            is_error: false,
+            attach_to_model: true,
         }
     }
 
@@ -60,6 +74,7 @@ impl RawToolOutput {
             source_path: Some(path),
             media_type: media_type.into(),
             is_error,
+            attach_to_model: false,
         }
     }
 }

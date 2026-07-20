@@ -5,6 +5,7 @@
 - Refines: ADR 0001 (completed-message encoding)
 - Refines: ADR 0003 (stable trajectory identity and recovery metadata)
 - Refined by: ADR 0013 (sequence-addressed message refs)
+- Refined by: ADR 0022 (native image content parts)
 
 ## Context
 

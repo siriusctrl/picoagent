@@ -153,6 +153,7 @@ impl Tool for McpToolAdapter {
             source_path: None,
             media_type: "application/json".to_owned(),
             is_error,
+            attach_to_model: false,
         })
     }
 }

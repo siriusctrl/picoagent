@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use picoagent::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
@@ -207,6 +207,141 @@ async fn direct_batch_finishes_early_but_commits_in_original_call_order() {
         .map(|event| event["call_id"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
     assert_eq!(completed_call_ids, ["call-fast", "call-slow"]);
+}
+
+struct ImageTool;
+
+#[async_trait]
+impl Tool for ImageTool {
+    fn spec(&self) -> picoagent::model::ToolSpec {
+        picoagent::model::ToolSpec {
+            name: "image".to_owned(),
+            description: "Return a test image".to_owned(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
+        let label = arguments["label"].as_str().unwrap();
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(label.as_bytes());
+        Ok(RawToolOutput::image(bytes, "image/png"))
+    }
+}
+
+struct ImageBatchProvider {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl ModelProvider for ImageBatchProvider {
+    fn name(&self) -> &str {
+        "image-batch"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        match self.calls.fetch_add(1, Ordering::SeqCst) {
+            0 => Ok(tool_response(vec![
+                ToolCall {
+                    id: "image-one".into(),
+                    name: "image".into(),
+                    arguments: json!({"label": "one"}),
+                },
+                ToolCall {
+                    id: "image-two".into(),
+                    name: "image".into(),
+                    arguments: json!({"label": "two"}),
+                },
+            ])),
+            1 => {
+                let tool_message_indexes = request
+                    .messages
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, message)| (message.role == Role::Tool).then_some(index))
+                    .collect::<Vec<_>>();
+                ensure!(tool_message_indexes.len() == 2);
+                let attachment_index = request
+                    .messages
+                    .iter()
+                    .position(|message| {
+                        message
+                            .content
+                            .iter()
+                            .any(|content| matches!(content, MessageContent::Image { .. }))
+                    })
+                    .context("image batch omitted its attachment message")?;
+                ensure!(
+                    tool_message_indexes
+                        .iter()
+                        .all(|index| *index < attachment_index),
+                    "image attachment interrupted tool-result pairing"
+                );
+                let attachment_message = &request.messages[attachment_index];
+                let attachments = attachment_message
+                    .content
+                    .iter()
+                    .filter_map(|content| match content {
+                        MessageContent::Image { attachment } => Some(attachment),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                ensure!(attachments.len() == 2);
+                ensure!(
+                    attachments
+                        .iter()
+                        .all(|image| image.media_type == "image/png")
+                );
+                ensure!(attachment_message.content.iter().any(|content| {
+                    matches!(content, MessageContent::RuntimeReminder { text } if text.contains("image-one") && text.contains("image-two"))
+                }));
+                Ok(text_response("images attached"))
+            }
+            call => anyhow::bail!("unexpected model call {call}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn concurrent_image_results_are_attached_after_all_tool_results() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let mut tools = ToolRegistry::default();
+    tools.register(Arc::new(ImageTool)).unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(ImageBatchProvider {
+            calls: AtomicUsize::new(0),
+        }),
+        model: "vision-model".to_owned(),
+        workspace: workspace.path().to_owned(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions::default(),
+    });
+
+    let result = runner
+        .run(RunRequest::root("read two images"))
+        .await
+        .unwrap();
+    assert_eq!(result.final_output, "images attached");
+    let messages = store.load_messages(&result.run_id).await.unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter(|content| matches!(content, MessageContent::Image { .. }))
+            .count(),
+        2
+    );
 }
 
 struct PartialPromotionProvider {

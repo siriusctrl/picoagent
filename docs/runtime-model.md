@@ -16,7 +16,7 @@ part of that fingerprint.
 
 `run.json` declares `message_format` as `openai-chat-compatible`.
 `messages.jsonl` contains one complete OpenAI Chat-compatible message per line:
-user messages have `role` and `content`; assistant messages have `role`,
+user messages have `role` and string or native multimodal `content`; assistant messages have `role`,
 `content`, optional `tool_calls`, and optional compatible-endpoint
 `reasoning_content`; tool messages have `role`, `tool_call_id`, and `content`.
 The runtime reminder is ordinary text inside the initial user `content`, so the
@@ -58,7 +58,9 @@ For each model step:
    foreground window;
 7. artifact large outputs and persist complete tool messages in original call
    order;
-8. repeat, join outstanding background work before finalization, or write
+8. if a direct result carries images, persist one user attachment message after
+   the complete tool-result batch;
+9. repeat, join outstanding background work before finalization, or write
    `final.md` when no tool calls or tasks remain.
 
 On resume, a complete final assistant message is finalized without another
@@ -116,6 +118,11 @@ a tokenizer-exact guarantee.
 
 Tool errors are returned to the model as error tool results instead of
 immediately aborting the loop. Runtime/store/provider failures fail the run.
+Image reads are complete artifact-backed results plus native model attachments.
+The runtime places attachments after every paired result from the assistant's
+tool-call batch. Text reads return at most 400 lines under a 65,536-byte cap;
+if a multi-line selection hits that cap, the partial trailing line is omitted
+and the truncation marker gives the exact next offset.
 
 ## Subagents
 

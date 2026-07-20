@@ -76,6 +76,7 @@ impl Tool for ReadTool {
             source_path: None,
             media_type: "application/x-ndjson; charset=utf-8".to_owned(),
             is_error: false,
+            attach_to_model: false,
         })
     }
 }

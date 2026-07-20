@@ -59,6 +59,17 @@ Binary and non-UTF-8 data is never decoded into a lossy inline string. Its
 envelope reports zero preview bytes and
 `preview_limitation: binary_or_non_utf8`, with metadata and a path only.
 
+An image returned by `read` follows the same artifact contract and is also sent
+to the model as a native image attachment. The immediate tool result retains
+the artifact path and digest; after every result from that assistant tool-call
+batch has been emitted in original call order, picoagent appends one user
+message containing the images and a runtime reminder that lists their source
+call ids in attachment order. This preserves provider tool-call/result pairing
+even when several tools ran concurrently. OpenAI Chat uses `image_url` data
+URLs, OpenAI Responses uses `input_image`, and Anthropic uses base64 image
+sources. JPG, PNG, and WebP pass through; GIF first frames and BMP files are
+normalized to PNG for a consistent provider surface.
+
 Artifact-reference overhead and ordinary conversation text still count toward
 the provider context, so deployments should set provider token limits
 appropriate to the model. Successful and failed foreground results share this
@@ -73,6 +84,10 @@ receives one batched runtime message per ready set. Each `<background_task>`
 body is only the workspace-relative artifact path; it does not contain a
 preview or the original output. This keeps the runtime message bounded and
 makes reading the artifact an explicit model choice.
+
+If an image read exceeds the foreground window and becomes a background task,
+its terminal notice follows this artifact-only rule. Reading that artifact
+again attaches the image on demand.
 
 A status-less background notice is only a running acknowledgement and has no
 result artifact. A terminal notice includes `status` and pairs its path with the

@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
-use crate::tools::{RawToolOutput, ToolContext};
+use crate::{
+    model::ImageAttachment,
+    tools::{RawToolOutput, ToolContext},
+};
 
 mod preview;
 
@@ -70,6 +73,8 @@ pub struct ToolOutput {
     pub is_error: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_info: Option<PreviewInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<ImageAttachment>,
 }
 
 impl ToolOutput {
@@ -150,7 +155,14 @@ impl ArtifactStore {
         mut output: RawToolOutput,
         force_artifact: bool,
     ) -> Result<ToolOutput> {
+        let attachment = output
+            .attach_to_model
+            .then(|| ImageAttachment::from_bytes(output.media_type.clone(), &output.content));
         if let Some(source_path) = output.source_path.take() {
+            anyhow::ensure!(
+                attachment.is_none(),
+                "model image attachments must provide their bytes directly"
+            );
             let bytes = tokio::fs::metadata(&source_path).await?.len();
             if bytes <= self.policy.inline_limit_bytes as u64 && !force_artifact {
                 output.content = tokio::fs::read(&source_path).await?;
@@ -168,6 +180,7 @@ impl ArtifactStore {
                 truncated: false,
                 is_error: output.is_error,
                 preview_info: None,
+                attachment,
             });
         }
 
@@ -228,6 +241,7 @@ impl ArtifactStore {
             truncated,
             is_error: output.is_error,
             preview_info: Some(preview_info),
+            attachment,
         })
     }
 
@@ -278,6 +292,7 @@ impl ArtifactStore {
             truncated,
             is_error: output.is_error,
             preview_info: Some(preview_info),
+            attachment: None,
         })
     }
 }
@@ -311,6 +326,16 @@ fn extension_for_media_type(media_type: &str) -> &'static str {
         "json"
     } else if media_type.starts_with("text/") {
         "txt"
+    } else if media_type == "image/jpeg" {
+        "jpg"
+    } else if media_type == "image/png" {
+        "png"
+    } else if media_type == "image/gif" {
+        "gif"
+    } else if media_type == "image/webp" {
+        "webp"
+    } else if media_type == "image/bmp" {
+        "bmp"
     } else {
         "bin"
     }

@@ -132,6 +132,7 @@ impl Tool for WebSearchTool {
             source_path: None,
             media_type: "application/json".to_owned(),
             is_error: false,
+            attach_to_model: false,
         })
     }
 }

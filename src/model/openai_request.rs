@@ -85,7 +85,7 @@ fn responses_input(messages: &[Message]) -> Value {
         match &message.role {
             Role::User => input.push(json!({
                 "role": "user",
-                "content": [{"type": "input_text", "text": content_text(&message.content)}]
+                "content": responses_user_content(&message.content)
             })),
             Role::Assistant => {
                 for block in &message.content {
@@ -129,6 +129,22 @@ fn responses_input(messages: &[Message]) -> Value {
         }
     }
     Value::Array(input)
+}
+
+fn responses_user_content(content: &[MessageContent]) -> Vec<Value> {
+    let mut projected = Vec::new();
+    let text = content_text(content);
+    if !text.is_empty() {
+        projected.push(json!({"type": "input_text", "text": text}));
+    }
+    projected.extend(content.iter().filter_map(|block| match block {
+        MessageContent::Image { attachment } => Some(json!({
+            "type": "input_image",
+            "image_url": attachment.data_url(),
+        })),
+        _ => None,
+    }));
+    projected
 }
 
 fn chat_tools(tools: &[ToolSpec]) -> Value {
@@ -336,6 +352,45 @@ mod tests {
         assert_eq!(
             chat_body(&request, None)["messages"][1]["content"],
             expected
+        );
+    }
+
+    #[test]
+    fn image_attachments_use_protocol_native_user_parts() {
+        let request = ModelRequest {
+            run_id: "run".into(),
+            model: "vision-model".into(),
+            system: String::new(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![
+                    MessageContent::Text {
+                        text: "inspect".into(),
+                    },
+                    MessageContent::Image {
+                        attachment: super::super::ImageAttachment::from_bytes("image/png", b"png"),
+                    },
+                ],
+            }],
+            tools: Vec::new(),
+            max_output_tokens: None,
+            stream_idle_timeout: std::time::Duration::from_secs(300),
+        };
+
+        let responses = responses_body(&request, None);
+        assert_eq!(responses["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(responses["input"][0]["content"][1]["type"], "input_image");
+        assert_eq!(
+            responses["input"][0]["content"][1]["image_url"],
+            "data:image/png;base64,cG5n"
+        );
+
+        let chat = chat_body(&request, None);
+        assert_eq!(chat["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(chat["messages"][0]["content"][1]["type"], "image_url");
+        assert_eq!(
+            chat["messages"][0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,cG5n"
         );
     }
 

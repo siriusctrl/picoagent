@@ -1,13 +1,17 @@
 name: read
 description: >-
-  Read a bounded UTF-8 range from a local file or artifact. Start at a
-  zero-based line_offset for normal text, or use byte_offset for a long single
-  line. The two offsets are mutually exclusive; the harness bounds lines and
-  bytes internally. Use bash for directory listing or content discovery.
+  Read up to 400 lines and 65,536 bytes of UTF-8 text, whichever limit comes
+  first, or attach an image. Text can start at a zero-based line_offset, or at
+  byte_offset for a long single line; the two are mutually exclusive. If the
+  byte limit cuts a multi-line selection, the partial last line is omitted; a
+  newline-free long line stops at a valid UTF-8 boundary. Images support jpg,
+  jpeg, png, gif, webp, and bmp; GIF uses its first frame and GIF/BMP are
+  normalized to PNG. Use bash for directory listing or content discovery.
 returns: >-
-  The selected UTF-8 text. If unread content remains because the line or
-  internal byte limit was reached, the truncation marker gives the exact
-  line_offset or byte_offset for the next read.
+  The selected UTF-8 text or an image attachment. If unread text remains
+  because a limit was reached, the truncation marker reports total_bytes and
+  the exact line_offset or byte_offset for the next read. Images are preserved
+  as run artifacts and sent to the model as attachments.
 input_schema:
   type: object
   properties:
@@ -18,12 +22,12 @@ input_schema:
       type: integer
       minimum: 0
       default: 0
-      description: Zero-based line to start at; do not combine with a nonzero byte_offset
+      description: Zero-based text line to start at; do not use for images or combine with a nonzero byte_offset
     byte_offset:
       type: integer
       minimum: 0
       default: 0
-      description: Zero-based byte to start at; use a continuation value returned by read
+      description: Zero-based text byte to start at; use a continuation value returned by read and do not use for images
   required:
     - path
   additionalProperties: false

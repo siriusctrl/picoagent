@@ -379,6 +379,9 @@ pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
         .iter()
         .map(|content| match content {
             MessageContent::RuntimeReminder { text } | MessageContent::Text { text } => text.len(),
+            // Image tokenization is provider and resolution dependent. Keep a
+            // bounded estimate rather than counting the much larger base64 wire form.
+            MessageContent::Image { .. } => 4 * 1024,
             MessageContent::Reasoning { text } => text.len(),
             MessageContent::ToolCall {
                 id,

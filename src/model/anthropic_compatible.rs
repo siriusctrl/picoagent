@@ -194,7 +194,7 @@ fn anthropic_message(message: &Message) -> Value {
     match &message.role {
         Role::User => json!({
             "role": "user",
-            "content": [{"type": "text", "text": content_text(&message.content)}]
+            "content": anthropic_user_content(&message.content)
         }),
         Role::Assistant => {
             let content: Vec<_> = message
@@ -210,6 +210,7 @@ fn anthropic_message(message: &Message) -> Value {
                         json!({"type": "tool_use", "id": id, "name": name, "input": arguments})
                     }
                     MessageContent::RuntimeReminder { .. }
+                    | MessageContent::Image { .. }
                     | MessageContent::ToolResult { .. }
                     | MessageContent::Reasoning { .. }
                     | MessageContent::ProviderItem { .. }
@@ -221,6 +222,26 @@ fn anthropic_message(message: &Message) -> Value {
         }
         Role::Tool => json!({"role": "user", "content": anthropic_tool_results(message)}),
     }
+}
+
+fn anthropic_user_content(content: &[MessageContent]) -> Vec<Value> {
+    let mut projected = Vec::new();
+    let text = content_text(content);
+    if !text.is_empty() {
+        projected.push(json!({"type": "text", "text": text}));
+    }
+    projected.extend(content.iter().filter_map(|block| match block {
+        MessageContent::Image { attachment } => Some(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": attachment.media_type,
+                "data": attachment.data,
+            }
+        })),
+        _ => None,
+    }));
+    projected
 }
 
 fn anthropic_tools(tools: &[ToolSpec]) -> Value {
@@ -530,6 +551,36 @@ mod tests {
         assert_eq!(
             body["messages"][0]["content"][0]["text"],
             "<runtime-reminder>context</runtime-reminder>\n\ndo the task"
+        );
+    }
+
+    #[test]
+    fn image_attachments_use_anthropic_base64_sources() {
+        let request = request_with(
+            vec![Message {
+                role: Role::User,
+                content: vec![
+                    MessageContent::Text {
+                        text: "inspect".into(),
+                    },
+                    MessageContent::Image {
+                        attachment: crate::model::ImageAttachment::from_bytes("image/png", b"png"),
+                    },
+                ],
+            }],
+            Vec::new(),
+        );
+
+        let body = anthropic_body(&request);
+        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image");
+        assert_eq!(
+            body["messages"][0]["content"][1]["source"],
+            json!({
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "cG5n"
+            })
         );
     }
 }

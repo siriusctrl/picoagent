@@ -13,7 +13,9 @@ system.
 - OpenAI-compatible Responses and Chat Completions streaming APIs
 - Anthropic-compatible Messages streaming API
 - streamed text, fragmented tool calls, and usage/cache-token fields in events
-- compact `read`, `write`, and `bash` built-ins plus optional `web_search`
+- compact `read`, `write`, and `bash` built-ins plus optional `web_search`;
+  `read` supports bounded UTF-8 text and image attachments for vision-capable
+  configured models
 - exact-first, atomic multi-edit writes with CRLF/BOM preservation
 - versioned artifact spill for large tool results with bounded head/tail previews
 - optional local context compaction recorded as ordinary messages, with
@@ -108,7 +110,9 @@ final user instruction only to the compaction request.
 complete Chat message with ordinary `role` and `content` fields. The runtime
 reminder is text at the beginning of the first user message, not a custom JSON
 content type. Assistant tool calls use the Chat `tool_calls` shape, and tool
-results use `role: "tool"`, `tool_call_id`, and `content`.
+results use `role: "tool"`, `tool_call_id`, and `content`. Text-only user
+content remains a string; a user message carrying images uses native Chat
+content parts with `image_url` data URLs.
 
 Local fields do not alter those messages. Stable `message_id`, sequence,
 timestamp, exact-message and reconstruction-metadata hashes, internal content
@@ -324,7 +328,8 @@ large result never suppresses a later small result. See
 
 The launch tool surface is intentionally small:
 
-- `read`: bounded UTF-8 reads for a known path
+- `read`: bounded UTF-8 reads for a known path, or model attachments for jpg,
+  jpeg, png, gif, webp, and bmp images
 - `write`: full-file creation/replacement or an atomic list of targeted edits
 - `bash`: local discovery, `rg`, tests, builds, and other Bash commands; returns
   combined stdout/stderr and adds a status line only for unsuccessful

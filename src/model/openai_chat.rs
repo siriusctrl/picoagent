@@ -11,7 +11,7 @@ use super::{Message, MessageContent, Role, common::content_text};
 #[serde(tag = "role", rename_all = "lowercase", deny_unknown_fields)]
 pub(crate) enum ChatMessage {
     User {
-        content: String,
+        content: ChatUserContent,
     },
     Assistant {
         content: String,
@@ -24,6 +24,26 @@ pub(crate) enum ChatMessage {
         tool_call_id: String,
         content: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub(crate) enum ChatUserContent {
+    Text(String),
+    Parts(Vec<ChatUserContentPart>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum ChatUserContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ChatImageUrl },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChatImageUrl {
+    pub(crate) url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,7 +72,7 @@ pub(crate) struct ChatFunctionCall {
 pub(crate) fn project_chat_message(message: &Message) -> ChatMessage {
     match message.role {
         Role::User => ChatMessage::User {
-            content: content_text(&message.content),
+            content: project_user_content(&message.content),
         },
         Role::Assistant => ChatMessage::Assistant {
             content: content_text(&message.content),
@@ -96,6 +116,34 @@ pub(crate) fn project_chat_message(message: &Message) -> ChatMessage {
     }
 }
 
+fn project_user_content(content: &[MessageContent]) -> ChatUserContent {
+    let images = content
+        .iter()
+        .filter_map(|block| match block {
+            MessageContent::Image { attachment } => Some(attachment),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let text = content_text(content);
+    if images.is_empty() {
+        return ChatUserContent::Text(text);
+    }
+    let mut parts = Vec::with_capacity(images.len() + usize::from(!text.is_empty()));
+    if !text.is_empty() {
+        parts.push(ChatUserContentPart::Text { text });
+    }
+    parts.extend(
+        images
+            .into_iter()
+            .map(|attachment| ChatUserContentPart::ImageUrl {
+                image_url: ChatImageUrl {
+                    url: attachment.data_url(),
+                },
+            }),
+    );
+    ChatUserContent::Parts(parts)
+}
+
 fn reasoning_text(content: &[MessageContent]) -> Option<String> {
     let reasoning: Vec<_> = content
         .iter()
@@ -132,6 +180,35 @@ mod tests {
             json!({
                 "role": "user",
                 "content": "<runtime-reminder>context</runtime-reminder>\n\ndo the task"
+            })
+        );
+    }
+
+    #[test]
+    fn user_images_use_native_chat_content_parts() {
+        let projected = project_chat_message(&Message {
+            role: Role::User,
+            content: vec![
+                MessageContent::Text {
+                    text: "inspect the attachment".into(),
+                },
+                MessageContent::Image {
+                    attachment: super::super::ImageAttachment::from_bytes("image/png", b"png"),
+                },
+            ],
+        });
+
+        assert_eq!(
+            serde_json::to_value(projected).unwrap(),
+            json!({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "inspect the attachment"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,cG5n"}
+                    }
+                ]
             })
         );
     }

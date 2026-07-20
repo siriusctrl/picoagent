@@ -1,5 +1,6 @@
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -46,6 +47,11 @@ pub enum MessageContent {
     Text {
         text: String,
     },
+    /// A model-facing image input. The base64 payload is kept separate from
+    /// text so provider adapters can use their native multimodal shapes.
+    Image {
+        attachment: ImageAttachment,
+    },
     /// Reasoning text explicitly returned by a compatible provider.
     /// Replayed separately from visible assistant content when supported.
     Reasoning {
@@ -76,6 +82,44 @@ pub enum MessageContent {
         content: String,
         metadata: ResultMetadata,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ImageAttachment {
+    pub media_type: String,
+    /// Standard padded base64 without a data-URL prefix.
+    pub data: String,
+}
+
+impl ImageAttachment {
+    pub fn from_bytes(media_type: impl Into<String>, bytes: &[u8]) -> Self {
+        Self {
+            media_type: media_type.into(),
+            data: STANDARD.encode(bytes),
+        }
+    }
+
+    pub(crate) fn data_url(&self) -> String {
+        format!("data:{};base64,{}", self.media_type, self.data)
+    }
+
+    pub(crate) fn from_data_url(value: &str) -> Result<Self> {
+        let value = value
+            .strip_prefix("data:")
+            .ok_or_else(|| anyhow::anyhow!("image attachment is not a data URL"))?;
+        let (media_type, data) = value
+            .split_once(";base64,")
+            .ok_or_else(|| anyhow::anyhow!("image attachment is not base64 encoded"))?;
+        anyhow::ensure!(!media_type.is_empty(), "image attachment has no media type");
+        STANDARD
+            .decode(data)
+            .map_err(|error| anyhow::anyhow!("invalid image attachment base64: {error}"))?;
+        Ok(Self {
+            media_type: media_type.to_owned(),
+            data: data.to_owned(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
