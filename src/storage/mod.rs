@@ -18,7 +18,7 @@ mod message_log;
 mod trajectory;
 
 pub const MESSAGE_FORMAT: &str = "openai-chat-compatible";
-const RUN_RECORD_VERSION: u32 = 4;
+const RUN_RECORD_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

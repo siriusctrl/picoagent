@@ -144,6 +144,9 @@ async fn messages_are_native_chat_json_and_sidecar_preserves_stable_refs() {
 
     let metadata = read_jsonl(&paths.message_metadata).await;
     assert_eq!(metadata.len(), 3);
+    assert_eq!(first.message_ref, "m1");
+    assert_eq!(second.message_ref, "m2");
+    assert_eq!(third.message_ref, "m3");
     for (index, (item, expected_ref)) in metadata
         .iter()
         .zip([&first.message_ref, &second.message_ref, &third.message_ref])

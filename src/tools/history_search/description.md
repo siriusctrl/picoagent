@@ -1,6 +1,18 @@
 Regex-search completed messages omitted from active context, including full
 text in linked foreground and background result artifacts. `pattern` uses Rust
-regex; use inline flags such as `(?i)`. Matches are newest-first and return only
-the message `ref`, match `source`, and a short `snippet`; pass a ref to
-`history_read` for exact context. If `truncated` is true, refine the regex to
-inspect omitted older matches.
+regex; use inline flags such as `(?i)`.
+
+Returns one JSON object with `matches`, `truncated`, and `instruction`.
+`matches` is newest-first; each match has:
+
+- `ref`: `m<N>`, the stable 1-based message position in this run. Smaller `N`
+  is older. Pass it unchanged to `history_read`.
+- `source`: `message` when the regex matched inline message content, or
+  `artifact` when it matched the complete spilled tool result associated with
+  that message. An artifact match may not appear in the bounded message
+  preview returned by `history_read`.
+- `snippet`: a bounded excerpt around the match.
+
+If `truncated` is true, only the configured number of newest matches is shown;
+refine the regex to inspect omitted older matches. `instruction` is otherwise
+null.

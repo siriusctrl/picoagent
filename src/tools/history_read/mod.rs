@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::{
     model::{ToolSpec, openai_chat::project_chat_message},
     tools::{RawToolOutput, Tool, ToolContext},
-    trajectory::{HistoryReadRequest, TrajectoryReader},
+    trajectory::{HistoryReadRequest, TrajectoryReader, message_ref_seq},
 };
 
 const DESCRIPTION: &str = include_str!("description.md");
@@ -51,19 +51,22 @@ impl Tool for HistoryReadTool {
                     "ref": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "Ref from history_search"
+                        "pattern": "^m[1-9][0-9]*$",
+                        "description": "Stable m<N> ref from history_search; smaller N is older"
                     },
                     "before": {
                         "type": "integer",
                         "minimum": 0,
                         "maximum": MAX_CONTEXT_MESSAGES,
-                        "default": DEFAULT_CONTEXT_MESSAGES
+                        "default": DEFAULT_CONTEXT_MESSAGES,
+                        "description": "Nearby omitted messages before ref"
                     },
                     "after": {
                         "type": "integer",
                         "minimum": 0,
                         "maximum": MAX_CONTEXT_MESSAGES,
-                        "default": DEFAULT_CONTEXT_MESSAGES
+                        "default": DEFAULT_CONTEXT_MESSAGES,
+                        "description": "Nearby omitted messages after ref"
                     }
                 },
                 "required": ["ref"],
@@ -75,8 +78,8 @@ impl Tool for HistoryReadTool {
     async fn execute(&self, context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
         let args: HistoryReadArgs =
             serde_json::from_value(arguments).context("invalid history_read arguments")?;
-        if args.message_ref.is_empty() {
-            bail!("history_read ref must not be empty");
+        if message_ref_seq(&args.message_ref).is_none() {
+            bail!("history_read ref must have the form m<N> with N greater than zero");
         }
         if args.before > MAX_CONTEXT_MESSAGES || args.after > MAX_CONTEXT_MESSAGES {
             bail!("history_read before and after must not exceed {MAX_CONTEXT_MESSAGES} messages");
@@ -152,6 +155,10 @@ mod tests {
     async fn returns_chat_compatible_jsonl_messages() {
         let workspace = tempdir().unwrap();
         let tool = HistoryReadTool::new(Arc::new(StubReader));
+        let description = tool.spec().description;
+        assert!(description.contains("chronological JSONL"));
+        assert!(description.contains("`source: \"artifact\"`"));
+        assert!(description.contains("`m<N>`"));
         let output = tool
             .execute(
                 ToolContext {
@@ -159,12 +166,12 @@ mod tests {
                     call_id: "call".to_owned(),
                     workspace: workspace.path().to_owned(),
                 },
-                json!({"ref": "msg-7", "before": 1, "after": 3}),
+                json!({"ref": "m7", "before": 1, "after": 3}),
             )
             .await
             .unwrap();
         let line: Value = serde_json::from_slice(&output.content).unwrap();
-        assert_eq!(line["ref"], "msg-7");
+        assert_eq!(line["ref"], "m7");
         assert_eq!(
             line["message"],
             json!({
@@ -177,5 +184,18 @@ mod tests {
         assert!(line.get("created_at").is_none());
         assert!(line.get("anchor").is_none());
         assert_eq!(output.media_type, "application/x-ndjson; charset=utf-8");
+
+        let error = tool
+            .execute(
+                ToolContext {
+                    run_id: "run".to_owned(),
+                    call_id: "invalid-call".to_owned(),
+                    workspace: workspace.path().to_owned(),
+                },
+                json!({"ref": "msg_7"}),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("form m<N>"));
     }
 }

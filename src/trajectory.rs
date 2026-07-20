@@ -16,6 +16,18 @@ pub use local::LocalTrajectoryReader;
 const SNIPPET_CONTEXT_CHARS: usize = 120;
 const HISTORY_TOOL_NAMES: [&str; 2] = ["history_read", "history_search"];
 
+pub fn message_ref(seq: u64) -> String {
+    format!("m{seq}")
+}
+
+pub fn message_ref_seq(message_ref: &str) -> Option<u64> {
+    let digits = message_ref.strip_prefix('m')?;
+    if digits.is_empty() || (digits.len() > 1 && digits.starts_with('0')) {
+        return None;
+    }
+    digits.parse::<u64>().ok().filter(|seq| *seq > 0)
+}
+
 pub(crate) fn is_history_tool(name: &str) -> bool {
     HISTORY_TOOL_NAMES.contains(&name)
 }
@@ -57,6 +69,9 @@ pub struct TrajectoryMessage {
     pub seq: u64,
     pub created_at: DateTime<Utc>,
     pub message: Message,
+    /// Durable idempotency key for a queued steering input, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_input_id: Option<String>,
     /// Local context-management metadata stored only in message_metadata.jsonl.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<CompactionMessage>,

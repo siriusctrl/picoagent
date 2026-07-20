@@ -4,6 +4,7 @@
 - Date: 2026-07-20
 - Supersedes: ADR 0003, ADR 0007
 - Refines: ADR 0004 (compaction request profile)
+- Refined by: ADR 0013 (sequence-addressed message refs)
 
 ## Context
 
@@ -65,7 +66,8 @@ are more valuable than preserving the separate checkpoint format.
 - Durable order and provider-input order intentionally differ after compaction:
   the state is appended after messages it summarizes, then projected before the
   exact recent suffix on later requests.
-- Run record version 4 intentionally rejects older local run formats.
+- Run record version 4 initially rejected older local run formats; ADR 0013
+  advances it again for sequence-addressed refs.
 
 ## Alternatives Considered
 

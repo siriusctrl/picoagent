@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn preview_budget_restoration_uses_persisted_preview_bytes() {
         let trajectory = vec![TrajectoryMessage {
-            message_ref: "msg-1".to_owned(),
+            message_ref: "m1".to_owned(),
             seq: 1,
             created_at: Utc::now(),
             message: Message {
@@ -217,6 +217,7 @@ mod tests {
                     },
                 }],
             },
+            pending_input_id: None,
             compaction: None,
         }];
 

@@ -28,9 +28,10 @@ Completions field, and is absent when the provider does not return it. Later
 compatible Chat requests replay it separately from visible assistant `content`.
 
 Each message has one corresponding line in `message_metadata.jsonl`. The
-sidecar holds the stable ref, sequence, timestamp, exact-message SHA-256,
-provider-neutral content layout, tool-error state, opaque provider items,
-optional compaction purpose/boundary state, and a result's optional
+sidecar holds the stable `m<N>` ref whose number equals the one-based sequence,
+timestamp, exact-message SHA-256, provider-neutral content layout, tool-error
+state, opaque provider items, an optional pending-input idempotency id, optional
+compaction purpose/boundary state, and a result's optional
 `ArtifactRef` plus exact preview-byte count. A second SHA-256
 covers all reconstruction metadata. The two logs are created and
 directory-synced with the run. The Chat line is synced first and the metadata
@@ -90,9 +91,11 @@ exact recent ordinary messages. The omitted ordinary trajectory remains the
 source for read-only recovery:
 
 - `history_search` uses one Rust regex and returns newest matches only from the
-  compacted prefix, including matches in linked full textual artifacts;
-- `history_read` returns a bounded window around a stable ref and preserves
-  tool-call/result pairs.
+  compacted prefix, including matches in linked full textual artifacts. Each
+  match has an `m<N>` sequence ref, a `message` or `artifact` source, and a
+  bounded snippet;
+- `history_read` returns chronological Chat-compatible JSONL around that ref
+  and preserves tool-call/result pairs.
 
 There is no cursor. The configured search maximum omits older query matches;
 refine the regex to reach them. If the already-bounded tool response is itself

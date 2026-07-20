@@ -230,4 +230,9 @@ async fn independent_stores_serialize_concurrent_message_appends() {
             .collect::<Vec<_>>(),
         (1..=40).collect::<Vec<_>>()
     );
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.message_ref == format!("m{}", message.seq))
+    );
 }

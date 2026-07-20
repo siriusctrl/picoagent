@@ -426,9 +426,11 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
         trajectory[5].compaction,
         Some(CompactionMessage::Request)
     ));
+    assert_eq!(trajectory[5].message_ref, "m6");
     assert_eq!(trajectory[5].message.role, Role::User);
     assert!(text_content(&trajectory[5].message).contains("# Compacted state"));
     let checkpoint = trajectory[6].compaction_state().unwrap();
+    assert_eq!(trajectory[6].message_ref, "m7");
     assert_eq!(trajectory[6].message.role, Role::Assistant);
     assert_eq!(trajectory[6].message.visible_text(), SUMMARY_TEXT);
     assert_eq!(

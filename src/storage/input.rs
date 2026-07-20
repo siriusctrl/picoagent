@@ -102,18 +102,17 @@ impl RunDirStore {
 
         let mut committed = trajectory
             .iter()
-            .map(|message| message.message_ref.clone())
+            .filter_map(|message| message.pending_input_id.clone())
             .collect::<HashSet<_>>();
         let mut appended = Vec::new();
         for input in inputs {
-            let message_ref = format!("msg_{}", input.id);
-            if committed.contains(&message_ref) {
+            if committed.contains(&input.id) {
                 continue;
             }
             let record = self
-                .append_message_with_ref(run_id, &input.message, message_ref)
+                .append_pending_input_message(run_id, &input.message, input.id.clone())
                 .await?;
-            committed.insert(record.message_ref.clone());
+            committed.insert(input.id);
             trajectory.push(record.clone());
             appended.push(record);
         }

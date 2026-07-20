@@ -4,6 +4,7 @@
 - Date: 2026-07-16
 - Refines: ADR 0001 (completed-message encoding)
 - Refines: ADR 0003 (stable trajectory identity and recovery metadata)
+- Refined by: ADR 0013 (sequence-addressed message refs)
 
 ## Context
 

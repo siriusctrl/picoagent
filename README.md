@@ -272,10 +272,14 @@ Two read-only tools recover exact details omitted from the active request:
 
 - `history_search({"pattern":"..."})` applies a Rust regular expression only
   to compacted messages and their linked textual tool-result artifacts. Results
-  are newest-first and carry stable message refs.
-- `history_read({"ref":"msg_...","before":2,"after":2})` reads a bounded
-  conversation-ordered window around one ref and keeps tool calls paired with
-  their results.
+  are newest-first. Each match contains `ref`, `source`, and `snippet`: refs are
+  run-local sequence addresses such as `m37` (smaller numbers are older), while
+  `source` is `message` for inline content or `artifact` for a linked complete
+  spilled result.
+- `history_read({"ref":"m37","before":2,"after":2})` reads a bounded
+  chronological window around one ref. It returns JSONL records shaped as
+  `{"ref":"m<N>","message":<OpenAI Chat-compatible message>}` and keeps tool
+  calls paired with their results.
 
 The local reader invokes `rg` for bounded-memory searches inside full textual
 artifacts, so ripgrep must be available on `PATH` for that part of

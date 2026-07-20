@@ -1,7 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{Result, anyhow, bail};
-use ulid::Ulid;
+use anyhow::{Result, anyhow, bail, ensure};
 
 use crate::{
     agent::CompactionOptions,
@@ -9,7 +8,7 @@ use crate::{
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role, ToolSpec},
     prompts::agent_prompts,
     storage::RunDirStore,
-    trajectory::{CompactionMessage, CompactionState, TrajectoryMessage},
+    trajectory::{CompactionMessage, CompactionState, TrajectoryMessage, message_ref},
 };
 
 pub(crate) struct CompactionAttempt<'a> {
@@ -62,7 +61,13 @@ pub(crate) async fn maybe_compact(
     let Some(plan) = plan_compaction(trajectory, previous, options.keep_recent_tokens)? else {
         return Ok(None);
     };
-    let state_message_ref = format!("cmp_{}", Ulid::new());
+    let state_message_ref = message_ref(
+        trajectory
+            .last()
+            .ok_or_else(|| anyhow!("compaction trajectory is empty"))?
+            .seq
+            .saturating_add(2),
+    );
     events
         .emit(&RuntimeEvent::new(
             run_id,
@@ -168,12 +173,7 @@ pub(crate) async fn maybe_compact(
     // append but before this append leaves an inert, auditable request that is
     // excluded from normal context and can be retried on resume.
     let request_record = store
-        .append_compaction_message(
-            run_id,
-            &compaction_request,
-            CompactionMessage::Request,
-            format!("msg_{}", Ulid::new()),
-        )
+        .append_compaction_message(run_id, &compaction_request, CompactionMessage::Request)
         .await?;
     let state_record = store
         .append_compaction_message(
@@ -182,9 +182,13 @@ pub(crate) async fn maybe_compact(
             CompactionMessage::State {
                 state: state.clone(),
             },
-            state_message_ref.clone(),
         )
         .await?;
+    ensure!(
+        state_record.message_ref == state_message_ref,
+        "compacted state ref changed from planned `{state_message_ref}` to `{}`",
+        state_record.message_ref
+    );
     events
         .emit(&RuntimeEvent::new(
             run_id,
@@ -383,26 +387,28 @@ mod tests {
 
     fn record(seq: u64, role: Role, content: MessageContent) -> TrajectoryMessage {
         TrajectoryMessage {
-            message_ref: format!("msg_{seq}"),
+            message_ref: format!("m{seq}"),
             seq,
             created_at: Utc::now(),
             message: Message {
                 role,
                 content: vec![content],
             },
+            pending_input_id: None,
             compaction: None,
         }
     }
 
     fn state_record(seq: u64, first_kept_message_ref: &str, summary: &str) -> TrajectoryMessage {
         TrajectoryMessage {
-            message_ref: format!("cmp_{seq}"),
+            message_ref: format!("m{seq}"),
             seq,
             created_at: Utc::now(),
             message: Message::text(Role::Assistant, summary),
+            pending_input_id: None,
             compaction: Some(CompactionMessage::State {
                 state: CompactionState {
-                    covered_through_message_ref: "msg_2".to_owned(),
+                    covered_through_message_ref: "m2".to_owned(),
                     first_kept_message_ref: first_kept_message_ref.to_owned(),
                 },
             }),
@@ -459,8 +465,8 @@ mod tests {
             ),
         ];
         let plan = plan_compaction(&trajectory, None, 160).unwrap().unwrap();
-        assert_eq!(plan.first_kept.message_ref, "msg_4");
-        assert_eq!(plan.covered_through.message_ref, "msg_3");
+        assert_eq!(plan.first_kept.message_ref, "m4");
+        assert_eq!(plan.covered_through.message_ref, "m3");
     }
 
     #[test]
@@ -473,7 +479,7 @@ mod tests {
             },
         );
         request.compaction = Some(CompactionMessage::Request);
-        let state = state_record(5, "msg_3", "# Compacted state\nold work summarized");
+        let state = state_record(5, "m3", "# Compacted state\nold work summarized");
         let trajectory = vec![
             record(
                 1,
@@ -550,7 +556,7 @@ mod tests {
 
     #[test]
     fn repeated_compaction_uses_previous_state_before_new_native_messages() {
-        let state = state_record(5, "msg_3", "first state");
+        let state = state_record(5, "m3", "first state");
         let trajectory = vec![
             record(
                 1,

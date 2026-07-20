@@ -606,8 +606,18 @@ async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current
         .unwrap();
     assert_eq!(appended.len(), 1);
     assert_eq!(appended[0].seq, 9);
+    assert_eq!(appended[0].message_ref, "m9");
+    assert!(appended[0].pending_input_id.is_some());
     assert_eq!(appended[0].message.role, Role::User);
     assert_eq!(appended[0].message.visible_text(), "change direction");
+
+    let reopened = RunDirStore::new(workspace.path());
+    let mut recovered = reopened.load_trajectory("child").await.unwrap();
+    let duplicate = reopened
+        .append_pending_inputs("child", &mut recovered)
+        .await
+        .unwrap();
+    assert!(duplicate.is_empty());
 }
 
 #[tokio::test]

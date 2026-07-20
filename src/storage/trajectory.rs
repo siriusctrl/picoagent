@@ -3,7 +3,7 @@ use chrono::Utc;
 
 use crate::{
     model::Message,
-    trajectory::{CompactionMessage, TrajectoryMessage},
+    trajectory::{CompactionMessage, TrajectoryMessage, message_ref},
 };
 
 use super::{MESSAGE_FORMAT, RunDirStore, ensure_run_exists, message_log};
@@ -14,17 +14,17 @@ impl RunDirStore {
         run_id: &str,
         message: &Message,
     ) -> Result<TrajectoryMessage> {
-        self.append_message_with_ref(run_id, message, format!("msg_{}", ulid::Ulid::new()))
+        self.append_classified_message(run_id, message, None, None)
             .await
     }
 
-    pub(crate) async fn append_message_with_ref(
+    pub(crate) async fn append_pending_input_message(
         &self,
         run_id: &str,
         message: &Message,
-        message_ref: String,
+        pending_input_id: String,
     ) -> Result<TrajectoryMessage> {
-        self.append_classified_message(run_id, message, message_ref, None)
+        self.append_classified_message(run_id, message, Some(pending_input_id), None)
             .await
     }
 
@@ -32,7 +32,7 @@ impl RunDirStore {
         &self,
         run_id: &str,
         message: &Message,
-        message_ref: String,
+        pending_input_id: Option<String>,
         compaction: Option<CompactionMessage>,
     ) -> Result<TrajectoryMessage> {
         let mut sequences = self.write_lock.lock().await;
@@ -64,10 +64,11 @@ impl RunDirStore {
             }
         };
         let record = TrajectoryMessage {
-            message_ref,
+            message_ref: message_ref(next),
             seq: next,
             created_at: Utc::now(),
             message: message.clone(),
+            pending_input_id,
             compaction,
         };
         message_log::append(&paths.messages, &paths.message_metadata, &record).await?;
@@ -88,9 +89,8 @@ impl RunDirStore {
         run_id: &str,
         message: &Message,
         compaction: CompactionMessage,
-        message_ref: String,
     ) -> Result<TrajectoryMessage> {
-        self.append_classified_message(run_id, message, message_ref, Some(compaction))
+        self.append_classified_message(run_id, message, None, Some(compaction))
             .await
     }
 

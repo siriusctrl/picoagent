@@ -51,6 +51,11 @@ The persisted event log contains lifecycle and debugging records, not streaming
 text or reasoning chunks. Complete messages are the searchable trajectory;
 live event sinks carry transient deltas for interactive consumers.
 
+Within a run, completed messages use the short ref `m<N>`, where `N` is the
+durable one-based sequence. This gives history tools an explicit age/order
+signal without exposing a separate sequence field or asking the model to parse
+opaque ULIDs. Steering input ids remain separate recovery metadata.
+
 See [ADR 0001](adr/0001-durable-messages-transient-stream-deltas.md) for the
 decision context and rejected alternatives.
 

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io::SeekFrom, path::Path};
+use std::{io::SeekFrom, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use serde::de::DeserializeOwned;
@@ -141,25 +141,18 @@ fn decode_committed(
         "messages.jsonl contains more than one uncommitted message"
     );
 
-    let mut message_ids = HashSet::new();
     messages
         .records
         .iter()
         .zip(&metadata.records)
         .enumerate()
         .map(|(index, (message, metadata))| {
-            let decoded = codec::decode(
+            codec::decode(
                 message.value.clone(),
                 &message.raw,
                 metadata.value.clone(),
                 index as u64 + 1,
-            )?;
-            ensure!(
-                message_ids.insert(decoded.message_ref.clone()),
-                "duplicate message id {}",
-                decoded.message_ref
-            );
-            Ok(decoded)
+            )
         })
         .collect()
 }

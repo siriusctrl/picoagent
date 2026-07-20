@@ -301,7 +301,7 @@ async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
     let trajectory = store.load_trajectory(&result.run_id).await.unwrap();
     let search_output = tool_result_content(&trajectory, "call-history-search").unwrap();
     assert!(search_output.contains(r#""matches":[{"#));
-    assert!(search_output.contains(r#""ref":"msg_"#));
+    assert!(search_output.contains(r#""ref":"m3"#));
     assert!(search_output.contains("result-old"));
     let recovered_ref = history_match_ref(normal_requests[3]).unwrap();
     assert!(has_tool_call(

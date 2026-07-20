@@ -108,7 +108,7 @@ mod tests {
         async fn search(&self, _request: HistorySearchRequest) -> Result<HistorySearchResult> {
             Ok(HistorySearchResult {
                 matches: vec![HistoryMatch {
-                    message_ref: "msg-7".to_owned(),
+                    message_ref: "m7".to_owned(),
                     match_source: HistoryMatchSource::Message,
                     snippet: "alpha".to_owned(),
                 }],
@@ -130,6 +130,11 @@ mod tests {
             workspace: workspace.path().to_owned(),
         };
         let tool = HistorySearchTool::new(Arc::new(StubReader), 50).unwrap();
+        let description = tool.spec().description;
+        assert!(description.contains("`ref`: `m<N>`"));
+        assert!(description.contains("`source`: `message`"));
+        assert!(description.contains("`artifact`"));
+        assert!(description.contains("newest-first"));
         let output = tool
             .execute(context.clone(), json!({"pattern": "alpha"}))
             .await
@@ -137,7 +142,7 @@ mod tests {
         let value: Value = serde_json::from_slice(&output.content).unwrap();
         assert_eq!(
             value["matches"][0],
-            json!({"ref": "msg-7", "source": "message", "snippet": "alpha"})
+            json!({"ref": "m7", "source": "message", "snippet": "alpha"})
         );
         assert_eq!(value["truncated"], true);
         assert!(value["instruction"].as_str().unwrap().contains("refine"));

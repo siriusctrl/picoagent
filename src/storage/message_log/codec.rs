@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     model::openai_chat::{ChatMessage, project_chat_message},
-    trajectory::{CompactionMessage, TrajectoryMessage},
+    trajectory::{CompactionMessage, TrajectoryMessage, message_ref},
 };
 
 use self::layout::ContentLayout;
@@ -21,6 +21,8 @@ pub(super) struct MessageMetadata {
     pub(super) message_sha256: String,
     layout: Vec<ContentLayout>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_input_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     compaction: Option<CompactionMessage>,
     reconstruction_sha256: String,
 }
@@ -32,6 +34,7 @@ struct ReconstructionPayload<'a> {
     created_at: DateTime<Utc>,
     message_sha256: &'a str,
     layout: &'a [ContentLayout],
+    pending_input_id: &'a Option<String>,
     compaction: &'a Option<CompactionMessage>,
 }
 
@@ -51,6 +54,7 @@ pub(super) fn encode(record: &TrajectoryMessage) -> Result<EncodedMessage> {
         record.created_at,
         &message_sha256,
         &layout,
+        &record.pending_input_id,
         &record.compaction,
     )?;
     let metadata = MessageMetadata {
@@ -59,6 +63,7 @@ pub(super) fn encode(record: &TrajectoryMessage) -> Result<EncodedMessage> {
         created_at: record.created_at,
         message_sha256,
         layout,
+        pending_input_id: record.pending_input_id.clone(),
         compaction: record.compaction.clone(),
         reconstruction_sha256,
     };
@@ -82,6 +87,7 @@ pub(super) fn decode(
                 metadata.created_at,
                 &metadata.message_sha256,
                 &metadata.layout,
+                &metadata.pending_input_id,
                 &metadata.compaction,
             )?,
         "message {} reconstruction metadata does not match its sha256",
@@ -93,8 +99,9 @@ pub(super) fn decode(
         metadata.seq
     );
     ensure!(
-        !metadata.message_id.is_empty(),
-        "message metadata has an empty message id"
+        metadata.message_id == message_ref(expected_seq),
+        "message metadata id `{}` is not the expected `m{expected_seq}`",
+        metadata.message_id
     );
     ensure!(
         metadata.message_sha256 == sha256(native_json),
@@ -114,6 +121,7 @@ pub(super) fn decode(
         seq: metadata.seq,
         created_at: metadata.created_at,
         message,
+        pending_input_id: metadata.pending_input_id,
         compaction: metadata.compaction,
     })
 }
@@ -128,6 +136,7 @@ fn reconstruction_sha256(
     created_at: DateTime<Utc>,
     message_sha256: &str,
     layout: &[ContentLayout],
+    pending_input_id: &Option<String>,
     compaction: &Option<CompactionMessage>,
 ) -> Result<String> {
     let payload = ReconstructionPayload {
@@ -136,6 +145,7 @@ fn reconstruction_sha256(
         created_at,
         message_sha256,
         layout,
+        pending_input_id,
         compaction,
     };
     Ok(sha256(

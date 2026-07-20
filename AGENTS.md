@@ -48,9 +48,12 @@ navigation, invariants, verification, and handoff.
 - Treat completed messages as the resumable boundary. Stream deltas are events,
   not durable conversation messages.
 - Keep `messages.jsonl` in the declared `openai-chat-compatible` shape. Store
-  ids, sequence, timestamps, exact-message and reconstruction-metadata hashes,
-  tool-error state, and opaque provider items in the paired
+  the sequence-addressed `m<N>` ref, timestamps, exact-message and
+  reconstruction-metadata hashes, tool-error state, and opaque provider items in the paired
   `message_metadata.jsonl`; metadata commits the already-synced message line.
+- Keep message refs run-local and equal to `m<N>`, where `N` is the durable
+  one-based message sequence. Store pending-input ids separately for steering
+  idempotency; do not overload the model-facing ref with unrelated identity.
 - Serialize message-log reads, recovery, and paired appends with the per-run
   file lock. In-memory cursors are only a fast path and must be invalidated
   before cancellable writes or whenever durable file lengths change.

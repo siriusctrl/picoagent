@@ -10,7 +10,7 @@ use super::{
     HistoryMatch, HistoryMatchSource, HistoryReadMessage, HistoryReadRequest, HistoryReadResult,
     HistorySearchRequest, HistorySearchResult, TrajectoryMessage, TrajectoryReader,
     artifacts::{LocalArtifactSearch, LocalRunArtifactSource},
-    history_tool_result_message_indices, is_history_tool, snippet_around_match,
+    history_tool_result_message_indices, is_history_tool, message_ref, snippet_around_match,
 };
 
 struct ToolPair {
@@ -132,18 +132,14 @@ fn project_readable_messages(
     mut messages: Vec<TrajectoryMessage>,
 ) -> Result<Vec<TrajectoryMessage>> {
     messages.sort_by_key(|message| message.seq);
-    let mut refs = HashSet::new();
     let mut sequences = HashSet::new();
     for record in &messages {
-        if record.message_ref.is_empty() {
-            bail!("trajectory contains an empty message ref");
-        }
-        if !refs.insert(record.message_ref.as_str()) {
-            bail!(
-                "trajectory contains duplicate message ref `{}`",
-                record.message_ref
-            );
-        }
+        ensure!(
+            record.message_ref == message_ref(record.seq),
+            "trajectory message ref `{}` does not match sequence {}",
+            record.message_ref,
+            record.seq
+        );
         if !sequences.insert(record.seq) {
             bail!(
                 "trajectory contains duplicate message sequence {}",

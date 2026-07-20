@@ -90,13 +90,14 @@ endpoint uses the optional `reasoning_content` extension. This extension is not
 part of the official OpenAI Chat Completions schema.
 
 Picoagent-only state lives in the paired `message_metadata.jsonl` sidecar. Each
-line carries the stable message id, sequence, timestamp, SHA-256 of the exact
-Chat JSON, the layout needed to recover provider-neutral content, and a second
-SHA-256 over that reconstruction metadata. Tool-error state and opaque provider
-continuation items also remain there, as do structured result artifact refs and
-the exact preview-byte counts used to restore the per-run budget. Compaction
-request/state classification and state boundaries also live only in the
-sidecar. None of these
+line carries a run-local `m<N>` message id whose number equals its one-based
+sequence, a timestamp, SHA-256 of the exact Chat JSON, the layout needed to
+recover provider-neutral content, and a second SHA-256 over that reconstruction
+metadata. A queued steering input's idempotency id is stored separately when
+present. Tool-error state and opaque provider continuation items also remain
+there, as do structured result artifact refs and the exact preview-byte counts
+used to restore the per-run budget. Compaction request/state classification and
+state boundaries also live only in the sidecar. None of these
 private fields are added to the Chat message. `run.json` identifies the format
 as `openai-chat-compatible`.
 
@@ -166,9 +167,10 @@ pages. See [artifacts.md](artifacts.md).
 
 Local compaction changes the active-context projection without rewriting prior
 messages. `messages.jsonl` retains every committed completed message with a
-stable ref and sequence, including the successful compaction user instruction
-and exact assistant compacted state. Sidecar metadata marks those two records
-and stores the covered prefix and first exact message kept. A normal active
+stable `m<N>` ref whose number is its sequence, including the successful
+compaction user instruction and exact assistant compacted state. Sidecar
+metadata marks those two records and stores the covered prefix and first exact
+message kept. A normal active
 request excludes compaction instructions and older compacted states; it contains
 the initial runtime message, newest exact assistant state, and exact recent
 ordinary suffix.
@@ -185,10 +187,13 @@ Picoagent does not implement provider/server-side compaction.
 boundary. The local implementation searches only messages outside the active
 context, plus full textual artifacts linked to their tool results. Search uses
 Rust regular expressions, returns newest matches up to a configured cap, and
-has no cursor. Read accepts one stable message ref and a bounded before/after
-window, expanding it when necessary to preserve tool-call/result pairs. A
-future remote or database-backed trajectory can implement the same reader
-without granting the model filesystem write access.
+has no cursor. Each match returns a sequence-addressed ref, a `source` that
+distinguishes inline message content from a linked complete artifact, and a
+bounded snippet. Read accepts that ref and a bounded before/after window,
+returning chronological Chat-compatible JSONL and expanding when necessary to
+preserve tool-call/result pairs. A future remote or database-backed trajectory
+can implement the same reader without granting the model filesystem write
+access.
 
 For linked local artifacts, the query reads the structured `ArtifactRef` from
 the completed result's paired message metadata. It does not parse the

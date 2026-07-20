@@ -53,10 +53,11 @@ impl TrajectoryReader for StaticReader {
 
 fn record(seq: u64, role: Role, content: Vec<MessageContent>) -> TrajectoryMessage {
     TrajectoryMessage {
-        message_ref: format!("msg-{seq}"),
+        message_ref: format!("m{seq}"),
         seq,
         created_at: DateTime::from_timestamp(seq as i64, 0).unwrap(),
         message: Message { role, content },
+        pending_input_id: None,
         compaction: None,
     }
 }
@@ -72,6 +73,15 @@ fn reader_with_artifacts(source: StaticSource, workspace: &Path) -> StaticReader
     StaticReader {
         messages: source.0,
         artifact_workspace: Some(workspace.to_owned()),
+    }
+}
+
+#[test]
+fn message_refs_are_canonical_sequence_addresses() {
+    assert_eq!(message_ref(37), "m37");
+    assert_eq!(message_ref_seq("m37"), Some(37));
+    for invalid in ["", "m", "m0", "m01", "msg_1", "m-1"] {
+        assert_eq!(message_ref_seq(invalid), None, "accepted {invalid}");
     }
 }
 
@@ -144,7 +154,7 @@ async fn search_is_newest_first_and_reports_a_limit() {
         .unwrap();
 
     assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].message_ref, "msg-2");
+    assert_eq!(result.matches[0].message_ref, "m2");
     assert!(result.truncated);
 }
 
@@ -193,7 +203,7 @@ async fn search_supports_inline_regex_flags_and_hides_internal_content() {
         .await
         .unwrap();
     assert_eq!(visible.matches.len(), 1);
-    assert_eq!(visible.matches[0].message_ref, "msg-1");
+    assert_eq!(visible.matches[0].message_ref, "m1");
 
     let hidden = reader
         .search(HistorySearchRequest {
@@ -247,7 +257,7 @@ async fn read_returns_a_contiguous_window_and_keeps_tool_pairs() {
     let result = reader
         .read(HistoryReadRequest {
             run_id: "run".to_owned(),
-            message_ref: "msg-2".to_owned(),
+            message_ref: "m2".to_owned(),
             before: 0,
             after: 0,
         })
@@ -260,7 +270,7 @@ async fn read_returns_a_contiguous_window_and_keeps_tool_pairs() {
             .iter()
             .map(|message| message.message_ref.as_str())
             .collect::<Vec<_>>(),
-        ["msg-2", "msg-3"]
+        ["m2", "m3"]
     );
 }
 
@@ -310,7 +320,7 @@ async fn read_pairs_reused_call_ids_by_occurrence() {
     let result = reader
         .read(HistoryReadRequest {
             run_id: "run".to_owned(),
-            message_ref: "msg-4".to_owned(),
+            message_ref: "m4".to_owned(),
             before: 0,
             after: 0,
         })
@@ -323,7 +333,7 @@ async fn read_pairs_reused_call_ids_by_occurrence() {
             .iter()
             .map(|message| message.message_ref.as_str())
             .collect::<Vec<_>>(),
-        ["msg-3", "msg-4"]
+        ["m3", "m4"]
     );
 }
 
@@ -379,7 +389,7 @@ async fn history_projection_hides_only_the_matching_reused_call_occurrence() {
         .await
         .unwrap();
     assert_eq!(found.matches.len(), 1);
-    assert_eq!(found.matches[0].message_ref, "msg-4");
+    assert_eq!(found.matches[0].message_ref, "m4");
 
     let hidden = reader
         .search(HistorySearchRequest {
@@ -410,7 +420,7 @@ async fn read_preserves_reasoning_in_exact_assistant_messages() {
     let result = reader
         .read(HistoryReadRequest {
             run_id: "run".to_owned(),
-            message_ref: "msg-1".to_owned(),
+            message_ref: "m1".to_owned(),
             before: 0,
             after: 0,
         })
@@ -465,7 +475,7 @@ async fn search_matches_the_complete_tool_result_artifact() {
         .unwrap();
 
     assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].message_ref, "msg-2");
+    assert_eq!(result.matches[0].message_ref, "m2");
     assert_eq!(result.matches[0].match_source, HistoryMatchSource::Artifact);
     assert!(result.matches[0].snippet.contains("needle"));
 }
@@ -555,7 +565,7 @@ async fn search_stops_before_an_older_missing_artifact_after_limit_is_known() {
         .unwrap();
 
     assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].message_ref, "msg-4");
+    assert_eq!(result.matches[0].message_ref, "m4");
     assert!(result.truncated);
 }
 
@@ -628,7 +638,7 @@ async fn reused_call_ids_resolve_each_result_to_its_exact_artifact() {
         .unwrap();
 
     assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].message_ref, "msg-2");
+    assert_eq!(result.matches[0].message_ref, "m2");
     assert_eq!(result.matches[0].match_source, HistoryMatchSource::Artifact);
 }
 
@@ -665,7 +675,7 @@ async fn background_result_searches_its_linked_full_artifact() {
         .unwrap();
 
     assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].message_ref, "msg-1");
+    assert_eq!(result.matches[0].message_ref, "m1");
     assert_eq!(result.matches[0].match_source, HistoryMatchSource::Artifact);
 }
 
@@ -731,7 +741,7 @@ async fn plain_result_does_not_claim_a_reused_call_ids_only_artifact() {
         .unwrap();
 
     assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].message_ref, "msg-2");
+    assert_eq!(result.matches[0].message_ref, "m2");
 }
 
 #[tokio::test]

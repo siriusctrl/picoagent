@@ -66,3 +66,4 @@ Use these sections:
 - [ADR 0011: Separate model stream idleness from the request
   deadline](0011-model-stream-idle-timeout-and-request-deadline.md)
 - [ADR 0012: Record compaction as messages](0012-record-compaction-as-messages.md)
+- [ADR 0013: Use sequence-addressed message refs](0013-sequence-addressed-message-refs.md)
