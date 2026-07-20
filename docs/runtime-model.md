@@ -128,9 +128,13 @@ separate recovery case.
 
 Parent, child, and compaction requests share one model-call semaphore. Its
 default capacity is one so a child can run against single-concurrency compatible
-endpoints without racing the parent; deployments can raise it explicitly. Every
-request also has the same configured deadline. A normal request timeout fails
-that run; a compaction timeout records `compaction_failed` and continues with
+endpoints without racing the parent; deployments can raise it explicitly. Once
+a call acquires a permit, its hard request deadline covers the entire provider
+call without resetting. A separate stream-idle interval covers response headers
+and the request opening that precedes them, then restarts after every valid SSE
+event, so a healthy long reasoning response can outlive one idle interval.
+Neither timer includes later tool execution. An expired normal call fails that
+run; an expired compaction call records `compaction_failed` and continues with
 the uncompacted context.
 
 ## Streaming

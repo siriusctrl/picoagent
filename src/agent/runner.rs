@@ -281,7 +281,8 @@ impl AgentRunner {
                         store: &self.store,
                         events: &events,
                         model_slots: &self.model_slots,
-                        timeout_seconds: self.options.model_request_timeout_seconds,
+                        stream_idle_timeout_seconds: self.options.model_stream_idle_timeout_seconds,
+                        request_deadline_seconds: self.options.model_request_deadline_seconds,
                     })
                     .await?
                 {
@@ -302,7 +303,7 @@ impl AgentRunner {
                     .await
                     .context("model concurrency limiter closed")?;
                 let response = tokio::time::timeout(
-                    Duration::from_secs(self.options.model_request_timeout_seconds),
+                    Duration::from_secs(self.options.model_request_deadline_seconds),
                     self.provider.complete(
                         ModelRequest {
                             run_id: run_id.clone(),
@@ -311,6 +312,9 @@ impl AgentRunner {
                             messages: active_messages,
                             tools: tool_specs.clone(),
                             max_output_tokens,
+                            stream_idle_timeout: Duration::from_secs(
+                                self.options.model_stream_idle_timeout_seconds,
+                            ),
                         },
                         events.clone(),
                     ),
@@ -320,9 +324,9 @@ impl AgentRunner {
                 let response = response
                     .with_context(|| {
                         format!(
-                            "{} model call exceeded {} seconds",
+                            "{} model request deadline exceeded {} seconds",
                             self.provider.name(),
-                            self.options.model_request_timeout_seconds
+                            self.options.model_request_deadline_seconds
                         )
                     })?
                     .with_context(|| format!("{} model call failed", self.provider.name()))?;

@@ -154,7 +154,8 @@ pub struct RuntimeConfig {
     pub max_subagent_depth: usize,
     pub max_parallel_tasks: usize,
     pub max_parallel_model_calls: usize,
-    pub model_request_timeout_seconds: u64,
+    pub model_stream_idle_timeout_seconds: u64,
+    pub model_request_deadline_seconds: u64,
     pub max_output_tokens: Option<u32>,
 }
 
@@ -202,7 +203,8 @@ impl Default for RuntimeConfig {
             max_subagent_depth: 1,
             max_parallel_tasks: 4,
             max_parallel_model_calls: 1,
-            model_request_timeout_seconds: 300,
+            model_stream_idle_timeout_seconds: 300,
+            model_request_deadline_seconds: 3_600,
             max_output_tokens: None,
         }
     }
@@ -311,8 +313,11 @@ impl AppConfig {
         if self.runtime.max_parallel_model_calls == 0 {
             bail!("`runtime.max_parallel_model_calls` must be greater than zero")
         }
-        if self.runtime.model_request_timeout_seconds == 0 {
-            bail!("`runtime.model_request_timeout_seconds` must be greater than zero")
+        if self.runtime.model_stream_idle_timeout_seconds == 0 {
+            bail!("`runtime.model_stream_idle_timeout_seconds` must be greater than zero")
+        }
+        if self.runtime.model_request_deadline_seconds == 0 {
+            bail!("`runtime.model_request_deadline_seconds` must be greater than zero")
         }
         if self.runtime.max_output_tokens == Some(0) {
             bail!("`runtime.max_output_tokens` must be greater than zero")
@@ -552,7 +557,8 @@ mod tests {
         for source in [
             "[runtime]\nmax_parallel_tasks = 0",
             "[runtime]\nmax_parallel_model_calls = 0",
-            "[runtime]\nmodel_request_timeout_seconds = 0",
+            "[runtime]\nmodel_stream_idle_timeout_seconds = 0",
+            "[runtime]\nmodel_request_deadline_seconds = 0",
             "[runtime]\nmax_output_tokens = 0",
             "[agents.general_task]\nmax_output_tokens = 0",
             "[tasks]\nforeground_tool_timeout_seconds = 0",

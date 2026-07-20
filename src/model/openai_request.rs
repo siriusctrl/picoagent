@@ -158,6 +158,7 @@ mod tests {
             messages: vec![Message::text(Role::User, "hello")],
             tools,
             max_output_tokens: None,
+            stream_idle_timeout: std::time::Duration::from_secs(300),
         }
     }
 
@@ -199,6 +200,7 @@ mod tests {
             }],
             tools: Vec::new(),
             max_output_tokens: None,
+            stream_idle_timeout: std::time::Duration::from_secs(300),
         };
 
         let body = responses_body(&request, None);
@@ -231,6 +233,7 @@ mod tests {
             }],
             tools: Vec::new(),
             max_output_tokens: None,
+            stream_idle_timeout: std::time::Duration::from_secs(300),
         };
 
         let body = responses_body(&request, None);
@@ -282,6 +285,7 @@ mod tests {
             }],
             tools: Vec::new(),
             max_output_tokens: None,
+            stream_idle_timeout: std::time::Duration::from_secs(300),
         };
 
         let responses = responses_body(&request, None);
@@ -321,6 +325,7 @@ mod tests {
             }],
             tools: Vec::new(),
             max_output_tokens: None,
+            stream_idle_timeout: std::time::Duration::from_secs(300),
         };
 
         let expected = "<runtime-reminder>context</runtime-reminder>\n\ndo the task";
@@ -343,6 +348,7 @@ mod tests {
             messages: vec![Message::text(Role::User, "solve this")],
             tools: Vec::new(),
             max_output_tokens: Some(128),
+            stream_idle_timeout: std::time::Duration::from_secs(300),
         };
 
         let responses = responses_body(&request, Some("high"));

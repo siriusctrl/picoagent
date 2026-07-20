@@ -26,8 +26,8 @@ job/CLI
 `AgentRunner` is the only model/tool loop. It calls a provider, executes the
 returned tool calls, appends complete tool results, and repeats until the model
 returns a final answer with no unresolved background work. There is no model
-step limit; provider request deadlines and explicit cancellation remain real
-failure boundaries.
+step limit; provider stream-idle timeouts, request deadlines, and explicit
+cancellation remain real failure boundaries.
 
 ## Core Boundaries
 
@@ -35,7 +35,10 @@ failure boundaries.
 
 `ModelProvider` translates the canonical message and tool shapes to one wire
 protocol. OAuth, API keys, SSE parsing, provider errors, and provider-specific
-cache hints stay behind this boundary.
+cache hints stay behind this boundary. The runner owns the non-resetting model
+request deadline; streaming providers apply the per-call idle interval while
+opening the HTTP request through its response headers and before each next valid
+SSE event.
 
 Initial adapters:
 

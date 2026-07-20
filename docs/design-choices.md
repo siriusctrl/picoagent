@@ -19,6 +19,19 @@ id, depth, task instructions, and their own persisted run directory.
 Rejected: a separate orchestrator agent type or child-specific model loop. That
 would duplicate tool, provider, streaming, and persistence behavior.
 
+## Two Model Timeout Scopes
+
+Each provider call has a resettable stream-idle timeout and a non-resetting hard
+deadline. Valid SSE events reset the idle interval even when they carry
+reasoning, tool arguments, usage, or protocol state rather than visible text.
+The hard deadline still bounds a connection that makes negligible progress
+forever. Tool execution and model-slot queueing are outside both scopes.
+
+Rejected: one hard timeout for the entire stream, because it kills a long but
+healthy reasoning response; and an idle timeout alone, because heartbeat or
+trickle traffic could retain a model slot indefinitely. See
+[ADR 0011](adr/0011-model-stream-idle-timeout-and-request-deadline.md).
+
 ## Headless First
 
 The runtime emits structured events and portable artifacts. It does not contain

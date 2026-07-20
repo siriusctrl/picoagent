@@ -155,6 +155,9 @@ pub struct ModelRequest {
     pub messages: Vec<Message>,
     pub tools: Vec<ToolSpec>,
     pub max_output_tokens: Option<u32>,
+    /// Maximum silence while opening or advancing a streaming response.
+    /// Streaming providers should restart this interval after each valid event.
+    pub stream_idle_timeout: std::time::Duration,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

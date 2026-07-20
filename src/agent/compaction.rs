@@ -28,7 +28,8 @@ pub(crate) struct CompactionAttempt<'a> {
     pub store: &'a RunDirStore,
     pub events: &'a SharedEventSink,
     pub model_slots: &'a tokio::sync::Semaphore,
-    pub timeout_seconds: u64,
+    pub stream_idle_timeout_seconds: u64,
+    pub request_deadline_seconds: u64,
 }
 
 pub(crate) async fn maybe_compact(
@@ -45,7 +46,8 @@ pub(crate) async fn maybe_compact(
         store,
         events,
         model_slots,
-        timeout_seconds,
+        stream_idle_timeout_seconds,
+        request_deadline_seconds,
     } = attempt;
     let (Some(trigger_tokens), Some(tokens_before)) = (options.trigger_tokens, tokens_before)
     else {
@@ -79,19 +81,22 @@ pub(crate) async fn maybe_compact(
         )],
         tools: Vec::new(),
         max_output_tokens: Some(options.summary_max_output_tokens.max(1)),
+        stream_idle_timeout: Duration::from_secs(stream_idle_timeout_seconds),
     };
     let model_permit = model_slots
         .acquire()
         .await
         .map_err(|_| anyhow!("model concurrency limiter closed"))?;
     let response = tokio::time::timeout(
-        Duration::from_secs(timeout_seconds),
+        Duration::from_secs(request_deadline_seconds),
         provider.complete(request, Arc::new(NoopEventSink)),
     )
     .await;
     drop(model_permit);
     let response = response
-        .map_err(|_| anyhow!("compaction model call exceeded {timeout_seconds} seconds"))
+        .map_err(|_| {
+            anyhow!("compaction model request deadline exceeded {request_deadline_seconds} seconds")
+        })
         .and_then(|response| response)
         .and_then(|response| {
             response.validate_completed()?;

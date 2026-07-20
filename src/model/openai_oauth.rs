@@ -201,10 +201,8 @@ impl OpenAiOAuthProvider {
         if let Some(account_id) = &credentials.account_id {
             builder = builder.header("chatgpt-account-id", account_id);
         }
-        builder
-            .send()
+        super::common::send_streaming_request(builder, "OpenAI OAuth", request.stream_idle_timeout)
             .await
-            .context("failed to send OpenAI OAuth request")
     }
 
     fn store(&self) -> CredentialStore<'_> {
@@ -248,6 +246,7 @@ impl ModelProvider for OpenAiOAuthProvider {
             OpenAiProtocol::Responses,
             &request.run_id,
             events,
+            request.stream_idle_timeout,
         )
         .await
     }

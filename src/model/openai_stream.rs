@@ -2,12 +2,14 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
 use eventsource_stream::Eventsource;
-use futures_util::StreamExt;
 use serde_json::Value;
 
 use super::{
     Message, MessageContent, ModelResponse, ModelUsage,
-    common::{ToolCallBuilder, emit_reasoning, emit_text, ensure_success, merge_usage},
+    common::{
+        ToolCallBuilder, emit_reasoning, emit_text, ensure_success, merge_usage, next_sse_event,
+        send_streaming_request,
+    },
     openai_compatible::OpenAiProtocol,
 };
 use crate::events::SharedEventSink;
@@ -17,16 +19,14 @@ pub(crate) async fn complete_request(
     protocol: OpenAiProtocol,
     run_id: &str,
     events: SharedEventSink,
+    stream_idle_timeout: std::time::Duration,
 ) -> Result<ModelResponse> {
     let response = ensure_success(
-        builder
-            .send()
-            .await
-            .context("failed to send OpenAI request")?,
+        send_streaming_request(builder, "OpenAI", stream_idle_timeout).await?,
         "OpenAI",
     )
     .await?;
-    complete_response(response, protocol, run_id, events).await
+    complete_response(response, protocol, run_id, events, stream_idle_timeout).await
 }
 
 pub(crate) async fn complete_response(
@@ -34,12 +34,12 @@ pub(crate) async fn complete_response(
     protocol: OpenAiProtocol,
     run_id: &str,
     events: SharedEventSink,
+    stream_idle_timeout: std::time::Duration,
 ) -> Result<ModelResponse> {
     let mut stream = response.bytes_stream().eventsource();
     let mut accumulator = OpenAiAccumulator::default();
 
-    while let Some(event) = stream.next().await {
-        let event = event.context("invalid OpenAI SSE stream")?;
+    while let Some(event) = next_sse_event(&mut stream, "OpenAI", stream_idle_timeout).await? {
         if event.data.trim() == "[DONE]" {
             break;
         }

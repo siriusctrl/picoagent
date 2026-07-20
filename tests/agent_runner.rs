@@ -1347,7 +1347,7 @@ async fn model_requests_have_a_runtime_deadline() {
         memory: None,
         extra_events: Arc::new(NoopEventSink),
         options: RunnerOptions {
-            model_request_timeout_seconds: 1,
+            model_request_deadline_seconds: 1,
             ..RunnerOptions::default()
         },
     });
@@ -1357,7 +1357,7 @@ async fn model_requests_have_a_runtime_deadline() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("model call exceeded 1 seconds"),
+        format!("{error:#}").contains("model request deadline exceeded 1 seconds"),
         "{error:#}"
     );
     let run_id = std::fs::read_dir(workspace.path().join(".pico/runs"))

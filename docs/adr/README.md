@@ -63,3 +63,5 @@ Use these sections:
   tools](0009-memory-through-ordinary-tools.md)
 - [ADR 0010: Use parent-controlled background work without step or execution
   caps](0010-parent-controlled-background-work.md)
+- [ADR 0011: Separate model stream idleness from the request
+  deadline](0011-model-stream-idle-timeout-and-request-deadline.md)

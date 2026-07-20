@@ -148,6 +148,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
                 self.options.protocol,
                 &request.run_id,
                 events.clone(),
+                request.stream_idle_timeout,
             )
             .await;
             match result {

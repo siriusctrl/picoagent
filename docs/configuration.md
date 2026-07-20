@@ -83,7 +83,8 @@ api_key_env = "ANTHROPIC_API_KEY"
 max_subagent_depth = 1
 max_parallel_tasks = 4
 max_parallel_model_calls = 1
-model_request_timeout_seconds = 300
+model_stream_idle_timeout_seconds = 300
+model_request_deadline_seconds = 3600
 max_output_tokens = 8192
 ```
 
@@ -93,11 +94,18 @@ stopped, or a real provider/runtime error occurs.
 `max_parallel_model_calls` is shared by a parent and all of its child runs; the
 conservative default of one supports endpoints with a single-request
 concurrency limit, while higher-capacity deployments may raise it.
-`model_request_timeout_seconds` bounds each normal or compaction request;
-an expired normal request fails the run, while an expired compaction request
-leaves the current context unchanged. Both parallel capacities, configured
-output token limits, model request timeouts, and task wait/foreground limits
-must be greater than zero.
+`model_stream_idle_timeout_seconds` covers opening the HTTP request through its
+response headers and the gap between valid SSE events. Its interval restarts
+after every event, including reasoning, tool-call, usage, and protocol events
+that do not contain visible text.
+`model_request_deadline_seconds` bounds the full API call after it acquires the
+shared model slot and never restarts. It includes provider queueing, reasoning,
+streaming, authentication refresh, and compatible-endpoint rate-limit backoff,
+but not tool execution or time waiting for the model slot. Normal and
+compaction calls use the same pair. An expired normal call fails the run, while
+an expired compaction call leaves the current context unchanged. Both parallel
+capacities, configured output token limits, model timeout values, and task
+wait/foreground limits must be greater than zero.
 
 The OpenAI-compatible adapter additionally retries initial HTTP 429 responses
 up to three times with bounded exponential backoff. It does not retry a partial

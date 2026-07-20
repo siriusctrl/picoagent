@@ -1,7 +1,9 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, time::Duration};
 
 use anyhow::{Context, Result};
-use reqwest::{Response, StatusCode};
+use eventsource_stream::Event;
+use futures_util::{Stream, StreamExt};
+use reqwest::{RequestBuilder, Response, StatusCode};
 
 use crate::{
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
@@ -56,6 +58,37 @@ pub(crate) async fn ensure_success(response: Response, provider: &str) -> Result
         body,
     }
     .into())
+}
+
+pub(crate) async fn send_streaming_request(
+    builder: RequestBuilder,
+    provider: &str,
+    idle_timeout: Duration,
+) -> Result<Response> {
+    tokio::time::timeout(idle_timeout, builder.send())
+        .await
+        .with_context(|| {
+            format!(
+                "{provider} response headers exceeded the stream idle timeout ({idle_timeout:?})"
+            )
+        })?
+        .with_context(|| format!("failed to send {provider} request"))
+}
+
+pub(crate) async fn next_sse_event<S, E>(
+    stream: &mut S,
+    provider: &str,
+    idle_timeout: Duration,
+) -> Result<Option<Event>>
+where
+    S: Stream<Item = std::result::Result<Event, E>> + Unpin,
+    E: Error + Send + Sync + 'static,
+{
+    tokio::time::timeout(idle_timeout, stream.next())
+        .await
+        .with_context(|| format!("{provider} stream idle timeout exceeded ({idle_timeout:?})"))?
+        .transpose()
+        .with_context(|| format!("invalid {provider} SSE stream"))
 }
 
 pub(crate) async fn emit_text(events: &SharedEventSink, run_id: &str, text: &str) -> Result<()> {

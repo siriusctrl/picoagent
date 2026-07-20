@@ -3,14 +3,16 @@ use std::{collections::BTreeMap, fmt};
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
-use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::{Value, json};
 
 use super::{
     Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
     ToolSpec,
-    common::{ToolCallBuilder, content_text, emit_text, ensure_success, join_url, merge_usage},
+    common::{
+        ToolCallBuilder, content_text, emit_text, ensure_success, join_url, merge_usage,
+        next_sse_event, send_streaming_request,
+    },
 };
 use crate::events::SharedEventSink;
 
@@ -96,17 +98,15 @@ impl ModelProvider for AnthropicCompatibleProvider {
             builder = builder.header("x-api-key", &self.options.api_key);
         }
         let response = ensure_success(
-            builder
-                .send()
-                .await
-                .context("failed to send Anthropic request")?,
+            send_streaming_request(builder, "Anthropic", request.stream_idle_timeout).await?,
             "Anthropic",
         )
         .await?;
         let mut stream = response.bytes_stream().eventsource();
         let mut accumulator = AnthropicAccumulator::default();
-        while let Some(event) = stream.next().await {
-            let event = event.context("invalid Anthropic SSE stream")?;
+        while let Some(event) =
+            next_sse_event(&mut stream, "Anthropic", request.stream_idle_timeout).await?
+        {
             let value: Value = serde_json::from_str(&event.data).with_context(|| {
                 format!("invalid Anthropic SSE JSON for event `{}`", event.event)
             })?;
@@ -376,6 +376,7 @@ mod tests {
             messages,
             tools,
             max_output_tokens: None,
+            stream_idle_timeout: std::time::Duration::from_secs(300),
         }
     }
 
@@ -493,6 +494,7 @@ mod tests {
             }],
             tools: Vec::new(),
             max_output_tokens: None,
+            stream_idle_timeout: std::time::Duration::from_secs(300),
         };
 
         let body = anthropic_body(&request);
@@ -521,6 +523,7 @@ mod tests {
             }],
             tools: Vec::new(),
             max_output_tokens: None,
+            stream_idle_timeout: std::time::Duration::from_secs(300),
         };
 
         let body = anthropic_body(&request);

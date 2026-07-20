@@ -376,8 +376,11 @@ the same runner, not a second agent class. Each child:
 Parent and child model requests share `runtime.max_parallel_model_calls`, which
 defaults to one for compatibility with rate-limited endpoints. Background tool
 capacity remains independently controlled by `runtime.max_parallel_tasks`.
-`runtime.model_request_timeout_seconds` (default 300) prevents a stalled model
-request from holding a run or the shared model slot forever.
+`runtime.model_stream_idle_timeout_seconds` (default 300) stops a model stream
+that produces no valid SSE event for that interval, while
+`runtime.model_request_deadline_seconds` (default 3600) caps the complete model
+API call even when the stream keeps making progress. Neither limit includes
+tool execution or time spent waiting for the shared model slot.
 
 Only child results return to the parent context; full child transcripts remain
 in their own run directories. The parent stores only coordination state under

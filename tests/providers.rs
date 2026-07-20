@@ -53,6 +53,7 @@ fn request() -> ModelRequest {
         messages: vec![Message::text(Role::User, "hello")],
         tools: Vec::new(),
         max_output_tokens: Some(128),
+        stream_idle_timeout: Duration::from_secs(30),
     }
 }
 
