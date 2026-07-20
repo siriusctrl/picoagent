@@ -12,13 +12,13 @@ use crate::{
     trajectory::{HistorySearchRequest, TrajectoryReader},
 };
 
-pub struct HistorySearchTool {
+pub(super) struct SearchTool {
     reader: Arc<dyn TrajectoryReader>,
     max_matches: usize,
 }
 
-impl HistorySearchTool {
-    pub fn new(reader: Arc<dyn TrajectoryReader>, max_matches: usize) -> Result<Self> {
+impl SearchTool {
+    pub(super) fn new(reader: Arc<dyn TrajectoryReader>, max_matches: usize) -> Result<Self> {
         if max_matches == 0 {
             bail!("history search max_matches must be greater than zero");
         }
@@ -35,7 +35,7 @@ struct HistorySearchArgs {
 }
 
 #[async_trait]
-impl Tool for HistorySearchTool {
+impl Tool for SearchTool {
     fn spec(&self) -> ToolSpec {
         crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
@@ -112,7 +112,7 @@ mod tests {
             call_id: "call".to_owned(),
             workspace: workspace.path().to_owned(),
         };
-        let tool = HistorySearchTool::new(Arc::new(StubReader), 50).unwrap();
+        let tool = SearchTool::new(Arc::new(StubReader), 50).unwrap();
         let description = tool.spec().description;
         assert!(description.contains("`ref`: `m<N>`"));
         assert!(description.contains("`source`: `message`"));

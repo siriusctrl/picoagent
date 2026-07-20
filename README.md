@@ -122,11 +122,12 @@ user request and assistant compacted state are ordinary Chat-compatible message
 lines.
 
 Stable agent instructions are folded scalar values in the typed, compile-time
-`prompts/agents.yaml` registry. Every local model-facing tool adapter and its
-typed `tool.yaml` live under `src/tools/<tool>/`; the manifest owns the static
-name, purpose description, return guidance, and input schema. Rust composes the
-two prose fields into the standard provider description and owns manifest
-validation, argument validation, assembly, and execution.
+`prompts/agents.yaml` registry. Every local model-facing tool adapter has a
+typed `tool.yaml` beside it; standalone tools live under `src/tools/<tool>/`,
+while task and history families use `src/tools/<family>/<member>/`. The manifest
+always owns the complete model-facing name, purpose description, return
+guidance, and input schema. Rust composes the two prose fields into the standard
+provider description and owns validation, assembly, and execution.
 
 ## Provider Setup
 
@@ -473,7 +474,7 @@ CLI/job
   -> AgentRunner
      -> ModelProvider
      -> ToolRegistry
-        -> flat local Tool adapters
+        -> local Tool adapters grouped where related
         -> MCP Tool adapters
         -> TaskManager
            -> promoted direct Tool future

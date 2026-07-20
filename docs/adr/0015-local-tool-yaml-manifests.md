@@ -12,6 +12,9 @@ ADR 0017 later removes the sole runtime schema augmentation that this record
 allowed. With `spawn` removed, every local manifest now describes one complete
 static schema; profile selection changes membership only.
 
+ADR 0019 later groups related adapter directories. Each leaf manifest still
+declares the complete provider-visible name; paths do not derive names.
+
 ## Context
 
 ADR 0014 put every local model-facing adapter in one predictable directory,

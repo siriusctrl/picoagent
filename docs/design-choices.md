@@ -196,12 +196,15 @@ guidance, and input schema in one typed `tool.yaml` beside its adapter. The
 loader joins the two prose fields into the provider's standard description.
 These assets are embedded with `include_str!` and parsed strictly. Rust remains
 authoritative for prompt assembly, argument validation, and execution.
-Every local model-facing adapter uses a flat `src/tools/<tool>/` module, while
-domain engines remain in their focused subsystems. Process and run capabilities
-are assembled through one explicit path; ordinary tools are called directly,
-while `delegate` and the task controls are complete static adapters.
+Every local model-facing adapter keeps its complete manifest beside its Rust
+module. Standalone tools stay directly under `src/tools`; cohesive task and
+history adapters are grouped by family without deriving model-visible names
+from paths. Domain engines remain in their focused subsystems. Process and run
+capabilities are assembled through one explicit path; ordinary tools are called
+directly, while `delegate` and the task controls are complete static adapters.
 
-See [ADR 0016](adr/0016-separate-tool-purpose-and-return-guidance.md),
+See [ADR 0019](adr/0019-group-related-tool-adapters.md),
+[ADR 0016](adr/0016-separate-tool-purpose-and-return-guidance.md),
 [ADR 0015](adr/0015-local-tool-yaml-manifests.md),
 [ADR 0014](adr/0014-flat-tool-adapters-and-explicit-assembly.md), and
 [ADR 0008](adr/0008-typed-agent-prompt-registry.md) for the packaging and

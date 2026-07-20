@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 use crate::{agent::task::TaskManager, skills::SkillRegistry, trajectory::TrajectoryReader};
 
 use super::{
-    BashTool, DelegateTool, HistoryReadTool, HistorySearchTool, LoadSkillTool, ReadTool,
-    TaskInspectTool, TaskStatusTool, TaskSteerTool, TaskStopTool, TaskWaitTool, ToolRegistry,
-    WebSearchTool, WriteTool,
+    BashTool, DelegateTool, LoadSkillTool, ReadTool, ToolRegistry, WebSearchTool, WriteTool,
+    history, task,
 };
 
 /// Assemble the process-wide tools. Run-scoped history and task controls are
@@ -38,12 +37,7 @@ impl RunToolAssembly {
         reader: Arc<dyn TrajectoryReader>,
         history_search_max_matches: usize,
     ) -> Result<Self> {
-        if registry.contains("history_search") || registry.contains("history_read") {
-            bail!("history tools are already registered");
-        }
-        let search = HistorySearchTool::new(reader.clone(), history_search_max_matches)?;
-        registry.register(Arc::new(search))?;
-        registry.register(Arc::new(HistoryReadTool::new(reader)))?;
+        history::register(&mut registry, reader, history_search_max_matches)?;
         Ok(Self { registry })
     }
 
@@ -56,16 +50,7 @@ impl RunToolAssembly {
             self.registry
                 .register(Arc::new(DelegateTool::new(manager.clone())))?;
         }
-        self.registry
-            .register(Arc::new(TaskInspectTool::new(manager.clone())))?;
-        self.registry
-            .register(Arc::new(TaskStatusTool::new(manager.clone())))?;
-        self.registry
-            .register(Arc::new(TaskSteerTool::new(manager.clone())))?;
-        self.registry
-            .register(Arc::new(TaskStopTool::new(manager.clone())))?;
-        self.registry
-            .register(Arc::new(TaskWaitTool::new(manager)))?;
+        task::register_controls(&mut self.registry, manager)?;
         Ok(self.registry)
     }
 }

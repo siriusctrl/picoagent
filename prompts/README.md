@@ -11,11 +11,13 @@ execution contracts remain in Rust. Project
 `AGENTS.md`, skill metadata, memory paths, and delegated instructions are
 dynamic inputs and are not copied into this registry.
 
-Every local model-facing tool adapter lives in a flat `src/tools/<tool>/`
-module. Its typed `tool.yaml` owns the static name, folded `description`, folded
-`returns`, and input schema. `description` states purpose, usage, side effects,
-and constraints; `returns` states the successful result shape, interpretation,
-and tool-specific follow-up. The loader joins them as
+Every local model-facing tool adapter keeps a typed `tool.yaml` beside its Rust
+module. Standalone adapters live at `src/tools/<tool>/`; cohesive task and
+history families live at `src/tools/<family>/<member>/`. Every manifest still
+declares the complete provider-visible name rather than deriving it from its
+path. `description` states purpose, usage, side effects, and constraints;
+`returns` states the successful result shape, interpretation, and tool-specific
+follow-up. The loader joins them as
 `<description>\n\nReturns: <returns>` for the standard provider description. The
 Rust module owns arguments, semantic validation, and execution. Domain state
 stays in its subsystem: for example, the task adapters

@@ -14,12 +14,12 @@ use crate::{
 const DEFAULT_CONTEXT_MESSAGES: usize = 2;
 const MAX_CONTEXT_MESSAGES: usize = 10;
 
-pub struct HistoryReadTool {
+pub(super) struct ReadTool {
     reader: Arc<dyn TrajectoryReader>,
 }
 
-impl HistoryReadTool {
-    pub fn new(reader: Arc<dyn TrajectoryReader>) -> Self {
+impl ReadTool {
+    pub(super) fn new(reader: Arc<dyn TrajectoryReader>) -> Self {
         Self { reader }
     }
 }
@@ -39,7 +39,7 @@ fn default_context_messages() -> usize {
 }
 
 #[async_trait]
-impl Tool for HistoryReadTool {
+impl Tool for ReadTool {
     fn spec(&self) -> ToolSpec {
         crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
@@ -140,7 +140,7 @@ mod tests {
     #[tokio::test]
     async fn returns_chat_compatible_jsonl_messages() {
         let workspace = tempdir().unwrap();
-        let tool = HistoryReadTool::new(Arc::new(StubReader));
+        let tool = ReadTool::new(Arc::new(StubReader));
         let description = tool.spec().description;
         assert!(description.contains("Chronological JSONL"));
         assert!(description.contains("`source: \"artifact\"`"));

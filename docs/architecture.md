@@ -11,7 +11,7 @@ job/CLI
   -> AgentRunner
      -> ModelProvider
      -> ToolRegistry
-        -> flat local Tool adapters
+        -> local Tool adapters grouped where related
         -> MCP Tool adapters
         -> TaskManager
            -> promoted direct Tool future
@@ -60,12 +60,14 @@ second planning layer; the model selects a capability, and the runner performs
 the deterministic lookup. Duplicate names fail during startup instead of
 silently replacing an existing capability.
 
-Every local model-facing adapter lives in a flat `src/tools/<tool>/` module.
-Its typed compile-time `tool.yaml` keeps the static name, folded purpose
-description, folded return guidance, and input schema together. The common
-loader validates both prose fields and joins them with a `Returns:` semantic
-boundary into the standard provider description. Its Rust module owns
-arguments, semantic validation, and execution.
+Every local model-facing adapter keeps its typed compile-time `tool.yaml` beside
+its Rust module. Standalone tools live directly under `src/tools/<tool>/`;
+cohesive task and history families live under
+`src/tools/<family>/<member>/`. The manifest always contains the complete
+provider-visible name; paths never derive names. The common loader validates
+both prose fields and joins them with a `Returns:` semantic boundary into the
+standard provider description. Its Rust module owns arguments, semantic
+validation, and execution.
 The base `bash` adapter uses a non-login shell and inherits the picoagent
 process environment, avoiding per-call profile output and PATH rewrites.
 The loader rejects unknown manifest fields, empty or padded prose, and
@@ -76,8 +78,10 @@ remain in `mcp.rs`.
 
 `build_app_tools` assembles process-wide local capabilities. `RunToolAssembly`
 is the single path that adds run-scoped history, task controls, and `delegate`
-for depth-eligible profiles. Ordinary tools are called directly; only an
-unfinished direct call can enter task control through foreground promotion.
+for depth-eligible profiles. The `history` and `task` family modules explicitly
+register their complete member sets; assembly does not repeat each leaf
+constructor. Ordinary tools are called directly; only an unfinished direct
+call can enter task control through foreground promotion.
 The model-visible schema set and resume hash therefore commit the same fixed
 capability contract without a dynamic spawn allowlist.
 

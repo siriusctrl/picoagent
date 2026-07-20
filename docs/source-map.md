@@ -30,10 +30,15 @@
 - `src/tools/manifest.rs`: strict parser for embedded local `tool.yaml`
   contracts.
 - `src/tools/assembly.rs`: the single process/run tool-assembly path.
-- `src/tools/{bash,delegate,history_read,history_search,load_skill,read,task_inspect,task_status,task_steer,task_stop,task_wait,web_search,write}/`:
-  flat local adapters with a typed compile-time `tool.yaml` containing purpose,
-  return guidance, and input schema beside their Rust arguments, validation,
-  and execution.
+- `src/tools/{bash,delegate,load_skill,read,web_search,write}/`: standalone local
+  adapters with a typed compile-time `tool.yaml` beside their Rust code.
+- `src/tools/history/{read,search}/`: compacted-history adapters;
+  `src/tools/history/mod.rs` registers the complete family.
+- `src/tools/task/{inspect,status,steer,stop,wait}/`: background-task controls;
+  `src/tools/task/mod.rs` registers the complete family and owns their shared
+  result projection.
+- Every leaf manifest contains its complete provider-visible name, purpose,
+  return guidance, and input schema; directory paths never derive names.
 - `src/trajectory.rs` and `src/trajectory/`: provider-neutral history reader
   contracts plus local message/artifact search.
 - `src/artifact.rs`: versioned artifact envelope and spill.

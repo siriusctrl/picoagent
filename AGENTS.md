@@ -12,10 +12,10 @@ navigation, invariants, verification, and handoff.
   same runner.
 - `src/model/`: provider-neutral message/tool contracts plus OpenAI OAuth,
   OpenAI-compatible, Anthropic-compatible, and deterministic echo adapters.
-- `src/tools/`: the stable tool contract, explicit assembly, and flat local
-  model-facing adapters. Each adapter owns a typed compile-time `tool.yaml`
-  containing its name, purpose description, return guidance, and static input
-  schema while calling focused domain logic where needed.
+- `src/tools/`: the stable tool contract and explicit assembly. Standalone
+  adapters live directly below it; related task and history adapters are
+  grouped by family. Every leaf owns a typed compile-time `tool.yaml` containing
+  its complete model-facing name, purpose, return guidance, and static schema.
 - `prompts/agents.yaml`: the typed registry of stable agent-level instructions
   embedded into the binary; dynamic assembly remains in `src/agent/context.rs`.
 - `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,

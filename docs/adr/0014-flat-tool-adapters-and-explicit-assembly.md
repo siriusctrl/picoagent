@@ -11,7 +11,11 @@ other decisions in this record remain accepted.
 ADR 0017 later removes the explicit ordinary-tool spawn policy and its dynamic
 schema. Ordinary tools are direct capabilities with automatic foreground
 promotion; `delegate` and the five task controls are separate flat adapters.
-The flat ownership and single assembly decisions here remain accepted.
+The common ownership and single assembly decisions here remain accepted.
+
+ADR 0019 later refines only the source layout: cohesive task and history
+families are grouped beneath `src/tools/<family>/`, while each leaf adapter
+still owns its complete manifest and registration remains explicit.
 
 ## Context
 

@@ -8,15 +8,17 @@ use serde_json::Value;
 use crate::{
     agent::task::TaskManager,
     model::ToolSpec,
-    tools::{RawToolOutput, Tool, ToolContext, task_result::task_records},
+    tools::{RawToolOutput, Tool, ToolContext},
 };
 
-pub struct TaskStatusTool {
+use super::result::task_records;
+
+pub(super) struct StatusTool {
     manager: Arc<TaskManager>,
 }
 
-impl TaskStatusTool {
-    pub fn new(manager: Arc<TaskManager>) -> Self {
+impl StatusTool {
+    pub(super) fn new(manager: Arc<TaskManager>) -> Self {
         Self { manager }
     }
 }
@@ -29,7 +31,7 @@ struct TaskStatusArgs {
 }
 
 #[async_trait]
-impl Tool for TaskStatusTool {
+impl Tool for StatusTool {
     fn spec(&self) -> ToolSpec {
         crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }

@@ -14,12 +14,12 @@ use crate::{
 const DEFAULT_LIMIT: usize = 6;
 const MAX_LIMIT: usize = 20;
 
-pub struct TaskInspectTool {
+pub(super) struct InspectTool {
     manager: Arc<TaskManager>,
 }
 
-impl TaskInspectTool {
-    pub fn new(manager: Arc<TaskManager>) -> Self {
+impl InspectTool {
+    pub(super) fn new(manager: Arc<TaskManager>) -> Self {
         Self { manager }
     }
 }
@@ -35,7 +35,7 @@ struct TaskInspectArgs {
 }
 
 #[async_trait]
-impl Tool for TaskInspectTool {
+impl Tool for InspectTool {
     fn spec(&self) -> ToolSpec {
         crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }

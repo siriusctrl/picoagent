@@ -76,3 +76,5 @@ Use these sections:
 - [ADR 0017: Concurrent tool batches and explicit task
   controls](0017-concurrent-tool-batches-and-explicit-task-controls.md)
 - [ADR 0018: Limit tool output per result](0018-limit-tool-output-per-result.md)
+- [ADR 0019: Group related tool adapters without deriving
+  names](0019-group-related-tool-adapters.md)
