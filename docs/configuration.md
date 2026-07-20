@@ -150,6 +150,10 @@ beside the compacted state. It uses a provider-neutral estimate for choosing
 completed message boundaries and keeps a tool call with its result. Compatible
 Chat `reasoning_content` and replayable opaque provider items are included.
 `summary_max_output_tokens` limits the compacted-state response.
+A normal request with an active state inserts the stable `compaction_resume`
+runtime reminder immediately after that assistant state. It is not persisted
+and prevents the state from being mistaken for a final answer or a fresh
+compaction request.
 A fixed profile without both history tools and at least one of `read` or `bash`
 would keep its full context instead of compacting without an exact-recovery
 path.
@@ -190,7 +194,8 @@ max_output_tokens = 4096
 direct calls in an assistant message, not an execution deadline per call. The
 batch returns early when all calls settle. When the window expires, each
 already-running unfinished direct tool continues as a background task and the
-model receives its task id. Delegated subagents have no harness execution
+model receives a status-less runtime notice with its task id and name.
+Delegated subagents have no harness execution
 deadline. Each `task_wait` call returns after at most
 `wait_timeout_seconds` without cancelling work; this value must be strictly
 lower than the foreground window. `task_stop` performs cancellation.
@@ -198,9 +203,10 @@ lower than the foreground window. `task_stop` performs cancellation.
 already-running direct calls are not paused when they are promoted. On Unix,
 cancelling `bash` terminates its process-group descendants too.
 
-Failed background tool and child results use the same artifact threshold and
-per-result preview limits as successful results, so a large error is preserved
-without being injected into the parent context in full.
+All terminal background tool and child results are artifacts regardless of
+size. Their runtime notices carry only the complete path, so successful output
+and failure, cancellation, or interruption details stay out of the parent
+context until the model reads them.
 
 ## Artifacts
 

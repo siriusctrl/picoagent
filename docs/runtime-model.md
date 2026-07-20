@@ -90,9 +90,11 @@ it appends the compaction user message and exact assistant compacted-state
 message to `messages.jsonl`; their sidecar records distinguish control from
 ordinary conversation and make the assistant record the commit marker. Normal
 context assembly excludes the compaction instruction and older compaction
-records, using the initial runtime message, latest exact assistant state, and
-exact recent ordinary messages. The omitted ordinary trajectory remains the
-source for read-only recovery:
+records, using the initial runtime message, latest exact assistant state, one
+synthetic user `<runtime-reminder>` that says to continue rather than compact
+again, and exact recent ordinary messages. The reminder is provider context,
+not another durable message. The omitted ordinary trajectory remains the source
+for read-only recovery:
 
 - `history_search` uses one Rust regex and returns newest matches only from the
   compacted prefix, including matches in linked full textual artifacts. Each
@@ -130,11 +132,18 @@ interrupt the current tool batch. `task_status` reports state without adding
 an explanatory pseudo-message.
 
 Task JSON is coordination state, not a second transcript. Delivery is derived
-from `BackgroundTaskResult` entries already committed to the parent message
+from `BackgroundTask` entries already committed to the parent message
 log. After restart, running ordinary tools become terminal `interrupted` tasks
 and are never replayed. A queued/running child agent resumes its separate child
 run with the same `AgentRunner`; completed or failed children are reconciled
 into the parent exactly once.
+
+A status-less `<background_task>` tool result means only that work is running.
+At a later model boundary, terminal records are grouped in one
+`<runtime-reminder>` user message. Each terminal block includes its task id,
+name, and status, while the body is only the workspace-relative path to the
+complete result artifact. Completed output and failure, cancellation, or
+interruption details all use this same artifact-only delivery path.
 
 The CLI resumes the parent, not a child id. Parent recovery owns durable
 GeneralTask child reconciliation, which avoids two processes racing to advance
@@ -185,6 +194,9 @@ durable conversation tail. Files or configuration changed during a run are
 observed by the next run rather than rewriting the stored trajectory. When
 enabled, the latest stored assistant compacted state replaces an older prefix
 only in the projected provider context; the stored compaction instruction is
-not replayed in normal requests. Large results remain behind stable artifact references.
+not replayed in normal requests. A synthetic runtime reminder immediately after
+the state tells the model to continue the task and use the history tools only
+when omitted detail is needed. Large results remain behind stable artifact
+references.
 These choices reduce context growth and improve the opportunity for provider-side
 prefix-cache reuse without coupling the loop to one cache API.

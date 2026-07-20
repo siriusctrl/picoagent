@@ -75,7 +75,11 @@ impl TaskManager {
             .into_iter()
             .flat_map(|message| message.content)
             .filter_map(|content| match content {
-                crate::model::MessageContent::BackgroundTaskResult { task_id, .. } => Some(task_id),
+                crate::model::MessageContent::BackgroundTask {
+                    task_id,
+                    status: Some(_),
+                    ..
+                } => Some(task_id),
                 _ => None,
             })
             .collect();

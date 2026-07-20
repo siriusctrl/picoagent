@@ -11,6 +11,10 @@ agents, and five static task-control tools replace the action union. The
 no-step-cap, exact-future, durable-control, and recovery decisions here remain
 accepted.
 
+ADR 0020 later unifies running and terminal model-facing notices and makes every
+terminal background result artifact-only. The parent-control decision remains
+accepted.
+
 ## Context
 
 The original runtime bounded Root and GeneralTask runs with model-step counts and

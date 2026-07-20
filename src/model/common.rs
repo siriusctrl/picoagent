@@ -179,24 +179,16 @@ pub(crate) fn merge_usage(target: &mut ModelUsage, value: &serde_json::Value) {
 }
 
 pub(crate) fn content_text(content: &[MessageContent]) -> String {
+    if let Some(rendered) = super::render_background_task_content(content) {
+        return rendered;
+    }
     let mut rendered = String::new();
     let mut previous_was_reminder = false;
     for block in content {
         let (text, is_reminder) = match block {
             MessageContent::RuntimeReminder { text } => (Some(text.clone()), true),
             MessageContent::Text { text } => (Some(text.clone()), false),
-            MessageContent::BackgroundTaskResult {
-                task_id,
-                name,
-                status,
-                content,
-                ..
-            } => (
-                Some(format!(
-                    "<background_task_result task_id=\"{task_id}\" name=\"{name}\" status=\"{status}\">\n{content}\n</background_task_result>"
-                )),
-                false,
-            ),
+            MessageContent::BackgroundTask { .. } => (None, false),
             _ => (None, false),
         };
         let Some(text) = text else {

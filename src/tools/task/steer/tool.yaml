@@ -4,7 +4,7 @@ description: >-
   the child's current assistant/tool batch and before its next model request.
   This operation is valid only for a nonterminal agent task.
 returns: >-
-  JSON `{task_id,status}` confirming that the instruction was queued.
+  JSON `{task_id,name,status}` confirming that the instruction was queued.
 input_schema:
   type: object
   properties:

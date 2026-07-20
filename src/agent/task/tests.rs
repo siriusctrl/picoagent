@@ -471,10 +471,10 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
             "parent",
             &Message {
                 role: Role::User,
-                content: vec![MessageContent::BackgroundTaskResult {
+                content: vec![MessageContent::BackgroundTask {
                     task_id: "done-task".to_owned(),
                     name: "read".to_owned(),
-                    status: "completed".to_owned(),
+                    status: Some("completed".to_owned()),
                     content: "already delivered".to_owned(),
                     metadata: crate::artifact::ResultMetadata::empty(),
                 }],
@@ -702,7 +702,11 @@ async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current
         .unwrap();
     assert_eq!(
         steering,
-        serde_json::json!({"task_id": "agent-task", "status": "running"})
+        serde_json::json!({
+            "task_id": "agent-task",
+            "name": "general-task",
+            "status": "running"
+        })
     );
     let mut trajectory = store.load_trajectory("child").await.unwrap();
     let appended = store
@@ -1093,12 +1097,12 @@ async fn foreground_timeout_promotes_the_same_tool_future_instead_of_stopping_or
         .await
         .unwrap();
     let acknowledgement = match &message.content[0] {
-        MessageContent::ToolResult { content, .. } => {
-            serde_json::from_str::<serde_json::Value>(content).unwrap()
-        }
+        MessageContent::ToolResult { content, .. } => content,
         other => panic!("unexpected foreground acknowledgement: {other:?}"),
     };
-    assert_eq!(acknowledgement["status"], "running");
+    assert!(acknowledgement.contains("<background_task task_id=\"t1\""));
+    assert!(acknowledgement.contains("name=\"slow_continuation\""));
+    assert!(!acknowledgement.contains("status="));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
     let completed = tokio::time::timeout(Duration::from_secs(2), manager.wait_all())
@@ -1183,10 +1187,8 @@ async fn stop_aborts_only_the_selected_background_task_and_commits_cancelled_sta
         .unwrap();
     let task_id = match &message.content[0] {
         MessageContent::ToolResult { content, .. } => {
-            serde_json::from_str::<serde_json::Value>(content).unwrap()["task_id"]
-                .as_str()
-                .unwrap()
-                .to_owned()
+            assert!(content.contains("<background_task task_id=\"t1\""));
+            "t1".to_owned()
         }
         other => panic!("unexpected foreground acknowledgement: {other:?}"),
     };

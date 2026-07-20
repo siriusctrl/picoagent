@@ -163,12 +163,15 @@ queued -> running -> completed
 ```
 
 Whether a terminal result has entered the parent context is derived from the
-parent's committed `BackgroundTaskResult` messages; task JSON does not carry a
+parent's committed `BackgroundTask` messages; task JSON does not carry a
 second authoritative `delivered` flag. A `delegate` result is one normal tool
 result. For an automatically promoted direct call, the running acknowledgement
-fills the original provider `tool_call_id` slot. Later completion is a new
-user/runtime message correlated by `task_id`, never a second tool result with
-the same provider call id; artifact metadata retains that originating call id.
+fills the original provider `tool_call_id` slot with a status-less runtime
+notice. Later completion is a new user/runtime message correlated by `task_id`,
+never a second tool result with the same provider call id. One message batches
+all terminal records ready at that boundary. Each terminal body is only its
+complete artifact path; internal task state, not model-facing XML, retains the
+originating call id and task kind.
 
 The full run holds a filesystem execution lease. Resume rebuilds the recorded
 profile, validates provider/model/workspace identity, loads the paired message
@@ -180,11 +183,13 @@ acknowledgement and supplies the terminal result separately.
 
 ### Artifact storage
 
-Large tool outputs are never discarded and do not enter the live context in
-full. The store writes the complete bytes, records immutable metadata, and gives
-the model a bounded beginning/end preview and a relative path it can inspect in
-pages. Each result is limited independently; earlier tool output and compaction
-do not change how a later result is represented. See [artifacts.md](artifacts.md).
+Large foreground tool outputs are never discarded and do not enter the live
+context in full. The store writes the complete bytes, records immutable
+metadata, and gives the model a bounded beginning/end preview and a relative
+path it can inspect in pages. Terminal background output is artifact-only even
+when small, so batched notices remain bounded. Each result is limited
+independently; earlier output and compaction do not change later representation.
+See [artifacts.md](artifacts.md).
 
 ### Context compaction and trajectory retrieval
 
@@ -195,8 +200,10 @@ compaction user instruction and exact assistant compacted state. Sidecar
 metadata marks those two records and stores the covered prefix and first exact
 message kept. A normal active
 request excludes compaction instructions and older compacted states; it contains
-the initial runtime message, newest exact assistant state, and exact recent
-ordinary suffix.
+the initial runtime message, newest exact assistant state, a short synthetic
+user runtime reminder that identifies the state as context rather than a final
+answer, and the exact recent ordinary suffix. The reminder exists only at an
+active compaction boundary and is not appended to the trajectory.
 
 The trigger uses a provider-neutral request estimate from the first call and
 adopts provider-reported input usage whenever available. Configuring

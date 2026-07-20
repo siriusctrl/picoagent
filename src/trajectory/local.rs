@@ -76,10 +76,11 @@ pub(super) async fn search_messages(
                     artifacts
                         .find(&artifact_refs, pattern)
                         .await?
-                        .map(|snippet| HistoryMatch {
+                        .map(|artifact_match| HistoryMatch {
                             message_ref: record.message_ref.clone(),
                             match_source: HistoryMatchSource::Artifact,
-                            snippet,
+                            artifact: Some(artifact_match.path),
+                            snippet: artifact_match.snippet,
                         })
                 }
                 None => None,
@@ -163,7 +164,7 @@ fn project_readable_messages(
                 MessageContent::ToolResult { .. } => {
                     !hidden_result_messages.contains(&message_index)
                 }
-                MessageContent::BackgroundTaskResult { name, .. } => !is_history_tool(name),
+                MessageContent::BackgroundTask { .. } => true,
                 MessageContent::Text { .. } => true,
             });
             (!record.message.content.is_empty()).then_some(record)
@@ -229,7 +230,7 @@ fn artifact_refs(record: &TrajectoryMessage) -> Result<Vec<&ArtifactRef>> {
                 }
                 metadata.artifact.as_ref()
             }
-            MessageContent::BackgroundTaskResult { metadata, .. } => metadata.artifact.as_ref(),
+            MessageContent::BackgroundTask { metadata, .. } => metadata.artifact.as_ref(),
             _ => continue,
         };
         if let Some(artifact) = artifact {
@@ -247,13 +248,16 @@ fn match_message(record: &TrajectoryMessage, pattern: &Regex) -> Option<HistoryM
                 name, arguments, ..
             } => format!("{name} {}", serde_json::to_string(arguments).ok()?),
             MessageContent::ToolResult { content, .. } => content.clone(),
-            MessageContent::BackgroundTaskResult {
+            MessageContent::BackgroundTask {
                 task_id,
                 name,
                 status,
                 content,
                 ..
-            } => format!("{task_id} {name} {status} {content}"),
+            } => format!(
+                "{task_id} {name} {} {content}",
+                status.as_deref().unwrap_or("running")
+            ),
             MessageContent::RuntimeReminder { .. }
             | MessageContent::Reasoning { .. }
             | MessageContent::ProviderItem { .. } => return None,
@@ -262,6 +266,7 @@ fn match_message(record: &TrajectoryMessage, pattern: &Regex) -> Option<HistoryM
         Some(HistoryMatch {
             message_ref: record.message_ref.clone(),
             match_source: HistoryMatchSource::Message,
+            artifact: None,
             snippet: snippet_around_match(&searchable, found.start(), found.end()),
         })
     })

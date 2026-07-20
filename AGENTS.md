@@ -73,8 +73,10 @@ navigation, invariants, verification, and handoff.
   larger results with a bounded head/tail preview. Do not carry a cumulative
   preview budget across tool calls or compaction boundaries.
 - Correlate foreground `ToolResult` messages by provider `tool_call_id` and
-  promoted terminal background messages by `task_id`; artifact metadata for a
-  promoted result retains the originating provider call id.
+  terminal background messages by `task_id`; keep promoted calls' originating
+  provider ids in internal task state rather than model-facing notices.
+- Persist every terminal background result as an artifact, including small
+  output and error details. Its runtime notice contains only the result path.
 - Keep artifact ids and metadata stable. Changing content under the same hash or
   identity is a contract violation.
 - Keep prompt prefixes deterministic: stable section order, sorted tools and
@@ -82,6 +84,8 @@ navigation, invariants, verification, and handoff.
 - Keep the normal agent system prompt invariant. A compaction request uses that
   same prompt and frozen tool schemas, plus one final user instruction; reject
   tool calls instead of executing them during compaction.
+- Emit the compacted-state continuation reminder only beside an active
+  compacted-state boundary. Do not persist it or add it to uncompacted runs.
 - Register `history_search` and `history_read` before the first normal provider
   call regardless of `compaction.compact_at_tokens`. That setting controls
   compacted-state creation only; sorted tool schemas stay frozen per run.
@@ -115,6 +119,8 @@ navigation, invariants, verification, and handoff.
 
 - Small UTF-8 tool results may stay inline.
 - Large results must preserve their complete bytes under the current run.
+- Terminal background results always preserve complete bytes as artifacts and
+  expose only their relative paths in the runtime notice.
 - A truncated model-facing result must include `truncated`, total bytes, media
   type, hash, stable relative path, and useful beginning/end previews.
 - `read` must support bounded reads so the model can inspect an artifact

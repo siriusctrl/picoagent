@@ -4,7 +4,12 @@
 - Date: 2026-07-20
 - Supersedes: ADR 0003, ADR 0007
 - Refines: ADR 0004 (compaction request profile)
-- Refined by: ADR 0013 (sequence-addressed message refs)
+- Refined by: ADR 0013 (sequence-addressed message refs), ADR 0021
+  (post-state continuation reminder)
+
+ADR 0021 adds a non-durable user runtime reminder immediately after the exact
+assistant state in normal projected context. The durable request/state message
+decision below is unchanged.
 
 ## Context
 

@@ -93,6 +93,7 @@ mod tests {
                 matches: vec![HistoryMatch {
                     message_ref: "m7".to_owned(),
                     match_source: HistoryMatchSource::Message,
+                    artifact: None,
                     snippet: "alpha".to_owned(),
                 }],
                 truncated: true,

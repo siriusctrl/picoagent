@@ -5,7 +5,7 @@ description: >-
   valid only for agent tasks, not promoted direct tools.
 returns: >-
   JSON
-  `{task_id,status,messages:[{seq,message}],has_earlier,next_before_seq}`.
+  `{task_id,name,status,messages:[{seq,message}],has_earlier,next_before_seq}`.
 input_schema:
   type: object
   properties:

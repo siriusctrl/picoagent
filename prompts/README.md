@@ -42,5 +42,7 @@ ordinary file tools and therefore adds no schema. GeneralTask is assigned a
 delegating or leaf variant from its remaining depth before it starts; every
 assembled profile is then frozen for the run. Compaction reuses that system/tool
 prefix and adds the `compaction_request` prompt as the final user message.
+Normal context after a successful checkpoint adds `compaction_resume` inside a
+synthetic user runtime reminder immediately after the exact assistant state.
 Every local manifest is static; runtime profile selection changes which
 complete tool specs are present, not their schemas.

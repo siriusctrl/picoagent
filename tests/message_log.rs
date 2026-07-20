@@ -197,14 +197,17 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
                 MessageContent::Text {
                     text: "用户正文".into(),
                 },
-                MessageContent::BackgroundTaskResult {
-                    task_id: "task-1".into(),
-                    name: "worker".into(),
-                    status: "completed".into(),
-                    content: "后台结果".into(),
-                    metadata: result_metadata("background-task-1"),
-                },
             ],
+        },
+        Message {
+            role: Role::User,
+            content: vec![MessageContent::BackgroundTask {
+                task_id: "task-1".into(),
+                name: "worker".into(),
+                status: Some("completed".into()),
+                content: "task".into(),
+                metadata: result_metadata("background-task-1"),
+            }],
         },
         Message {
             role: Role::Assistant,
@@ -256,10 +259,13 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
     );
 
     let native = read_jsonl(&paths.messages).await;
-    assert!(native[0]["content"].as_str().unwrap().contains("后台结果"));
-    assert_eq!(native[1]["reasoning_content"], "先检查");
-    assert!(!native[1].to_string().contains("encrypted_content"));
-    assert_eq!(native[2]["content"], "command failed");
+    assert_eq!(
+        native[1]["content"],
+        "<runtime-reminder>\n<background_task task_id=\"task-1\" name=\"worker\" status=\"completed\">\ntask\n</background_task>\n</runtime-reminder>"
+    );
+    assert_eq!(native[2]["reasoning_content"], "先检查");
+    assert!(!native[2].to_string().contains("encrypted_content"));
+    assert_eq!(native[3]["content"], "command failed");
 }
 
 #[tokio::test]

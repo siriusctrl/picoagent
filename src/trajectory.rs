@@ -120,6 +120,8 @@ pub struct HistoryMatch {
     pub message_ref: String,
     #[serde(rename = "source")]
     pub match_source: HistoryMatchSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
     pub snippet: String,
 }
 

@@ -49,6 +49,7 @@ impl TaskManager {
             .map_or(Value::Null, Value::from);
         Ok(json!({
             "task_id": record.id,
+            "name": record.name,
             "status": record.status(),
             "messages": messages,
             "has_earlier": has_earlier,
@@ -100,6 +101,7 @@ impl TaskManager {
         drop(records);
         Ok(json!({
             "task_id": task_id,
+            "name": record.name,
             "status": record.status(),
         }))
     }

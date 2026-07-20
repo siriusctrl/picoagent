@@ -238,8 +238,14 @@ impl AgentRunner {
                             });
                         }
                     } else {
-                        append_background_results(&self.store, &run_id, &mut trajectory, &ready)
-                            .await?;
+                        append_background_results(
+                            &self.store,
+                            &run_id,
+                            &mut trajectory,
+                            &task_manager,
+                            &ready,
+                        )
+                        .await?;
                         task_manager.mark_delivered(&ready).await?;
                     }
                 }
@@ -255,8 +261,14 @@ impl AgentRunner {
             loop {
                 let ready = task_manager.drain_completed().await?;
                 let added =
-                    append_background_results(&self.store, &run_id, &mut trajectory, &ready)
-                        .await?;
+                    append_background_results(
+                        &self.store,
+                        &run_id,
+                        &mut trajectory,
+                        &task_manager,
+                        &ready,
+                    )
+                    .await?;
                 task_manager.mark_delivered(&ready).await?;
                 context_tokens = context_tokens.saturating_add(added);
                 let steered = self
@@ -392,6 +404,7 @@ impl AgentRunner {
                             &self.store,
                             &run_id,
                             &mut trajectory,
+                            &task_manager,
                             &ready,
                         )
                         .await?;

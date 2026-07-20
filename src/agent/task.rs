@@ -109,7 +109,7 @@ impl TaskManager {
 
     async fn create_agent_task(
         self: &Arc<Self>,
-        profile: String,
+        name: String,
         child_run_id: String,
         prompt: String,
     ) -> Result<String> {
@@ -117,7 +117,7 @@ impl TaskManager {
         let task_id = next_task_id(&records);
         let record = BackgroundTaskRecord::queued_agent(
             task_id.clone(),
-            profile,
+            name,
             child_run_id,
             prompt,
             self.child_can_delegate,
@@ -227,6 +227,52 @@ impl TaskManager {
         self.artifacts.persist_output(context, output).await
     }
 
+    pub(crate) async fn prepare_delivery(
+        &self,
+        records: &[BackgroundTaskRecord],
+    ) -> Result<Vec<BackgroundTaskRecord>> {
+        let mut prepared = Vec::with_capacity(records.len());
+        for record in records {
+            if !record.state.is_terminal() || record.result_metadata().artifact.is_some() {
+                prepared.push(record.clone());
+                continue;
+            }
+            let content = record.model_content();
+            let context = crate::tools::ToolContext {
+                run_id: self.parent_run_id.clone(),
+                call_id: format!("background-{}", record.id),
+                workspace: self.workspace.clone(),
+            };
+            let mut raw = crate::tools::RawToolOutput::text(content.clone());
+            raw.is_error = record.state != BackgroundTaskState::Completed;
+            let output = self.artifacts.persist_artifact(&context, raw).await?;
+            let artifact = output
+                .artifact
+                .clone()
+                .context("forced background result persistence produced no artifact")?;
+            self.events
+                .emit(&RuntimeEvent::new(
+                    &self.parent_run_id,
+                    RuntimeEventKind::ArtifactCreated {
+                        call_id: context.call_id,
+                        path: artifact.path.clone(),
+                        bytes: artifact.bytes,
+                    },
+                ))
+                .await?;
+            let updated = self
+                .update(&record.id, |stored| {
+                    stored.result = Some(record::BackgroundTaskOutput {
+                        content,
+                        metadata: output.result_metadata(),
+                    });
+                })
+                .await?;
+            prepared.push(updated);
+        }
+        Ok(prepared)
+    }
+
     async fn get(&self, task_id: &str) -> Result<BackgroundTaskRecord> {
         self.records
             .lock()
@@ -297,7 +343,7 @@ impl TaskManager {
     }
 
     /// Mark terminal records delivered only after the caller has durably
-    /// appended their `BackgroundTaskResult` messages. This marker is an
+    /// appended their terminal `BackgroundTask` messages. This marker is an
     /// in-memory fast path; recovery derives truth from the parent transcript.
     pub async fn mark_delivered(&self, records: &[BackgroundTaskRecord]) -> Result<()> {
         let mut delivered = self.delivered.lock().await;

@@ -68,6 +68,14 @@ fn tool_results(request: &ModelRequest) -> Vec<(&str, &str)> {
         .collect()
 }
 
+fn background_task_id(content: &str) -> Option<String> {
+    content
+        .split_once("task_id=\"")?
+        .1
+        .split_once('"')
+        .map(|(task_id, _)| task_id.to_owned())
+}
+
 struct ScheduledTool {
     barrier: Arc<tokio::sync::Barrier>,
     completions: Arc<Mutex<Vec<String>>>,
@@ -231,12 +239,14 @@ impl ModelProvider for PartialPromotionProvider {
                     "partial batch results were not committed in call order: {results:?}"
                 );
                 ensure!(results[0].1 == "first" && results[2].1 == "last");
-                let acknowledgement: Value = serde_json::from_str(results[1].1)?;
-                ensure!(acknowledgement["status"] == "running");
-                let task_id = acknowledgement["task_id"]
-                    .as_str()
-                    .expect("promotion acknowledgement omitted task_id")
-                    .to_owned();
+                ensure!(!results[1].1.contains("status="));
+                ensure!(
+                    results[1]
+                        .1
+                        .contains("The task is now running in the background.")
+                );
+                let task_id = background_task_id(results[1].1)
+                    .expect("promotion acknowledgement omitted task_id");
                 *self.promoted_task_id.lock().unwrap() = Some(task_id);
                 Ok(text_response("waiting for automatic delivery"))
             }
@@ -252,19 +262,18 @@ impl ModelProvider for PartialPromotionProvider {
                     .iter()
                     .flat_map(|message| &message.content)
                     .filter_map(|content| match content {
-                        MessageContent::BackgroundTaskResult {
+                        MessageContent::BackgroundTask {
                             task_id, content, ..
                         } => Some((task_id.as_str(), content.as_str())),
                         _ => None,
                     })
                     .collect::<Vec<_>>();
                 ensure!(
-                    background
-                        == [(
-                            expected.as_str(),
-                            "original_tool_call_id: call-background\nbackground"
-                        )],
-                    "background result did not preserve its original tool-call id: {background:?}"
+                    background.len() == 1
+                        && background[0].0 == expected
+                        && background[0].1.starts_with(".pico/runs/")
+                        && background[0].1.contains("/artifacts/background-t1-"),
+                    "background result did not reference its complete artifact: {background:?}"
                 );
                 ensure!(
                     tool_results(&request)
@@ -320,7 +329,7 @@ async fn direct_batch_promotes_only_the_unfinished_future_and_delivers_it_by_tas
         messages
             .iter()
             .flat_map(|message| &message.content)
-            .filter(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
+            .filter(|content| matches!(content, MessageContent::BackgroundTask { .. }))
             .count(),
         1
     );

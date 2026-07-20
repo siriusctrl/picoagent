@@ -3,7 +3,7 @@ description: >-
   Inspect the current state of selected background tasks without waiting. Omit
   task_ids to list every task in this run.
 returns: >-
-  JSON `{tasks:[{task_id,kind,name,status}]}`.
+  JSON `{tasks:[{task_id,name,status}]}`.
 input_schema:
   type: object
   properties:

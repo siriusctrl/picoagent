@@ -293,6 +293,9 @@ async fn resume_after_a_durable_compacted_state_continues_instead_of_finalizing_
             .iter()
             .any(|message| message.visible_text() == SUMMARY_TEXT)
     );
+    assert!(resumed_request.messages.iter().any(|message| {
+        text_content(message).contains("not a final answer or a request to compact again")
+    }));
     assert!(!resumed_request.messages.iter().any(|message| {
         message
             .visible_text()
@@ -395,14 +398,16 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     assert!(!text_content(&normal_requests[0].messages[0]).contains("history_search"));
 
     let resumed = normal_requests[2];
-    assert_eq!(resumed.messages.len(), 4);
+    assert_eq!(resumed.messages.len(), 5);
     assert!(text_content(&resumed.messages[0]).contains("exercise compaction"));
     let compacted = text_content(&resumed.messages[1]);
     assert_eq!(resumed.messages[1].role, Role::Assistant);
     assert_eq!(compacted, SUMMARY_TEXT);
-    assert!(has_tool_call(&resumed.messages[2], "call-new", "marker"));
+    assert_eq!(resumed.messages[2].role, Role::User);
+    assert!(text_content(&resumed.messages[2]).contains("not a final answer"));
+    assert!(has_tool_call(&resumed.messages[3], "call-new", "marker"));
     assert!(has_tool_result(
-        &resumed.messages[3],
+        &resumed.messages[4],
         "call-new",
         "result-new"
     ));

@@ -3,6 +3,11 @@
 - Status: Accepted
 - Date: 2026-07-20
 
+ADR 0020 later refines terminal background presentation: every terminal
+background result is artifact-backed regardless of size and its runtime notice
+contains only the path. The independent per-result policy here still governs
+ordinary foreground tool results.
+
 ## Context
 
 Picoagent originally combined a per-result inline threshold with a cumulative

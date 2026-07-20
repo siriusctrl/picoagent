@@ -53,12 +53,14 @@ impl Tool for ReadTool {
         let mut line_index = 0_usize;
         let mut selected_lines = 0_usize;
         let mut byte_truncated = false;
+        let mut line_limit_reached = false;
+        let mut buffered_remainder = false;
         'read: loop {
             let read = file.read(&mut buffer).await?;
             if read == 0 {
                 break;
             }
-            for byte in &buffer[..read] {
+            for (position, byte) in buffer[..read].iter().enumerate() {
                 if line_index >= args.offset && selected_lines < args.limit {
                     if selected.len() == args.max_bytes {
                         byte_truncated = true;
@@ -70,6 +72,8 @@ impl Tool for ReadTool {
                     if line_index >= args.offset {
                         selected_lines += 1;
                         if selected_lines == args.limit {
+                            line_limit_reached = true;
+                            buffered_remainder = position + 1 < read;
                             break 'read;
                         }
                     }
@@ -84,8 +88,21 @@ impl Tool for ReadTool {
             .with_context(|| format!("read UTF-8 file {}", path.display()))?;
         if byte_truncated {
             text.push_str(
-                "\n[read max_bytes reached; reduce limit or continue from a later line offset]",
+                "\n[read truncated: max_bytes reached; reduce limit or increase max_bytes]",
             );
+        } else if line_limit_reached {
+            let has_unread_tail = if buffered_remainder {
+                true
+            } else {
+                let mut peek = [0_u8; 1];
+                file.read(&mut peek).await? != 0
+            };
+            if has_unread_tail {
+                text.push_str(&format!(
+                    "\n[read truncated: line limit reached; continue with offset={}]",
+                    args.offset + selected_lines
+                ));
+            }
         }
         Ok(RawToolOutput::text(text))
     }

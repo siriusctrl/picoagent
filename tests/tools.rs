@@ -88,7 +88,27 @@ async fn read_returns_a_bounded_line_range() {
         )
         .await
         .unwrap();
-    assert_eq!(String::from_utf8(output.content).unwrap(), "one\ntwo");
+    assert_eq!(
+        String::from_utf8(output.content).unwrap(),
+        "one\ntwo\n[read truncated: line limit reached; continue with offset=3]"
+    );
+}
+
+#[tokio::test]
+async fn read_does_not_report_truncation_at_exact_line_ending_eof() {
+    let workspace = tempdir().unwrap();
+    tokio::fs::write(workspace.path().join("exact.txt"), "zero\none\n")
+        .await
+        .unwrap();
+    let output = ReadTool
+        .execute(
+            context(workspace.path(), "read-exact"),
+            json!({ "path": "exact.txt", "limit": 2 }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(String::from_utf8(output.content).unwrap(), "zero\none");
 }
 
 #[tokio::test]
@@ -106,7 +126,7 @@ async fn read_bounds_a_single_long_utf8_line_by_bytes() {
         .unwrap();
     let text = String::from_utf8(output.content).unwrap();
     assert!(text.len() < 256);
-    assert!(text.contains("read max_bytes reached"));
+    assert!(text.contains("read truncated: max_bytes reached"));
     assert!(!text.contains('\u{fffd}'));
 }
 

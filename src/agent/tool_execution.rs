@@ -252,7 +252,7 @@ impl DirectToolRuntime<'_> {
                 self.manager
                     .announce_tool_promotion(promotion)
                     .await
-                    .and_then(|task_id| self.promoted_message(call_id, task_id)),
+                    .and_then(|(task_id, name)| self.promoted_message(call_id, task_id, name)),
             );
         }
 
@@ -310,15 +310,12 @@ impl DirectToolRuntime<'_> {
         })
     }
 
-    fn promoted_message(&self, call_id: String, task_id: String) -> Result<Message> {
+    fn promoted_message(&self, call_id: String, task_id: String, name: String) -> Result<Message> {
         Ok(Message {
             role: Role::Tool,
             content: vec![MessageContent::ToolResult {
                 call_id,
-                content: serde_json::to_string(&json!({
-                    "task_id": task_id,
-                    "status": "running",
-                }))?,
+                content: crate::model::background_task_started_reminder(&task_id, &name),
                 is_error: false,
                 metadata: ResultMetadata::empty(),
             }],

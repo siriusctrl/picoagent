@@ -281,6 +281,10 @@ async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
     assert!(!request_contains(normal_requests[0], "# Compacted state"));
     assert!(!request_contains(normal_requests[1], "# Compacted state"));
     assert!(request_contains(normal_requests[2], SUMMARY_TEXT));
+    assert!(request_contains(
+        normal_requests[2],
+        "not a final answer or a request to compact again"
+    ));
     assert!(!request_contains(
         normal_requests[2],
         "Compact the conversation state before this message"
@@ -305,12 +309,12 @@ async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
     assert!(search_output.contains("result-old"));
     let recovered_ref = history_match_ref(normal_requests[3]).unwrap();
     assert!(has_tool_call(
-        &normal_requests[3].messages[4],
+        &normal_requests[3].messages[5],
         "call-history-search",
         "history_search"
     ));
     assert!(has_tool_call(
-        &normal_requests[4].messages[6],
+        &normal_requests[4].messages[7],
         "call-history-read",
         "history_read"
     ));

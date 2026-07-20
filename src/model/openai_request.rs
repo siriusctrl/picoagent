@@ -107,7 +107,7 @@ fn responses_input(messages: &[Message]) -> Value {
                         MessageContent::ProviderItem { provider, item } if provider == "openai" => {
                             input.push(item.clone())
                         }
-                        MessageContent::BackgroundTaskResult { .. } => {}
+                        MessageContent::BackgroundTask { .. } => {}
                         _ => {}
                     }
                 }
@@ -275,10 +275,10 @@ mod tests {
             system: String::new(),
             messages: vec![Message {
                 role: Role::User,
-                content: vec![MessageContent::BackgroundTaskResult {
+                content: vec![MessageContent::BackgroundTask {
                     task_id: "task-1".into(),
                     name: "bash".into(),
-                    status: "completed".into(),
+                    status: Some("completed".into()),
                     content: "done".into(),
                     metadata: crate::artifact::ResultMetadata::empty(),
                 }],

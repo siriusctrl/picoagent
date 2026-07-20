@@ -654,10 +654,10 @@ async fn background_result_searches_its_linked_full_artifact() {
     let source = StaticSource(vec![record(
         1,
         Role::User,
-        vec![MessageContent::BackgroundTaskResult {
+        vec![MessageContent::BackgroundTask {
             task_id: "task-1".to_owned(),
             name: "bash".to_owned(),
-            status: "completed".to_owned(),
+            status: Some("completed".to_owned()),
             content: "bounded preview".to_owned(),
             metadata: artifact_metadata(&artifact),
         }],
@@ -676,6 +676,10 @@ async fn background_result_searches_its_linked_full_artifact() {
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].message_ref, "m1");
     assert_eq!(result.matches[0].match_source, HistoryMatchSource::Artifact);
+    assert_eq!(
+        result.matches[0].artifact.as_deref(),
+        Some(artifact.path.as_str())
+    );
 }
 
 #[tokio::test]

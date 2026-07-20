@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     agent::task::TaskManager,
@@ -24,6 +24,7 @@ impl DelegateTool {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DelegateArgs {
+    name: String,
     prompt: String,
 }
 
@@ -36,10 +37,9 @@ impl Tool for DelegateTool {
     async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
         let args: DelegateArgs =
             serde_json::from_value(arguments).context("invalid delegate arguments")?;
-        let record = self.manager.delegate(args.prompt).await?;
-        Ok(RawToolOutput::text(serde_json::to_string(&json!({
-            "task_id": record.id,
-            "status": record.status(),
-        }))?))
+        let record = self.manager.delegate(args.name, args.prompt).await?;
+        Ok(RawToolOutput::text(
+            crate::model::background_task_started_reminder(&record.id, &record.name),
+        ))
     }
 }

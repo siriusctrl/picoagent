@@ -97,38 +97,48 @@ pub(super) async fn append_background_results(
     store: &RunDirStore,
     run_id: &str,
     trajectory: &mut Vec<TrajectoryMessage>,
+    tasks: &TaskManager,
     records: &[BackgroundTaskRecord],
 ) -> Result<u64> {
-    let mut estimated_tokens = 0_u64;
-    for record in records {
-        let status = record.status().to_owned();
-        let content = if record.kind == "tool" && record.state.is_terminal() {
-            format!(
-                "original_tool_call_id: {}\n{}",
-                record
-                    .origin_call_id
-                    .as_deref()
-                    .context("terminal tool task is missing its original tool-call id")?,
-                record.model_content()
-            )
-        } else {
-            record.model_content()
-        };
-        let metadata = record.result_metadata();
-        let message = Message {
-            role: Role::User,
-            content: vec![MessageContent::BackgroundTaskResult {
+    if records.is_empty() {
+        return Ok(0);
+    }
+    let records = tasks.prepare_delivery(records).await?;
+    let content = records
+        .iter()
+        .map(|record| {
+            let (status, content, metadata) = if record.state.is_terminal() {
+                let metadata = record.result_metadata();
+                let path = metadata
+                    .artifact
+                    .as_ref()
+                    .context("terminal background task is missing its result artifact")?
+                    .path
+                    .clone();
+                (Some(record.status().to_owned()), path, metadata)
+            } else {
+                (
+                    None,
+                    "The task is still running in the background.".to_owned(),
+                    ResultMetadata::empty(),
+                )
+            };
+            Ok(MessageContent::BackgroundTask {
                 task_id: record.id.clone(),
                 name: record.name.clone(),
                 status,
                 content,
                 metadata,
-            }],
-        };
-        let trajectory_record = store.append_message(run_id, &message).await?;
-        estimated_tokens = estimated_tokens.saturating_add(estimate_message_tokens(&message));
-        trajectory.push(trajectory_record);
-    }
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let message = Message {
+        role: Role::User,
+        content,
+    };
+    let estimated_tokens = estimate_message_tokens(&message);
+    let trajectory_record = store.append_message(run_id, &message).await?;
+    trajectory.push(trajectory_record);
     Ok(estimated_tokens)
 }
 
@@ -167,10 +177,7 @@ pub(super) async fn append_interrupted_tool_results(
             .await;
         let (content, is_error) = if let Some(task) = task {
             (
-                serde_json::to_string(&serde_json::json!({
-                    "task_id": task.id,
-                    "status": task.status(),
-                }))?,
+                crate::model::background_task_started_reminder(&task.id, &task.name),
                 false,
             )
         } else {

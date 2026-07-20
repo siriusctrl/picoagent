@@ -70,7 +70,7 @@ impl TaskManager {
     pub(crate) async fn announce_tool_promotion(
         &self,
         promotion: PreparedToolPromotion,
-    ) -> Result<String> {
+    ) -> Result<(String, String)> {
         let PreparedToolPromotion {
             task_id,
             name,
@@ -97,7 +97,7 @@ impl TaskManager {
             ))
             .await?;
         let _ = promotion_ready.send(());
-        Ok(task_id)
+        Ok((task_id, name))
     }
 
     async fn finish_tool_output(
@@ -147,18 +147,31 @@ impl TaskManager {
         }
     }
 
-    pub async fn delegate(self: &Arc<Self>, prompt: String) -> Result<BackgroundTaskRecord> {
+    pub async fn delegate(
+        self: &Arc<Self>,
+        name: String,
+        prompt: String,
+    ) -> Result<BackgroundTaskRecord> {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            bail!("agent task name must not be empty");
+        }
+        if name.chars().any(char::is_control) {
+            bail!("agent task name must not contain control characters");
+        }
+        if name.chars().count() > 64 {
+            bail!("agent task name must be at most 64 characters");
+        }
         if prompt.trim().is_empty() {
             bail!("agent prompt must not be empty");
         }
-        let profile = "general-task".to_owned();
         let child_run_id = Ulid::new().to_string();
         let task_id = self
-            .create_agent_task(profile.clone(), child_run_id.clone(), prompt.clone())
+            .create_agent_task(name.clone(), child_run_id.clone(), prompt.clone())
             .await?;
         let handle = self.launch_agent_task(
             task_id.clone(),
-            profile,
+            name,
             child_run_id,
             prompt,
             self.child_can_delegate,
@@ -208,7 +221,7 @@ impl TaskManager {
     fn launch_agent_task(
         self: &Arc<Self>,
         task_id: String,
-        profile: String,
+        task_name: String,
         child_run_id: String,
         prompt: String,
         child_can_delegate: bool,
@@ -219,13 +232,13 @@ impl TaskManager {
                 Ok(permit) => permit,
                 Err(error) => {
                     manager
-                        .finish_failed(&task_id, &profile, error.into())
+                        .finish_failed(&task_id, &task_name, error.into())
                         .await;
                     return;
                 }
             };
             if let Err(error) = manager.set_running(&task_id).await {
-                manager.finish_failed(&task_id, &profile, error).await;
+                manager.finish_failed(&task_id, &task_name, error).await;
                 return;
             }
             let _ = manager
@@ -234,7 +247,7 @@ impl TaskManager {
                     &manager.parent_run_id,
                     RuntimeEventKind::BackgroundTaskStarted {
                         task_id: task_id.clone(),
-                        name: profile.clone(),
+                        name: task_name.clone(),
                     },
                 ))
                 .await;
@@ -260,7 +273,7 @@ impl TaskManager {
                     Ok(child_exists) => child_exists,
                     Err(error) => {
                         manager
-                            .finish_failed(&task_id, &profile, error.into())
+                            .finish_failed(&task_id, &task_name, error.into())
                             .await;
                         return;
                     }
@@ -273,7 +286,7 @@ impl TaskManager {
                 }
                 .await;
                 if let Err(error) = validation {
-                    manager.finish_failed(&task_id, &profile, error).await;
+                    manager.finish_failed(&task_id, &task_name, error).await;
                     return;
                 }
             }
@@ -324,16 +337,16 @@ impl TaskManager {
                                     .await;
                             }
                             manager
-                                .finish_agent_output(&task_id, &profile, &child_run_id, output)
+                                .finish_agent_output(&task_id, &task_name, &child_run_id, output)
                                 .await;
                         }
-                        Err(error) => manager.finish_failed(&task_id, &profile, error).await,
+                        Err(error) => manager.finish_failed(&task_id, &task_name, error).await,
                     }
                 }
                 Err(error) => {
                     let message = format!("{error:#}");
                     manager
-                        .finish_failed(&task_id, &profile, anyhow::anyhow!(message.clone()))
+                        .finish_failed(&task_id, &task_name, anyhow::anyhow!(message.clone()))
                         .await;
                     let _ = manager
                         .events

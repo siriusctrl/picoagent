@@ -31,7 +31,7 @@ Changing the content while retaining the same id and hash metadata is invalid.
 
 ## Model-Facing Envelope
 
-Small UTF-8 results remain inline. When a result exceeds `inline_bytes`, the
+Small UTF-8 foreground results remain inline. When a result exceeds `inline_bytes`, the
 complete bytes are written to the artifact store and the model receives a
 compact `[Tool output]` envelope with:
 
@@ -61,9 +61,22 @@ envelope reports zero preview bytes and
 
 Artifact-reference overhead and ordinary conversation text still count toward
 the provider context, so deployments should set provider token limits
-appropriate to the model. Successful and failed foreground/background results
-share this per-result policy; a large error is an artifact-backed bounded result
-rather than an unbounded exception string in the next model request.
+appropriate to the model. Successful and failed foreground results share this
+per-result policy; a large error is an artifact-backed bounded result rather
+than an unbounded exception string in the next model request.
+
+### Background delivery
+
+Every terminal background result is persisted as an artifact, including small
+completed values and failure, cancellation, or interruption details. The parent
+receives one batched runtime message per ready set. Each `<background_task>`
+body is only the workspace-relative artifact path; it does not contain a
+preview or the original output. This keeps the runtime message bounded and
+makes reading the artifact an explicit model choice.
+
+A status-less background notice is only a running acknowledgement and has no
+result artifact. A terminal notice includes `status` and pairs its path with the
+same `ArtifactRef` in `message_metadata.jsonl`.
 
 ### History-query boundaries
 
@@ -80,11 +93,12 @@ foreground or background result in `message_metadata.jsonl`. The Chat-shaped
 the model-facing preview envelope. A foreground `ToolResult` is correlated by
 its provider `tool_call_id`. After promotion, the running acknowledgement still
 occupies that provider tool-result slot, while the later terminal background
-message is correlated by `task_id`; its artifact metadata retains the original
-provider call id. The local reader checks that the ref belongs to the current
-run and originating result call, streams the referenced candidate through
-SHA-256 verification, then performs its bounded `rg` search. Reused call ids do
-not create ambiguity, and same-length content mutation is rejected.
+message is correlated by `task_id`. The local reader follows the exact
+`ArtifactRef` paired with that message, streams the referenced candidate
+through SHA-256 verification, then performs its bounded `rg` search. Artifact
+matches return the exact path as well as the owning message ref, so a batched
+message with several task results is not ambiguous. Reused call ids do not
+create ambiguity, and same-length content mutation is rejected.
 
 ## Lifecycle
 

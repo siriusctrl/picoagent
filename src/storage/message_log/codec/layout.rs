@@ -36,10 +36,10 @@ pub(super) enum ContentLayout {
         provider: String,
         item: Value,
     },
-    BackgroundTaskResult {
+    BackgroundTask {
         task_id: String,
         name: String,
-        status: String,
+        status: Option<String>,
         start: usize,
         end: usize,
         content_start: usize,
@@ -70,6 +70,9 @@ pub(super) fn encode(message: &Message, native: &ChatMessage) -> Result<Vec<Cont
 }
 
 fn encode_user(message: &Message, expected: &str) -> Result<Vec<ContentLayout>> {
+    if crate::model::render_background_task_content(&message.content).is_some() {
+        return encode_background_tasks(message, expected);
+    }
     let mut rendered = String::new();
     let mut previous_was_reminder = false;
     let mut layout = Vec::with_capacity(message.content.len());
@@ -85,41 +88,61 @@ fn encode_user(message: &Message, expected: &str) -> Result<Vec<ContentLayout>> 
                     append_visible(&mut rendered, text, false, &mut previous_was_reminder);
                 layout.push(ContentLayout::Text { start, end });
             }
-            MessageContent::BackgroundTaskResult {
-                task_id,
-                name,
-                status,
-                content,
-                metadata,
-            } => {
-                let prefix = format!(
-                    "<background_task_result task_id=\"{task_id}\" name=\"{name}\" status=\"{status}\">\n"
-                );
-                let rendered_block = format!("{prefix}{content}\n</background_task_result>");
-                let (start, end) = append_visible(
-                    &mut rendered,
-                    &rendered_block,
-                    false,
-                    &mut previous_was_reminder,
-                );
-                let content_start = start + prefix.len();
-                layout.push(ContentLayout::BackgroundTaskResult {
-                    task_id: task_id.clone(),
-                    name: name.clone(),
-                    status: status.clone(),
-                    start,
-                    end,
-                    content_start,
-                    content_end: content_start + content.len(),
-                    metadata: metadata.clone(),
-                });
-            }
             _ => bail!("user messages contain only runtime context, text, or background results"),
         }
     }
     ensure!(
         rendered == expected,
         "user layout disagrees with Chat projection"
+    );
+    Ok(layout)
+}
+
+fn encode_background_tasks(message: &Message, expected: &str) -> Result<Vec<ContentLayout>> {
+    let mut cursor = "<runtime-reminder>\n".len();
+    let mut layout = Vec::with_capacity(message.content.len());
+    for (index, block) in message.content.iter().enumerate() {
+        let MessageContent::BackgroundTask {
+            task_id,
+            name,
+            status,
+            content,
+            metadata,
+        } = block
+        else {
+            bail!("background task notices cannot be mixed with other user content");
+        };
+        if index > 0 {
+            cursor += 2;
+        }
+        let rendered = crate::model::runtime::render_background_task_block(
+            task_id,
+            name,
+            status.as_deref(),
+            content,
+        );
+        let content_offset = rendered
+            .find('\n')
+            .map(|offset| offset + 1)
+            .context("background task rendering omitted its opening line")?;
+        let start = cursor;
+        let end = start + rendered.len();
+        let content_start = start + content_offset;
+        layout.push(ContentLayout::BackgroundTask {
+            task_id: task_id.clone(),
+            name: name.clone(),
+            status: status.clone(),
+            start,
+            end,
+            content_start,
+            content_end: content_start + content.len(),
+            metadata: metadata.clone(),
+        });
+        cursor = end;
+    }
+    ensure!(
+        crate::model::render_background_task_content(&message.content).as_deref() == Some(expected),
+        "background task layout disagrees with Chat projection"
     );
     Ok(layout)
 }
@@ -224,7 +247,7 @@ pub(super) fn decode(native: &ChatMessage, layout: Vec<ContentLayout>) -> Result
 }
 
 fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageContent>> {
-    layout
+    let decoded = layout
         .into_iter()
         .map(|entry| match entry {
             ContentLayout::RuntimeContext { start, end } => Ok(MessageContent::RuntimeReminder {
@@ -233,7 +256,7 @@ fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageC
             ContentLayout::Text { start, end } => Ok(MessageContent::Text {
                 text: span(content, start, end)?.to_owned(),
             }),
-            ContentLayout::BackgroundTaskResult {
+            ContentLayout::BackgroundTask {
                 task_id,
                 name,
                 status,
@@ -248,14 +271,17 @@ fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageC
                     "background result content span lies outside its block"
                 );
                 let raw = span(content, content_start, content_end)?.to_owned();
-                let expected = format!(
-                    "<background_task_result task_id=\"{task_id}\" name=\"{name}\" status=\"{status}\">\n{raw}\n</background_task_result>"
+                let expected = crate::model::runtime::render_background_task_block(
+                    &task_id,
+                    &name,
+                    status.as_deref(),
+                    &raw,
                 );
                 ensure!(
                     span(content, start, end)? == expected,
                     "background result envelope disagrees with its metadata"
                 );
-                Ok(MessageContent::BackgroundTaskResult {
+                Ok(MessageContent::BackgroundTask {
                     task_id,
                     name,
                     status,
@@ -265,7 +291,17 @@ fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageC
             }
             _ => bail!("user message metadata contains a non-user layout entry"),
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    if decoded
+        .iter()
+        .any(|entry| matches!(entry, MessageContent::BackgroundTask { .. }))
+    {
+        ensure!(
+            crate::model::render_background_task_content(&decoded).as_deref() == Some(content),
+            "background task reminder envelope disagrees with its metadata"
+        );
+    }
+    Ok(decoded)
 }
 
 fn decode_assistant(

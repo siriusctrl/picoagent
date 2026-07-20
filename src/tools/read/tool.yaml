@@ -4,8 +4,9 @@ description: >-
   and max_bytes bound the read. Use bash for directory listing or content
   discovery.
 returns: >-
-  The selected UTF-8 text. An explicit marker is appended when max_bytes
-  truncates the read; reduce limit or continue from a later line offset.
+  The selected UTF-8 text. If unread content remains because limit or max_bytes
+  was reached, an explicit truncation marker explains how to continue. A line
+  limit marker includes the next zero-based offset.
 input_schema:
   type: object
   properties:

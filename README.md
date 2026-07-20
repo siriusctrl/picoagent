@@ -360,21 +360,23 @@ those calls into the background task lifecycle, and returns their task ids; no
 tool is stopped or restarted. Tool-result messages are committed in the
 assistant's original call order and retain their original `tool_call_id`, even
 though completion events can arrive in another order. The model should put only
-independent calls in one batch and issue dependent work after seeing results. A
-result containing `task_id` is only the running acknowledgement for that direct
-call; dependent work must wait for its terminal background result.
+independent calls in one batch and issue dependent work after seeing results.
+The tool result is a status-less `<background_task>` notice containing the task
+id and name; it only acknowledges that work is running.
 
-`delegate` starts a `general-task` child asynchronously. The five `task_*`
-tools observe and control delegated children and automatically promoted direct
-tools. Terminal background results are appended as new runtime messages at the
-next model boundary and are correlated by `task_id`, preserving provider
-tool-call validity. Any artifact produced by a promoted call retains its
-original provider call id in metadata.
+`delegate` requires a short model-supplied name and starts a `general-task`
+child asynchronously. The five `task_*` tools observe and control delegated
+children and automatically promoted direct tools. Terminal background results
+are always preserved as artifacts. At the next model boundary, one user/runtime
+message batches every ready `<background_task status="...">` notice; each body
+is only the complete artifact path. The model must read that path before using
+the result. Internal task records retain promoted calls' original provider ids,
+so the provider sees exactly one result for each original tool call.
 
 The task-control calls are intentionally small:
 
 ```text
-delegate({"prompt":"inspect the failing tests and report the cause"})
+delegate({"name":"inspect_tests","prompt":"inspect the failing tests and report the cause"})
 task_status({"task_ids":[]})
 task_wait({"task_ids":["t1"]})
 task_inspect({"task_id":"t1","limit":6,"before_seq":42})

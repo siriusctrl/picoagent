@@ -40,6 +40,11 @@ pub(super) struct LocalArtifactSearch {
     verified_artifacts: HashSet<(String, String)>,
 }
 
+pub(super) struct ArtifactMatch {
+    pub path: String,
+    pub snippet: String,
+}
+
 impl LocalArtifactSearch {
     async fn search_artifact(
         &mut self,
@@ -124,10 +129,13 @@ impl LocalArtifactSearch {
         &mut self,
         artifacts: &[&ArtifactRef],
         pattern: &Regex,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ArtifactMatch>> {
         for artifact in artifacts {
             if let Some(snippet) = self.search_artifact(artifact, pattern).await? {
-                return Ok(Some(snippet));
+                return Ok(Some(ArtifactMatch {
+                    path: artifact.path.clone(),
+                    snippet,
+                }));
             }
         }
         Ok(None)

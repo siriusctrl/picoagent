@@ -78,3 +78,7 @@ Use these sections:
 - [ADR 0018: Limit tool output per result](0018-limit-tool-output-per-result.md)
 - [ADR 0019: Group related tool adapters without deriving
   names](0019-group-related-tool-adapters.md)
+- [ADR 0020: Unify background task runtime
+  notices](0020-unify-background-task-runtime-notices.md)
+- [ADR 0021: Mark an active compacted state as continuation
+  context](0021-compacted-state-continuation-reminder.md)

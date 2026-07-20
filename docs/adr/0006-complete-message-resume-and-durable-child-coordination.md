@@ -14,6 +14,11 @@ cancellation now settles durable cancelled state when the runtime remains
 available. Complete-message resume and separate child transcripts remain
 accepted.
 
+ADR 0020 later refines model-facing task delivery into unified runtime notices
+whose terminal bodies contain only complete artifact paths. The durable
+parent/child coordination and transcript-derived delivery decision here remain
+accepted.
+
 ## Context
 
 Main runs need to survive process loss. Subagents use the same runner and have

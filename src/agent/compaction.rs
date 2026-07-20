@@ -263,9 +263,18 @@ pub(crate) fn build_active_context(trajectory: &[TrajectoryMessage]) -> Result<V
         bail!("compaction cannot replace the initial runtime message")
     }
 
-    let mut active = Vec::with_capacity(trajectory.len() - first_kept + 2);
+    let mut active = Vec::with_capacity(trajectory.len() - first_kept + 3);
     active.push(initial.message.clone());
     active.push(state_record.message.clone());
+    active.push(Message {
+        role: Role::User,
+        content: vec![MessageContent::RuntimeReminder {
+            text: format!(
+                "<runtime-reminder>\n{}\n</runtime-reminder>",
+                agent_prompts().compaction_resume.trim()
+            ),
+        }],
+    });
     active.extend(
         trajectory[first_kept..]
             .iter()
@@ -380,13 +389,15 @@ pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
                 call_id, content, ..
             } => call_id.len() + content.len(),
             MessageContent::ProviderItem { item, .. } => item.to_string().len(),
-            MessageContent::BackgroundTaskResult {
+            MessageContent::BackgroundTask {
                 task_id,
                 name,
                 status,
                 content,
                 ..
-            } => task_id.len() + name.len() + status.len() + content.len(),
+            } => {
+                task_id.len() + name.len() + status.as_ref().map_or(0, String::len) + content.len()
+            }
         })
         .sum::<usize>();
     (bytes as u64).div_ceil(4)
@@ -538,11 +549,17 @@ mod tests {
         ];
 
         let active = build_active_context(&trajectory).unwrap();
-        assert_eq!(active.len(), 3);
+        assert_eq!(active.len(), 4);
         assert_eq!(active[0].visible_text(), "start");
         assert_eq!(active[1].visible_text(), state.message.visible_text());
         assert_eq!(active[1].role, Role::Assistant);
-        assert_eq!(active[2].visible_text(), "recent");
+        assert_eq!(active[2].role, Role::User);
+        let MessageContent::RuntimeReminder { text } = &active[2].content[0] else {
+            panic!("compaction continuation must be a runtime reminder")
+        };
+        assert!(text.contains("not a final answer"));
+        assert!(text.starts_with("<runtime-reminder>"));
+        assert_eq!(active[3].visible_text(), "recent");
         assert!(
             !active
                 .iter()

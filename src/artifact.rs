@@ -128,11 +128,31 @@ impl ArtifactStore {
     pub async fn persist_output(
         &self,
         context: &ToolContext,
+        output: RawToolOutput,
+    ) -> Result<ToolOutput> {
+        self.persist_output_inner(context, output, false).await
+    }
+
+    /// Persist a complete result even when it would normally fit inline.
+    /// Background task delivery uses this so its terminal notice can remain a
+    /// small, stable artifact reference.
+    pub async fn persist_artifact(
+        &self,
+        context: &ToolContext,
+        output: RawToolOutput,
+    ) -> Result<ToolOutput> {
+        self.persist_output_inner(context, output, true).await
+    }
+
+    async fn persist_output_inner(
+        &self,
+        context: &ToolContext,
         mut output: RawToolOutput,
+        force_artifact: bool,
     ) -> Result<ToolOutput> {
         if let Some(source_path) = output.source_path.take() {
             let bytes = tokio::fs::metadata(&source_path).await?.len();
-            if bytes <= self.policy.inline_limit_bytes as u64 {
+            if bytes <= self.policy.inline_limit_bytes as u64 && !force_artifact {
                 output.content = tokio::fs::read(&source_path).await?;
                 tokio::fs::remove_file(source_path).await?;
             } else {
@@ -141,7 +161,7 @@ impl ArtifactStore {
         }
         let textual =
             is_textual(&output.media_type) && std::str::from_utf8(&output.content).is_ok();
-        if output.content.len() <= self.policy.inline_limit_bytes && textual {
+        if output.content.len() <= self.policy.inline_limit_bytes && textual && !force_artifact {
             return Ok(ToolOutput {
                 preview: String::from_utf8_lossy(&output.content).into_owned(),
                 artifact: None,

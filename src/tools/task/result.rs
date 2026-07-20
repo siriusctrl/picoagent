@@ -10,7 +10,6 @@ pub(super) fn task_records(records: Vec<BackgroundTaskRecord>) -> Value {
 pub(super) fn task_record(record: BackgroundTaskRecord) -> Value {
     json!({
         "task_id": record.id,
-        "kind": record.kind,
         "name": record.name,
         "status": record.status(),
     })
@@ -33,7 +32,6 @@ mod tests {
             json!({
                 "tasks": [{
                     "task_id": "t1",
-                    "kind": "tool",
                     "name": "bash",
                     "status": "queued"
                 }]
@@ -53,7 +51,6 @@ mod tests {
             task_record(record),
             json!({
                 "task_id": "t1",
-                "kind": "tool",
                 "name": "bash",
                 "status": "queued"
             })

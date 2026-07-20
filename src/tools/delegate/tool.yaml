@@ -4,13 +4,19 @@ description: >-
   starts asynchronously; continue independent work or use task_wait before
   consuming its result.
 returns: >-
-  JSON with task_id and status. The terminal result is appended as a durable
-  background-result message at a later model boundary.
+  A status-less `<background_task>` runtime notice with the task id and name.
+  This only acknowledges background execution. A later terminal notice carries
+  the complete result artifact path.
 input_schema:
   type: object
   properties:
+    name:
+      type: string
+      minLength: 1
+      maxLength: 64
+      description: Short stable label for recognizing this task later
     prompt:
       type: string
       description: Complete task and all context the subagent needs
-  required: [prompt]
+  required: [name, prompt]
   additionalProperties: false

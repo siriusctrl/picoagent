@@ -213,7 +213,7 @@ fn anthropic_message(message: &Message) -> Value {
                     | MessageContent::ToolResult { .. }
                     | MessageContent::Reasoning { .. }
                     | MessageContent::ProviderItem { .. }
-                    | MessageContent::BackgroundTaskResult { .. } => Value::Null,
+                    | MessageContent::BackgroundTask { .. } => Value::Null,
                 })
                 .filter(|value| !value.is_null())
                 .collect();
@@ -484,10 +484,10 @@ mod tests {
             system: String::new(),
             messages: vec![Message {
                 role: Role::User,
-                content: vec![MessageContent::BackgroundTaskResult {
+                content: vec![MessageContent::BackgroundTask {
                     task_id: "task-1".into(),
                     name: "general-task".into(),
-                    status: "completed".into(),
+                    status: Some("completed".into()),
                     content: "done".into(),
                     metadata: crate::artifact::ResultMetadata::empty(),
                 }],

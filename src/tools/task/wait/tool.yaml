@@ -3,9 +3,10 @@ description: >-
   Wait for selected background tasks for one bounded interval. Omit task_ids to
   wait on every task. Waiting never stops unfinished work.
 returns: >-
-  JSON `{tasks:[{task_id,kind,name,status}]}`. A task may still be queued or
+  JSON `{tasks:[{task_id,name,status}]}`. A task may still be queued or
   running when the bounded wait interval expires. Terminal content is not
-  included here; it arrives separately as a durable background-result message.
+  included here; it arrives separately as a terminal `<background_task>`
+  runtime notice containing the complete artifact path.
 input_schema:
   type: object
   properties:

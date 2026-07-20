@@ -15,6 +15,10 @@ returns: >-
   that message. An artifact match may not appear in the bounded message
   preview returned by `history_read`.
 
+  - `artifact`: the exact workspace-relative result path when `source` is
+  `artifact`; absent for inline message matches. Read this path to inspect the
+  matching complete result.
+
   - `snippet`: a bounded excerpt around the match.
 
   If `truncated` is true, only the configured number of newest matches is

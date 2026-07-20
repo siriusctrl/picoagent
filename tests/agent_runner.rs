@@ -61,6 +61,14 @@ fn first_user_text(request: &ModelRequest) -> &str {
         .unwrap_or_default()
 }
 
+fn background_task_id(content: &str) -> Option<String> {
+    content
+        .split_once("task_id=\"")?
+        .1
+        .split_once('"')
+        .map(|(task_id, _)| task_id.to_owned())
+}
+
 struct ResumeProvider {
     calls: Arc<AtomicUsize>,
     require_interrupted_result: bool,
@@ -237,9 +245,12 @@ impl ModelProvider for CompletedPromotionRecoveryProvider {
                 _ => None,
             })
             .context("resume omitted the promoted tool acknowledgement")?;
-        let acknowledgement_json: Value = serde_json::from_str(acknowledgement.0)?;
         if *acknowledgement.1
-            || acknowledgement_json != json!({"task_id": "t1", "status": "completed"})
+            || !acknowledgement
+                .0
+                .contains("<background_task task_id=\"t1\"")
+            || !acknowledgement.0.contains("name=\"side_effect\"")
+            || acknowledgement.0.contains("status=")
         {
             bail!("resume synthesized the wrong acknowledgement: {acknowledgement:?}");
         }
@@ -250,12 +261,15 @@ impl ModelProvider for CompletedPromotionRecoveryProvider {
             .any(|content| {
                 matches!(
                     content,
-                    MessageContent::BackgroundTaskResult {
+                    MessageContent::BackgroundTask {
                         task_id,
                         status,
                         content,
                         ..
-                    } if task_id == "t1" && status == "completed" && content.contains("completed output")
+                    } if task_id == "t1"
+                        && status.as_deref() == Some("completed")
+                        && content.starts_with(".pico/runs/")
+                        && content.contains("/artifacts/background-t1-")
                 )
             });
         if !delivered {
@@ -317,7 +331,7 @@ async fn resume_reconstructs_a_missing_promotion_ack_from_its_terminal_task() {
     tokio::fs::write(
         tasks.join("t1.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 5,
+            "version": 6,
             "id": "t1",
             "kind": "tool",
             "name": "side_effect",
@@ -407,7 +421,10 @@ async fn resume_schema_mismatch_does_not_reconcile_background_tasks() {
         max_parallel_subagents: 1,
         wait_timeout_seconds: 1,
     });
-    let task = manager.delegate("hang child".to_owned()).await.unwrap();
+    let task = manager
+        .delegate("hang_child".to_owned(), "hang child".to_owned())
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             let status = manager
@@ -774,12 +791,12 @@ impl ModelProvider for DelegatingProvider {
                     ToolCall {
                         id: "delegate-one".to_owned(),
                         name: "delegate".to_owned(),
-                        arguments: json!({"prompt": "child one"}),
+                        arguments: json!({"name": "child_one", "prompt": "child one"}),
                     },
                     ToolCall {
                         id: "delegate-two".to_owned(),
                         name: "delegate".to_owned(),
-                        arguments: json!({"prompt": "child two"}),
+                        arguments: json!({"name": "child_two", "prompt": "child two"}),
                     },
                 ],
                 ModelUsage::default(),
@@ -851,10 +868,53 @@ async fn subagents_reuse_the_runner_and_report_failed_children() {
         messages
             .iter()
             .flat_map(|message| &message.content)
-            .filter(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
+            .filter(|content| matches!(content, MessageContent::BackgroundTask { .. }))
             .count(),
         2
     );
+    let terminal_messages = messages
+        .iter()
+        .filter(|message| {
+            message.role == Role::User
+                && message
+                    .content
+                    .iter()
+                    .any(|content| matches!(content, MessageContent::BackgroundTask { .. }))
+        })
+        .collect::<Vec<_>>();
+    assert!(!terminal_messages.is_empty());
+    assert!(terminal_messages.len() <= 2);
+    assert!(terminal_messages.iter().all(|message| {
+        message.content.iter().all(|content| {
+            matches!(
+                content,
+                MessageContent::BackgroundTask {
+                    status: Some(_),
+                    ..
+                }
+            )
+        })
+    }));
+    for (path, artifact) in messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter_map(|content| match content {
+            MessageContent::BackgroundTask {
+                status: Some(_),
+                content,
+                metadata,
+                ..
+            } => Some((content, metadata.artifact.as_ref())),
+            _ => None,
+        })
+    {
+        let artifact = artifact.expect("terminal task notice omitted artifact metadata");
+        assert_eq!(path, &artifact.path);
+        let body = tokio::fs::read_to_string(workspace.path().join(path))
+            .await
+            .unwrap();
+        assert!(!body.is_empty());
+    }
     assert!(Path::new(&store.paths(&parent.run_id).final_output).is_file());
 }
 
@@ -885,14 +945,14 @@ impl ModelProvider for LastStepBackgroundProvider {
             message
                 .content
                 .iter()
-                .any(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
+                .any(|content| matches!(content, MessageContent::BackgroundTask { .. }))
         });
         if !has_delegate_result {
             return Ok(tool_response(
                 vec![ToolCall {
                     id: "delegate-edge".to_owned(),
                     name: "delegate".to_owned(),
-                    arguments: json!({"prompt": "slow child"}),
+                    arguments: json!({"name": "slow_child", "prompt": "slow child"}),
                 }],
                 ModelUsage::default(),
             ));
@@ -993,10 +1053,7 @@ impl ModelProvider for WaitingProvider {
             .iter()
             .find(|(call_id, _)| *call_id == "slow-call")
         {
-            let task_id = serde_json::from_str::<Value>(content)?["task_id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_owned();
+            let task_id = background_task_id(content).context("task notice omitted task_id")?;
             return Ok(tool_response(
                 vec![ToolCall {
                     id: "wait-call".to_owned(),
@@ -1066,9 +1123,7 @@ async fn task_wait_joins_a_background_tool_without_duplicate_result_injection() 
         .find_map(|content| match content {
             MessageContent::ToolResult {
                 call_id, content, ..
-            } if call_id == "slow-call" => serde_json::from_str::<Value>(content).ok()?["task_id"]
-                .as_str()
-                .map(str::to_owned),
+            } if call_id == "slow-call" => background_task_id(content),
             _ => None,
         })
         .unwrap();
@@ -1076,7 +1131,7 @@ async fn task_wait_joins_a_background_tool_without_duplicate_result_injection() 
         .iter()
         .flat_map(|message| &message.content)
         .find_map(|content| match content {
-            MessageContent::BackgroundTaskResult {
+            MessageContent::BackgroundTask {
                 task_id, metadata, ..
             } => Some((task_id.clone(), metadata.artifact.as_ref()?.call_id.clone())),
             _ => None,
@@ -1266,7 +1321,7 @@ impl ModelProvider for SteeringProvider {
             message
                 .content
                 .iter()
-                .any(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
+                .any(|content| matches!(content, MessageContent::BackgroundTask { .. }))
         }) {
             return Ok(text_response(
                 "parent received steered child",
@@ -1280,8 +1335,7 @@ impl ModelProvider for SteeringProvider {
             let task_id = tool_results
                 .iter()
                 .find(|(call_id, _)| *call_id == "delegate-steered-child")
-                .and_then(|(_, content)| serde_json::from_str::<Value>(content).ok())
-                .and_then(|value| value["task_id"].as_str().map(str::to_owned))
+                .and_then(|(_, content)| background_task_id(content))
                 .context("delegate result omitted task_id")?;
             return Ok(tool_response(
                 vec![ToolCall {
@@ -1297,10 +1351,7 @@ impl ModelProvider for SteeringProvider {
             .find(|(call_id, _)| *call_id == "delegate-steered-child")
         {
             self.child_started.notified().await;
-            let task_id = serde_json::from_str::<Value>(content)?["task_id"]
-                .as_str()
-                .context("delegate result omitted task_id")?
-                .to_owned();
+            let task_id = background_task_id(content).context("delegate result omitted task_id")?;
             return Ok(tool_response(
                 vec![ToolCall {
                     id: "steer-call".to_owned(),
@@ -1317,7 +1368,7 @@ impl ModelProvider for SteeringProvider {
             vec![ToolCall {
                 id: "delegate-steered-child".to_owned(),
                 name: "delegate".to_owned(),
-                arguments: json!({"prompt": "child steer target"}),
+                arguments: json!({"name": "steer_target", "prompt": "child steer target"}),
             }],
             ModelUsage::default(),
         ))

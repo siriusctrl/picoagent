@@ -114,6 +114,17 @@ tool contract, vector retrieval without a demonstrated need, and relying on a
 provider-specific server-side compaction API. See
 [ADR 0012](adr/0012-record-compaction-as-messages.md).
 
+## Uniform Background Delivery
+
+Delegated children and promoted tools use one runtime notice shape. A
+status-less task block means work is running; a terminal block contains only
+the complete result artifact path. Ready terminal tasks share one runtime
+message, and internal kind or provider call ids stay out of model-facing XML.
+
+Rejected: separate start/result protocols, inline terminal previews, and one
+runtime message per ready task. See
+[ADR 0020](adr/0020-unify-background-task-runtime-notices.md).
+
 ## Artifact-First Tool Output
 
 Large results are preserved in full but represented in model context by a small

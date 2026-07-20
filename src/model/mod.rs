@@ -12,6 +12,7 @@ mod openai_oauth_credentials;
 mod openai_oauth_device;
 mod openai_request;
 mod openai_stream;
+pub(crate) mod runtime;
 
 pub mod anthropic_compatible;
 pub mod openai_compatible;
@@ -23,6 +24,7 @@ pub use openai_oauth::{
     DEFAULT_OPENAI_OAUTH_BASE_URL, DeviceCode, OAuthCredentials, OpenAiOAuthOptions,
     OpenAiOAuthProvider,
 };
+pub(crate) use runtime::{background_task_started_reminder, render_background_task_content};
 
 pub mod echo;
 
@@ -65,10 +67,12 @@ pub enum MessageContent {
         provider: String,
         item: Value,
     },
-    BackgroundTaskResult {
+    BackgroundTask {
         task_id: String,
         name: String,
-        status: String,
+        /// Terminal state when this notice carries a result artifact. A
+        /// status-less notice only reports that the task remains active.
+        status: Option<String>,
         content: String,
         metadata: ResultMetadata,
     },

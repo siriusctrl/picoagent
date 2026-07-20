@@ -7,7 +7,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::artifact::ResultMetadata;
 
-const TASK_RECORD_VERSION: u32 = 5;
+const TASK_RECORD_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -41,7 +41,7 @@ pub struct BackgroundTaskRecord {
     pub id: String,
     /// `agent` or `tool`.
     pub kind: String,
-    /// Agent profile or tool name.
+    /// Model-supplied agent task label or promoted tool name.
     pub name: String,
     /// Original provider tool-call id for a promoted ordinary tool. This is
     /// absent for delegated agent tasks.
@@ -86,7 +86,7 @@ impl BackgroundTaskRecord {
 
     pub(super) fn queued_agent(
         id: String,
-        profile: String,
+        name: String,
         child_run_id: String,
         prompt: String,
         child_can_delegate: bool,
@@ -95,7 +95,7 @@ impl BackgroundTaskRecord {
             version: TASK_RECORD_VERSION,
             id,
             kind: "agent".to_owned(),
-            name: profile,
+            name,
             origin_call_id: None,
             state: BackgroundTaskState::Queued,
             result: None,
@@ -124,7 +124,10 @@ impl BackgroundTaskRecord {
                         self.error.as_deref().unwrap_or("unknown error")
                     )
                 }),
-            BackgroundTaskState::Cancelled => "background task was cancelled".to_owned(),
+            BackgroundTaskState::Cancelled => format!(
+                "background task was cancelled: {}",
+                self.error.as_deref().unwrap_or("no reason recorded")
+            ),
             BackgroundTaskState::Interrupted => format!(
                 "background task was interrupted; its side effects are unknown: {}",
                 self.error.as_deref().unwrap_or("process stopped")
@@ -160,6 +163,11 @@ impl BackgroundTaskRecord {
             self.version
         );
         ensure!(!self.id.is_empty(), "task id must not be empty");
+        ensure!(!self.name.trim().is_empty(), "task name must not be empty");
+        ensure!(
+            !self.name.chars().any(char::is_control),
+            "task name must not contain control characters"
+        );
         match self.kind.as_str() {
             "tool" => {
                 ensure!(
