@@ -98,15 +98,16 @@ speculative `v1` suffix. See
 ## Append-Only Local Compaction
 
 Compaction reduces the active model request without changing the raw evidence:
-complete messages remain append-only, while model-generated summaries are
-separate append-only checkpoints. Exact compacted details remain available
+complete messages remain append-only, and successful compaction instructions
+and assistant states are recorded in the same Chat-compatible log. Exact
+compacted details remain available
 through read-only regex search and ref-centered reads; the retrieval interface
 can be backed by local files or a future remote store.
 
 Rejected: destructive transcript rewriting, cursored pagination in the initial
 tool contract, vector retrieval without a demonstrated need, and relying on a
 provider-specific server-side compaction API. See
-[ADR 0003](adr/0003-append-only-local-compaction-and-history-retrieval.md).
+[ADR 0012](adr/0012-record-compaction-as-messages.md).
 
 ## Artifact-First Tool Output
 
@@ -163,12 +164,11 @@ modules.
 The built-in system prompt contains only product identity and stable operating
 rules. Workspace `AGENTS.md`, skill metadata, memory paths, and delegated-task
 instructions are snapshotted into a synthetic runtime reminder at the start of
-each run. Compacted-history recovery guidance appears only beside an actual
-synthetic checkpoint boundary; it never changes the normal system prompt. Tool
+each run. Tool
 descriptions remain in sorted tool schemas rather than being duplicated in the
 system prompt. Core history schemas are present from the first normal call.
 Root and delegating/leaf GeneralTask each freeze their assembled registry for
-the run; checkpoint summaries use a separate tool-free profile. Optional
+the run; compaction reuses the same system and schemas. Optional
 capabilities and a GeneralTask's depth variant are resolved before its run
 starts rather than changing its schema set mid-run. Memory paths do not alter
 the tool schema.

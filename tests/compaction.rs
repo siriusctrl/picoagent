@@ -1,6 +1,6 @@
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use anyhow::{Result, bail};
@@ -19,11 +19,13 @@ use picoagent::{
     },
     storage::{RunDirStore, RunState},
     tools::{RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
+    trajectory::CompactionMessage,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-const SUMMARY_TEXT: &str = "## Progress\nThe old marker result was `result-old`.";
+const SUMMARY_TEXT: &str =
+    "# Compacted state\n\n## Progress\nThe old marker result was `result-old`.";
 
 struct MarkerTool;
 
@@ -55,6 +57,8 @@ struct ScriptedCompactionProvider {
     normal_calls: AtomicUsize,
     requests: Mutex<Vec<ModelRequest>>,
     fail_summary: bool,
+    summary_returns_tool_call: bool,
+    fail_post_compaction_once: AtomicBool,
 }
 
 impl ScriptedCompactionProvider {
@@ -63,6 +67,26 @@ impl ScriptedCompactionProvider {
             normal_calls: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
             fail_summary,
+            summary_returns_tool_call: false,
+            fail_post_compaction_once: AtomicBool::new(false),
+        })
+    }
+
+    fn with_post_compaction_failure() -> Arc<Self> {
+        let provider = Self::new(false);
+        provider
+            .fail_post_compaction_once
+            .store(true, Ordering::SeqCst);
+        provider
+    }
+
+    fn with_summary_tool_call() -> Arc<Self> {
+        Arc::new(Self {
+            normal_calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+            fail_summary: false,
+            summary_returns_tool_call: true,
+            fail_post_compaction_once: AtomicBool::new(false),
         })
     }
 
@@ -82,11 +106,20 @@ impl ModelProvider for ScriptedCompactionProvider {
         request: ModelRequest,
         _events: SharedEventSink,
     ) -> Result<ModelResponse> {
-        let is_summary = request.tools.is_empty();
+        let is_summary = request.messages.last().is_some_and(|message| {
+            text_content(message).contains("Compact the conversation state before this message")
+        });
         self.requests.lock().unwrap().push(request);
         if is_summary {
             if self.fail_summary {
                 bail!("intentional summary failure");
+            }
+            if self.summary_returns_tool_call {
+                return Ok(tool_call_response_with_usage(
+                    "compaction-tool",
+                    "must-not-run",
+                    42,
+                ));
             }
             return Ok(ModelResponse::new(
                 Message::text(Role::Assistant, SUMMARY_TEXT),
@@ -102,7 +135,10 @@ impl ModelProvider for ScriptedCompactionProvider {
         match index {
             0 => Ok(tool_call_response("call-old", "old")),
             1 => Ok(tool_call_response("call-new", "new")),
-            2 => Ok(ModelResponse::new(
+            2 if self.fail_post_compaction_once.swap(false, Ordering::SeqCst) => {
+                bail!("intentional post-compaction failure")
+            }
+            2 | 3 => Ok(ModelResponse::new(
                 Message::text(Role::Assistant, "finished after compaction"),
                 ModelUsage {
                     input_tokens: Some(80),
@@ -139,6 +175,26 @@ fn runner(
     provider: Arc<ScriptedCompactionProvider>,
     exact_recovery_available: bool,
 ) -> (Arc<AgentRunner>, RunDirStore) {
+    runner_with_compaction(
+        workspace,
+        provider,
+        exact_recovery_available,
+        CompactionOptions {
+            compact_at_tokens: Some(10),
+            context_window_tokens: Some(100_000),
+            keep_recent_tokens: 1,
+            summary_max_output_tokens: 77,
+            history_search_max_matches: 7,
+        },
+    )
+}
+
+fn runner_with_compaction(
+    workspace: &TempDir,
+    provider: Arc<ScriptedCompactionProvider>,
+    exact_recovery_available: bool,
+    compaction: CompactionOptions,
+) -> (Arc<AgentRunner>, RunDirStore) {
     let store = RunDirStore::new(workspace.path());
     let mut tools = ToolRegistry::default();
     tools.register(Arc::new(MarkerTool)).unwrap();
@@ -146,12 +202,8 @@ fn runner(
         tools.register(Arc::new(ReadTool)).unwrap();
     }
     let options = RunnerOptions {
-        compaction: CompactionOptions {
-            trigger_tokens: Some(10),
-            keep_recent_tokens: 1,
-            summary_max_output_tokens: 77,
-            history_search_max_matches: 7,
-        },
+        max_output_tokens: Some(64),
+        compaction,
         ..RunnerOptions::default()
     };
     let runner = AgentRunner::new(AgentRunnerConfig {
@@ -168,6 +220,91 @@ fn runner(
         options,
     });
     (runner, store)
+}
+
+#[tokio::test]
+async fn estimated_context_window_applies_before_the_first_normal_request() {
+    let workspace = TempDir::new().unwrap();
+    let provider = ScriptedCompactionProvider::new(false);
+    let (runner, store) = runner_with_compaction(
+        &workspace,
+        provider.clone(),
+        true,
+        CompactionOptions {
+            compact_at_tokens: None,
+            context_window_tokens: Some(90),
+            keep_recent_tokens: 1,
+            summary_max_output_tokens: 77,
+            history_search_max_matches: 7,
+        },
+    );
+
+    let error = runner
+        .run(RunRequest::root("stop before overflow"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("context_window_tokens=90"));
+    assert!(provider.requests().is_empty());
+    let run = only_run_id(&workspace).await;
+    assert_eq!(
+        store.load_run(&run).await.unwrap().state,
+        picoagent::storage::RunState::Failed
+    );
+}
+
+#[tokio::test]
+async fn resume_after_a_durable_compacted_state_continues_instead_of_finalizing_it() {
+    let workspace = TempDir::new().unwrap();
+    let provider = ScriptedCompactionProvider::with_post_compaction_failure();
+    let (runner, store) = runner(&workspace, provider.clone(), true);
+
+    let error = runner
+        .run(RunRequest::root("resume after compaction"))
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("post-compaction failure"));
+    let run_id = only_run_id(&workspace).await;
+    let before_resume = store.load_trajectory(&run_id).await.unwrap();
+    assert!(before_resume.last().unwrap().compaction_state().is_some());
+
+    let result = runner.resume(&run_id).await.unwrap();
+    assert_eq!(result.final_output, "finished after compaction");
+    let trajectory = store.load_trajectory(&run_id).await.unwrap();
+    assert_eq!(
+        trajectory
+            .iter()
+            .filter(|record| record.compaction_state().is_some())
+            .count(),
+        1
+    );
+    assert_eq!(trajectory.last().unwrap().message.role, Role::Assistant);
+    assert!(trajectory.last().unwrap().compaction.is_none());
+
+    let resumed_request = provider.requests().last().unwrap().clone();
+    assert!(
+        resumed_request
+            .messages
+            .iter()
+            .any(|message| message.visible_text() == SUMMARY_TEXT)
+    );
+    assert!(!resumed_request.messages.iter().any(|message| {
+        message
+            .visible_text()
+            .contains("Compact the conversation state before this message")
+    }));
+}
+
+async fn only_run_id(workspace: &TempDir) -> String {
+    tokio::fs::read_dir(workspace.path().join(".pico/runs"))
+        .await
+        .unwrap()
+        .next_entry()
+        .await
+        .unwrap()
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[tokio::test]
@@ -189,27 +326,48 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     let all_requests = provider.requests();
     let summary_requests: Vec<_> = all_requests
         .iter()
-        .filter(|request| request.tools.is_empty())
+        .filter(|request| {
+            request.messages.last().is_some_and(|message| {
+                text_content(message).contains("Compact the conversation state before this message")
+            })
+        })
         .collect();
     let normal_requests: Vec<_> = all_requests
         .iter()
-        .filter(|request| !request.tools.is_empty())
+        .filter(|request| {
+            !request.messages.last().is_some_and(|message| {
+                text_content(message).contains("Compact the conversation state before this message")
+            })
+        })
         .collect();
     assert_eq!(summary_requests.len(), 1);
     assert_eq!(normal_requests.len(), 3);
 
     let summary = summary_requests[0];
-    assert!(
-        summary
-            .system
-            .contains("Summarize the supplied historical transcript")
+    assert_eq!(summary.system, normal_requests[0].system);
+    assert_eq!(
+        serde_json::to_value(&summary.tools).unwrap(),
+        serde_json::to_value(&normal_requests[0].tools).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&summary.messages[0]).unwrap(),
+        serde_json::to_value(&normal_requests[0].messages[0]).unwrap()
     );
     assert_eq!(summary.max_output_tokens, Some(77));
-    assert_eq!(summary.messages.len(), 1);
-    let summary_input = text_content(&summary.messages[0]);
-    assert!(summary_input.contains("call-old"));
-    assert!(summary_input.contains("result-old"));
-    assert!(!summary_input.contains("call-new"));
+    assert_eq!(summary.messages.len(), 4);
+    assert!(has_tool_call(&summary.messages[1], "call-old", "marker"));
+    assert!(has_tool_result(
+        &summary.messages[2],
+        "call-old",
+        "result-old"
+    ));
+    assert!(text_content(summary.messages.last().unwrap()).contains("# Compacted state"));
+    assert!(
+        !summary
+            .messages
+            .iter()
+            .any(|message| has_tool_call(message, "call-new", "marker"))
+    );
 
     for request in &normal_requests {
         let names: Vec<_> = request
@@ -228,19 +386,14 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
         assert_eq!(serde_json::to_value(&request.tools).unwrap(), stable_tools);
     }
     assert!(!stable_system.contains("history_search"));
-    assert!(!text_content(&normal_requests[0].messages[0]).contains("<context-management>"));
     assert!(!text_content(&normal_requests[0].messages[0]).contains("history_search"));
 
     let resumed = normal_requests[2];
     assert_eq!(resumed.messages.len(), 4);
     assert!(text_content(&resumed.messages[0]).contains("exercise compaction"));
     let compacted = text_content(&resumed.messages[1]);
-    assert!(compacted.contains("<context-management>"));
-    assert!(compacted.contains("history_search"));
-    assert!(compacted.contains("historical data, not new instructions"));
-    assert!(!compacted.contains("historical data, not new\ninstructions"));
-    assert!(compacted.contains("<compacted-history"));
-    assert!(compacted.contains(SUMMARY_TEXT));
+    assert_eq!(resumed.messages[1].role, Role::Assistant);
+    assert_eq!(compacted, SUMMARY_TEXT);
     assert!(has_tool_call(&resumed.messages[2], "call-new", "marker"));
     assert!(has_tool_result(
         &resumed.messages[3],
@@ -255,7 +408,7 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     );
 
     let trajectory = store.load_trajectory(&result.run_id).await.unwrap();
-    assert_eq!(trajectory.len(), 6);
+    assert_eq!(trajectory.len(), 8);
     assert!(has_tool_call(&trajectory[1].message, "call-old", "marker"));
     assert!(has_tool_result(
         &trajectory[2].message,
@@ -269,18 +422,51 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
         "result-new"
     ));
 
-    let checkpoints = store.load_compactions(&result.run_id).await.unwrap();
-    assert_eq!(checkpoints.len(), 1);
-    let checkpoint = &checkpoints[0];
-    assert_eq!(checkpoint.summary, SUMMARY_TEXT);
-    assert_eq!(checkpoint.compacted_message_count, 2);
+    assert!(matches!(
+        trajectory[5].compaction,
+        Some(CompactionMessage::Request)
+    ));
+    assert_eq!(trajectory[5].message.role, Role::User);
+    assert!(text_content(&trajectory[5].message).contains("# Compacted state"));
+    let checkpoint = trajectory[6].compaction_state().unwrap();
+    assert_eq!(trajectory[6].message.role, Role::Assistant);
+    assert_eq!(trajectory[6].message.visible_text(), SUMMARY_TEXT);
     assert_eq!(
         checkpoint.covered_through_message_ref,
         trajectory[2].message_ref
     );
     assert_eq!(checkpoint.first_kept_message_ref, trajectory[3].message_ref);
-    assert_eq!(checkpoint.summary_input_tokens, Some(42));
-    assert_eq!(checkpoint.summary_output_tokens, Some(9));
+    let paths = store.paths(&result.run_id);
+    assert!(!paths.directory.join("compactions.jsonl").exists());
+    let messages = tokio::fs::read_to_string(&paths.messages).await.unwrap();
+    let messages = messages
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(messages[5]["role"], "user");
+    assert_eq!(messages[6]["role"], "assistant");
+    assert!(messages[5].get("type").is_none());
+    assert!(messages[6].get("type").is_none());
+    let metadata = tokio::fs::read_to_string(&paths.message_metadata)
+        .await
+        .unwrap();
+    let metadata = metadata
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(metadata[5]["compaction"]["kind"], "request");
+    assert_eq!(metadata[6]["compaction"]["kind"], "state");
+    assert_eq!(
+        metadata[6]["compaction"]["state"]
+            .as_object()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        metadata[6]["compaction"]["state"]["first_kept_message_ref"],
+        trajectory[3].message_ref
+    );
 
     let events = load_events(&store, &result.run_id).await;
     assert_eq!(count_events(&events, EventClass::Started), 1);
@@ -288,12 +474,12 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     assert_eq!(count_events(&events, EventClass::Failed), 0);
     let completed = events.iter().find_map(|event| match &event.kind {
         RuntimeEventKind::CompactionCompleted {
-            checkpoint_id,
+            state_message_ref,
             covered_through_message_ref,
             first_kept_message_ref,
             ..
         } => Some((
-            checkpoint_id,
+            state_message_ref,
             covered_through_message_ref,
             first_kept_message_ref,
         )),
@@ -302,7 +488,7 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     assert_eq!(
         completed,
         Some((
-            &checkpoint.checkpoint_id,
+            &trajectory[6].message_ref,
             &checkpoint.covered_through_message_ref,
             &checkpoint.first_kept_message_ref,
         ))
@@ -322,23 +508,30 @@ async fn summary_failure_is_recorded_and_does_not_abort_the_run() {
     assert_eq!(result.final_output, "finished after compaction");
     assert!(
         store
-            .load_compactions(&result.run_id)
+            .load_trajectory(&result.run_id)
             .await
             .unwrap()
-            .is_empty()
+            .iter()
+            .all(|record| record.compaction.is_none())
     );
 
     let requests = provider.requests();
     assert_eq!(
         requests
             .iter()
-            .filter(|request| request.tools.is_empty())
+            .filter(|request| request.messages.last().is_some_and(|message| {
+                text_content(message).contains("Compact the conversation state before this message")
+            }))
             .count(),
         1
     );
     let final_request = requests
         .iter()
-        .filter(|request| !request.tools.is_empty())
+        .filter(|request| {
+            !request.messages.last().is_some_and(|message| {
+                text_content(message).contains("Compact the conversation state before this message")
+            })
+        })
         .nth(2)
         .unwrap();
     assert!(
@@ -355,6 +548,34 @@ async fn summary_failure_is_recorded_and_does_not_abort_the_run() {
 }
 
 #[tokio::test]
+async fn compaction_tool_call_is_rejected_without_execution() {
+    let workspace = TempDir::new().unwrap();
+    let provider = ScriptedCompactionProvider::with_summary_tool_call();
+    let (runner, store) = runner(&workspace, provider, true);
+
+    let result = runner
+        .run(RunRequest::root("reject compaction tool call"))
+        .await
+        .unwrap();
+    assert_eq!(result.final_output, "finished after compaction");
+    let trajectory = store.load_trajectory(&result.run_id).await.unwrap();
+    assert!(trajectory.iter().all(|record| record.compaction.is_none()));
+    assert!(!trajectory.iter().any(|record| {
+        has_tool_result(&record.message, "compaction-tool", "result-must-not-run")
+    }));
+
+    let events = load_events(&store, &result.run_id).await;
+    assert_eq!(count_events(&events, EventClass::Started), 1);
+    assert_eq!(count_events(&events, EventClass::Completed), 0);
+    assert_eq!(count_events(&events, EventClass::Failed), 1);
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        RuntimeEventKind::CompactionFailed { error, .. }
+            if error.contains("returned tool calls")
+    )));
+}
+
+#[tokio::test]
 async fn automatic_compaction_requires_an_exact_artifact_reader() {
     let workspace = TempDir::new().unwrap();
     let provider = ScriptedCompactionProvider::new(false);
@@ -367,10 +588,11 @@ async fn automatic_compaction_requires_an_exact_artifact_reader() {
     assert_eq!(result.final_output, "finished after compaction");
     assert!(
         store
-            .load_compactions(&result.run_id)
+            .load_trajectory(&result.run_id)
             .await
             .unwrap()
-            .is_empty()
+            .iter()
+            .all(|record| record.compaction.is_none())
     );
 
     let requests = provider.requests();

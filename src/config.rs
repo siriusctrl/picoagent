@@ -29,9 +29,11 @@ pub struct AppConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CompactionConfig {
-    /// Provider-reported input-token threshold that enables automatic compaction.
+    /// Tracked input-token threshold that enables automatic compaction.
     /// `None` keeps compaction disabled because provider context windows vary.
-    pub trigger_tokens: Option<u64>,
+    pub compact_at_tokens: Option<u64>,
+    /// Nominal full context window checked with a provider-neutral estimate.
+    pub context_window_tokens: Option<u64>,
     pub keep_recent_tokens: u64,
     pub summary_max_output_tokens: u32,
     pub history_search_max_matches: usize,
@@ -40,7 +42,8 @@ pub struct CompactionConfig {
 impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
-            trigger_tokens: None,
+            compact_at_tokens: None,
+            context_window_tokens: None,
             keep_recent_tokens: 20_000,
             summary_max_output_tokens: 4_096,
             history_search_max_matches: 50,
@@ -344,8 +347,39 @@ impl AppConfig {
                 "`tasks.wait_timeout_seconds` must be strictly less than `tasks.foreground_tool_timeout_seconds`"
             )
         }
-        if self.compaction.trigger_tokens == Some(0) {
-            bail!("`compaction.trigger_tokens` must be greater than zero")
+        if self.compaction.compact_at_tokens == Some(0) {
+            bail!("`compaction.compact_at_tokens` must be greater than zero")
+        }
+        if self.compaction.context_window_tokens == Some(0) {
+            bail!("`compaction.context_window_tokens` must be greater than zero")
+        }
+        if self.compaction.keep_recent_tokens == 0 {
+            bail!("`compaction.keep_recent_tokens` must be greater than zero")
+        }
+        if let (Some(compact_at), Some(context_window)) = (
+            self.compaction.compact_at_tokens,
+            self.compaction.context_window_tokens,
+        ) && compact_at >= context_window
+        {
+            bail!(
+                "`compaction.compact_at_tokens` must be less than `compaction.context_window_tokens`"
+            )
+        }
+        if self
+            .compaction
+            .context_window_tokens
+            .is_some_and(|window| self.compaction.keep_recent_tokens >= window)
+        {
+            bail!(
+                "`compaction.keep_recent_tokens` must be less than `compaction.context_window_tokens`"
+            )
+        }
+        if self.compaction.context_window_tokens.is_some()
+            && self.runtime.max_output_tokens.is_none()
+        {
+            bail!(
+                "`runtime.max_output_tokens` must be set when `compaction.context_window_tokens` is configured"
+            )
         }
         if self.compaction.summary_max_output_tokens == 0 {
             bail!("`compaction.summary_max_output_tokens` must be greater than zero")
@@ -443,20 +477,23 @@ mod tests {
         let configured: AppConfig = toml::from_str(
             r#"
             [compaction]
-            trigger_tokens = 120000
+            compact_at_tokens = 120000
+            context_window_tokens = 131072
             keep_recent_tokens = 16000
             summary_max_output_tokens = 2048
             history_search_max_matches = 25
             "#,
         )
         .unwrap();
-        assert_eq!(configured.compaction.trigger_tokens, Some(120_000));
+        assert_eq!(configured.compaction.compact_at_tokens, Some(120_000));
+        assert_eq!(configured.compaction.context_window_tokens, Some(131_072));
         assert_eq!(configured.compaction.keep_recent_tokens, 16_000);
         assert_eq!(configured.compaction.summary_max_output_tokens, 2_048);
         assert_eq!(configured.compaction.history_search_max_matches, 25);
 
         let defaults: AppConfig = toml::from_str("").unwrap();
-        assert_eq!(defaults.compaction.trigger_tokens, None);
+        assert_eq!(defaults.compaction.compact_at_tokens, None);
+        assert_eq!(defaults.compaction.context_window_tokens, None);
         assert_eq!(defaults.compaction.keep_recent_tokens, 20_000);
         assert_eq!(defaults.compaction.summary_max_output_tokens, 4_096);
         assert_eq!(defaults.compaction.history_search_max_matches, 50);
@@ -465,13 +502,35 @@ mod tests {
     #[test]
     fn rejects_zero_compaction_limits() {
         for source in [
-            "[compaction]\ntrigger_tokens = 0",
+            "[compaction]\ncompact_at_tokens = 0",
+            "[compaction]\ncontext_window_tokens = 0",
+            "[compaction]\nkeep_recent_tokens = 0",
             "[compaction]\nsummary_max_output_tokens = 0",
             "[compaction]\nhistory_search_max_matches = 0",
         ] {
             let config: AppConfig = toml::from_str(source).unwrap();
             assert!(config.validate().is_err(), "accepted {source}");
         }
+    }
+
+    #[test]
+    fn rejects_compaction_trigger_at_or_above_context_window() {
+        for source in [
+            "[runtime]\nmax_output_tokens = 10\n[compaction]\ncompact_at_tokens = 100\ncontext_window_tokens = 100",
+            "[runtime]\nmax_output_tokens = 10\n[compaction]\ncompact_at_tokens = 101\ncontext_window_tokens = 100",
+            "[runtime]\nmax_output_tokens = 10\n[compaction]\nkeep_recent_tokens = 100\ncontext_window_tokens = 100",
+        ] {
+            let config: AppConfig = toml::from_str(source).unwrap();
+            assert!(config.validate().is_err(), "accepted {source}");
+        }
+    }
+
+    #[test]
+    fn context_window_requires_a_root_output_limit() {
+        let config: AppConfig =
+            toml::from_str("[compaction]\ncompact_at_tokens = 100\ncontext_window_tokens = 200")
+                .unwrap();
+        assert!(config.validate().is_err());
     }
 
     #[test]

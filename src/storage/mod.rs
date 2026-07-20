@@ -17,10 +17,8 @@ mod input;
 mod message_log;
 mod trajectory;
 
-pub use trajectory::CompactionCheckpoint;
-
 pub const MESSAGE_FORMAT: &str = "openai-chat-compatible";
-const RUN_RECORD_VERSION: u32 = 3;
+const RUN_RECORD_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -124,7 +122,6 @@ pub struct RunPaths {
     pub messages: PathBuf,
     pub message_metadata: PathBuf,
     pub pending_inputs: PathBuf,
-    pub compactions: PathBuf,
     pub events: PathBuf,
     pub final_output: PathBuf,
     pub artifacts: PathBuf,
@@ -169,7 +166,6 @@ impl RunDirStore {
             messages: directory.join("messages.jsonl"),
             message_metadata: directory.join("message_metadata.jsonl"),
             pending_inputs: directory.join("pending_inputs.jsonl"),
-            compactions: directory.join("compactions.jsonl"),
             events: directory.join("events.jsonl"),
             final_output: directory.join("final.md"),
             artifacts: directory.join("artifacts"),

@@ -198,7 +198,8 @@ async fn run_action(
             foreground_tool_timeout_seconds: config.tasks.foreground_tool_timeout_seconds,
             task_wait_timeout_seconds: config.tasks.wait_timeout_seconds,
             compaction: picoagent::agent::CompactionOptions {
-                trigger_tokens: config.compaction.trigger_tokens,
+                compact_at_tokens: config.compaction.compact_at_tokens,
+                context_window_tokens: config.compaction.context_window_tokens,
                 keep_recent_tokens: config.compaction.keep_recent_tokens,
                 summary_max_output_tokens: config.compaction.summary_max_output_tokens,
                 history_search_max_matches: config.compaction.history_search_max_matches,

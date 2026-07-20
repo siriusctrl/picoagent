@@ -27,7 +27,8 @@ pub struct RunnerOptions {
 
 #[derive(Debug, Clone)]
 pub struct CompactionOptions {
-    pub trigger_tokens: Option<u64>,
+    pub compact_at_tokens: Option<u64>,
+    pub context_window_tokens: Option<u64>,
     pub keep_recent_tokens: u64,
     pub summary_max_output_tokens: u32,
     pub history_search_max_matches: usize,
@@ -36,7 +37,8 @@ pub struct CompactionOptions {
 impl Default for CompactionOptions {
     fn default() -> Self {
         Self {
-            trigger_tokens: None,
+            compact_at_tokens: None,
+            context_window_tokens: None,
             keep_recent_tokens: 20_000,
             summary_max_output_tokens: 4_096,
             history_search_max_matches: 50,

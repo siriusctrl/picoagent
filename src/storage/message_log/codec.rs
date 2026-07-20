@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     model::openai_chat::{ChatMessage, project_chat_message},
-    trajectory::TrajectoryMessage,
+    trajectory::{CompactionMessage, TrajectoryMessage},
 };
 
 use self::layout::ContentLayout;
@@ -20,6 +20,8 @@ pub(super) struct MessageMetadata {
     pub(super) created_at: DateTime<Utc>,
     pub(super) message_sha256: String,
     layout: Vec<ContentLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compaction: Option<CompactionMessage>,
     reconstruction_sha256: String,
 }
 
@@ -30,6 +32,7 @@ struct ReconstructionPayload<'a> {
     created_at: DateTime<Utc>,
     message_sha256: &'a str,
     layout: &'a [ContentLayout],
+    compaction: &'a Option<CompactionMessage>,
 }
 
 pub(super) struct EncodedMessage {
@@ -48,6 +51,7 @@ pub(super) fn encode(record: &TrajectoryMessage) -> Result<EncodedMessage> {
         record.created_at,
         &message_sha256,
         &layout,
+        &record.compaction,
     )?;
     let metadata = MessageMetadata {
         message_id: record.message_ref.clone(),
@@ -55,6 +59,7 @@ pub(super) fn encode(record: &TrajectoryMessage) -> Result<EncodedMessage> {
         created_at: record.created_at,
         message_sha256,
         layout,
+        compaction: record.compaction.clone(),
         reconstruction_sha256,
     };
     Ok(EncodedMessage {
@@ -77,6 +82,7 @@ pub(super) fn decode(
                 metadata.created_at,
                 &metadata.message_sha256,
                 &metadata.layout,
+                &metadata.compaction,
             )?,
         "message {} reconstruction metadata does not match its sha256",
         metadata.message_id
@@ -108,6 +114,7 @@ pub(super) fn decode(
         seq: metadata.seq,
         created_at: metadata.created_at,
         message,
+        compaction: metadata.compaction,
     })
 }
 
@@ -121,6 +128,7 @@ fn reconstruction_sha256(
     created_at: DateTime<Utc>,
     message_sha256: &str,
     layout: &[ContentLayout],
+    compaction: &Option<CompactionMessage>,
 ) -> Result<String> {
     let payload = ReconstructionPayload {
         message_id,
@@ -128,6 +136,7 @@ fn reconstruction_sha256(
         created_at,
         message_sha256,
         layout,
+        compaction,
     };
     Ok(sha256(
         &serde_json::to_vec(&payload).context("serialize message reconstruction metadata")?,

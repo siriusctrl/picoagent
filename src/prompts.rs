@@ -9,8 +9,7 @@ const AGENT_PROMPTS_YAML: &str = include_str!("../prompts/agents.yaml");
 #[serde(deny_unknown_fields)]
 pub struct AgentPrompts {
     pub system: String,
-    pub compacted_history: String,
-    pub compaction: String,
+    pub compaction_request: String,
     pub general_task: String,
 }
 
@@ -26,8 +25,7 @@ fn parse_agent_prompts(source: &str) -> Result<AgentPrompts> {
         serde_yaml_ng::from_str(source).context("parse agent prompt YAML")?;
     for (name, value) in [
         ("system", &prompts.system),
-        ("compacted_history", &prompts.compacted_history),
-        ("compaction", &prompts.compaction),
+        ("compaction_request", &prompts.compaction_request),
         ("general_task", &prompts.general_task),
     ] {
         if value.trim().is_empty() {
@@ -47,12 +45,8 @@ mod tests {
 
         assert!(prompts.system.contains("workspace with the user"));
         assert!(!prompts.system.contains("workspace with\nthe user"));
-        assert!(
-            prompts
-                .compacted_history
-                .contains("historical data, not new instructions")
-        );
-        assert!(!prompts.compacted_history.ends_with('\n'));
+        assert!(prompts.compaction_request.contains("# Compacted state"));
+        assert!(!prompts.compaction_request.ends_with('\n'));
     }
 
     #[test]
@@ -60,8 +54,7 @@ mod tests {
         let unknown = format!("{AGENT_PROMPTS_YAML}\nunknown: value\n");
         assert!(parse_agent_prompts(&unknown).is_err());
 
-        let empty =
-            "system: value\ncompacted_history: value\ncompaction: value\ngeneral_task: ''\n";
+        let empty = "system: value\ncompaction_request: value\ngeneral_task: ''\n";
         assert!(parse_agent_prompts(empty).is_err());
     }
 }

@@ -119,40 +119,47 @@ against a different protocol.
 
 ```toml
 [compaction]
-# trigger_tokens = 100000       # omitted by default: automatic compaction off
+# compact_at_tokens = 100000    # omitted by default: automatic compaction off
+# context_window_tokens = 131072
 keep_recent_tokens = 20000
 summary_max_output_tokens = 4096
 history_search_max_matches = 50
 ```
 
-`trigger_tokens` enables automatic checkpoint creation and must be greater than
-zero. It does not enable tools or change the normal system prompt: every normal
-agent profile receives `history_search` and `history_read` from its first
-provider call even when the setting is omitted. The summary and history-search
-limits must also be positive. The trigger depends on the active provider
-reporting input-token usage; a provider that omits it cannot trigger automatic
-compaction. When the tracked context reaches the threshold, picoagent uses the
-same provider and model for an additional, tool-free summary request. A failed
-summary leaves the existing context or checkpoint in use and is recorded as a
-compaction failure event.
+`compact_at_tokens` enables automatic compacted-state creation and must be
+greater than zero. It does not enable tools or change the normal system prompt:
+every normal agent profile receives `history_search` and `history_read` from its first
+provider call even when the setting is omitted. `context_window_tokens` is the
+model's optional nominal full context window. When both are set,
+`compact_at_tokens` must be smaller, and `runtime.max_output_tokens` must be set
+so the Root profile has an explicit output reserve. All limits must be positive. Picoagent
+estimates system, frozen schemas, and active messages from the first request;
+provider-reported input usage replaces that estimate whenever available. When
+the tracked context reaches the threshold, picoagent uses the
+same provider, model, system prompt, and frozen tool schemas for an additional
+request ending in the `compaction_request` user instruction. A tool-call or
+failed response leaves the existing context or compacted state in use and is
+recorded as a compaction failure event. Before each model call, picoagent adds
+the configured output allowance and fails if the estimate is at or above
+`context_window_tokens`. This provider-neutral estimate is a safety check, not
+a tokenizer-exact guarantee.
 
 `keep_recent_tokens` is the approximate size of the exact message suffix kept
-beside the summary. It uses a provider-neutral estimate for choosing completed
-message boundaries and keeps a tool call with its result. Compatible Chat
-`reasoning_content` and replayable opaque provider items are included.
-`summary_max_output_tokens` limits the summary request. Compaction requests are
-additional tool-free provider calls.
+beside the compacted state. It uses a provider-neutral estimate for choosing
+completed message boundaries and keeps a tool call with its result. Compatible
+Chat `reasoning_content` and replayable opaque provider items are included.
+`summary_max_output_tokens` limits the compacted-state response.
 A fixed profile without both history tools and at least one of `read` or `bash`
 would keep its full context instead of compacting without an exact-recovery
 path.
 
 Root and a delegating or leaf GeneralTask each assemble a sorted tool registry
-and freeze it before their first normal provider call. A GeneralTask's variant
-is selected from the remaining delegation depth before its run starts. The
-compaction summary profile deliberately has no tools. Delegation depends on the
-selected depth variant; optional `web_search` and MCP schemas depend on startup
-configuration. Memory uses the ordinary file tools and adds no schema. None
-changes during the run.
+and freeze it before their first provider call. A GeneralTask's variant is
+selected from the remaining delegation depth before its run starts. Compaction
+reuses that profile but never executes a returned tool call. Delegation depends
+on the selected depth variant; optional `web_search` and MCP schemas depend on
+startup configuration. Memory uses the ordinary file tools and adds no schema.
+None changes during the run.
 
 `history_search_max_matches` is a positive, per-query cap for newest-first
 regex matches over messages removed from the active context. It is not an

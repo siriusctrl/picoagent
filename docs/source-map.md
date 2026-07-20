@@ -3,7 +3,7 @@
 - `src/agent/runner.rs`: the only model/tool loop.
 - `src/agent/runner/lifecycle.rs`: run creation, profiles, and finalization.
 - `src/agent/runner/recovery.rs`: resume validation and durable result injection.
-- `src/agent/compaction.rs`: local checkpoint planning, summary calls, and
+- `src/agent/compaction.rs`: local compaction planning, state calls, and
   active-context assembly.
 - `src/agent/tool_execution.rs`: shared direct/background ordinary-tool hooks,
   events, foreground promotion, and artifact-backed output persistence.
@@ -40,8 +40,8 @@
   spilled result.
 - `src/storage/mod.rs`: run directories, metadata, events, and shared JSON
   persistence helpers.
-- `src/storage/trajectory.rs`: append-only messages and compaction checkpoints,
-  compacted-history loading, and torn-tail JSONL recovery.
+- `src/storage/trajectory.rs`: classified append-only messages and
+  compacted-history loading.
 - `src/skills/mod.rs`: Agent Skills metadata discovery and body/path loading.
 - `src/mcp.rs`: rmcp stdio client and tool adapters.
 - `src/hooks.rs`: deterministic command-hook pipeline.

@@ -20,8 +20,8 @@ navigation, invariants, verification, and handoff.
 - `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,
   and project-local artifact paths.
 - `src/storage/`: self-contained run directories, Chat-compatible message JSONL
-  with paired local metadata, event JSONL, status, compaction checkpoints, and
-  final-result persistence.
+  with paired local metadata (including compacted-state boundaries), event
+  JSONL, status, and final-result persistence.
 - `src/trajectory.rs` and `src/trajectory/`: provider-neutral compacted-history
   search/read contracts plus the local message and artifact reader.
 - `src/skills/`: Agent Skills discovery and progressive `SKILL.md` loading.
@@ -62,16 +62,16 @@ navigation, invariants, verification, and handoff.
   identity is a contract violation.
 - Keep prompt prefixes deterministic: stable section order, sorted tools and
   skills, and dynamic memory/tool results near the tail.
-- Keep the normal agent system prompt invariant. Emit compacted-history recovery
-  guidance beside an actual compacted-history boundary, not in the system prompt
-  or a run that has no checkpoint.
+- Keep the normal agent system prompt invariant. A compaction request uses that
+  same prompt and frozen tool schemas, plus one final user instruction; reject
+  tool calls instead of executing them during compaction.
 - Register `history_search` and `history_read` before the first normal provider
-  call regardless of `compaction.trigger_tokens`. That setting controls
-  checkpoint creation only; sorted tool schemas stay frozen per run.
+  call regardless of `compaction.compact_at_tokens`. That setting controls
+  compacted-state creation only; sorted tool schemas stay frozen per run.
 - Keep Root and delegating/leaf GeneralTask as explicit capability profiles,
-  and keep compaction summary calls on a separate tool-free request profile.
-  Select the GeneralTask variant from remaining depth before its run starts;
-  do not add or remove schemas during a run.
+  and use the run's existing profile for compaction. Select the GeneralTask
+  variant from remaining depth before its run starts; do not add or remove
+  schemas during a run.
 - Keep stable agent prose in the typed compile-time YAML registry and tool
   descriptions beside their owners. Keep prompt assembly, schemas, validation,
   and execution contracts in Rust.

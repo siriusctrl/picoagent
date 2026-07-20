@@ -65,3 +65,4 @@ Use these sections:
   caps](0010-parent-controlled-background-work.md)
 - [ADR 0011: Separate model stream idleness from the request
   deadline](0011-model-stream-idle-timeout-and-request-deadline.md)
+- [ADR 0012: Record compaction as messages](0012-record-compaction-as-messages.md)

@@ -27,7 +27,8 @@ use picoagent::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-const SUMMARY_TEXT: &str = "## Progress\nThe old marker result was `result-old`.";
+const SUMMARY_TEXT: &str =
+    "# Compacted state\n\n## Progress\nThe old marker result was `result-old`.";
 
 struct MarkerTool;
 
@@ -84,7 +85,9 @@ impl ModelProvider for InspectableTrajectoryProvider {
         request: ModelRequest,
         _events: SharedEventSink,
     ) -> Result<ModelResponse> {
-        let is_summary = request.tools.is_empty();
+        let is_summary = request.messages.last().is_some_and(|message| {
+            text_content(message).contains("Compact the conversation state before this message")
+        });
         self.requests.lock().unwrap().push(request.clone());
         if is_summary {
             return Ok(ModelResponse::new(
@@ -201,8 +204,10 @@ fn runner(
     tools.register(Arc::new(ReadTool)).unwrap();
     let options = RunnerOptions {
         max_subagent_depth: 0,
+        max_output_tokens: Some(4_096),
         compaction: CompactionOptions {
-            trigger_tokens: Some(10_000),
+            compact_at_tokens: Some(10_000),
+            context_window_tokens: Some(30_000),
             keep_recent_tokens: 1,
             summary_max_output_tokens: 77,
             history_search_max_matches: 7,
@@ -250,16 +255,15 @@ async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
 
     let requests = provider.requests();
     assert_eq!(requests.len(), 6);
-    assert!(!requests[0].tools.is_empty());
-    assert!(!requests[1].tools.is_empty());
-    assert!(requests[2].tools.is_empty());
-    assert!(!requests[3].tools.is_empty());
-    assert!(!requests[4].tools.is_empty());
-    assert!(!requests[5].tools.is_empty());
+    assert!(requests.iter().all(|request| !request.tools.is_empty()));
 
     let normal_requests = requests
         .iter()
-        .filter(|request| !request.tools.is_empty())
+        .filter(|request| {
+            !request.messages.last().is_some_and(|message| {
+                text_content(message).contains("Compact the conversation state before this message")
+            })
+        })
         .collect::<Vec<_>>();
     assert_eq!(normal_requests.len(), 5);
     let stable_system = &normal_requests[0].system;
@@ -274,28 +278,13 @@ async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
         );
     }
 
-    assert!(!request_contains(
-        normal_requests[0],
-        "<compacted-history checkpoint="
-    ));
-    assert!(!request_contains(
-        normal_requests[1],
-        "<compacted-history checkpoint="
-    ));
-    assert!(!request_contains(
-        normal_requests[0],
-        "<context-management>"
-    ));
-    assert!(!request_contains(
-        normal_requests[1],
-        "<context-management>"
-    ));
-    assert!(request_contains(
-        normal_requests[2],
-        "<compacted-history checkpoint="
-    ));
-    assert!(request_contains(normal_requests[2], "<context-management>"));
+    assert!(!request_contains(normal_requests[0], "# Compacted state"));
+    assert!(!request_contains(normal_requests[1], "# Compacted state"));
     assert!(request_contains(normal_requests[2], SUMMARY_TEXT));
+    assert!(!request_contains(
+        normal_requests[2],
+        "Compact the conversation state before this message"
+    ));
     assert!(
         !normal_requests[2]
             .messages
@@ -331,9 +320,11 @@ async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
     }));
     assert!(read_output.contains("result-old"));
 
-    let checkpoints = store.load_compactions(&result.run_id).await.unwrap();
-    assert_eq!(checkpoints.len(), 1);
-    assert_eq!(recovered_ref, checkpoints[0].covered_through_message_ref);
+    let compacted_state = trajectory
+        .iter()
+        .find_map(|record| record.compaction_state())
+        .unwrap();
+    assert_eq!(recovered_ref, compacted_state.covered_through_message_ref);
     let events = load_events(&store, &result.run_id).await;
     assert_eq!(count_events(&events, EventClass::Started), 1);
     assert_eq!(count_events(&events, EventClass::Completed), 1);
@@ -427,7 +418,7 @@ async fn write_trajectory_capture(
     let request_files = [
         "01-model-before-compaction-old.json",
         "02-model-before-compaction-new.json",
-        "03-compaction-summary.json",
+        "03-compaction-state.json",
         "04-model-after-compaction-search.json",
         "05-model-after-history-search.json",
         "06-model-after-history-read.json",
@@ -457,14 +448,18 @@ async fn write_trajectory_capture(
 
     let normal_requests = requests
         .iter()
-        .filter(|request| !request.tools.is_empty())
+        .filter(|request| {
+            !request.messages.last().is_some_and(|message| {
+                text_content(message).contains("Compact the conversation state before this message")
+            })
+        })
         .collect::<Vec<_>>();
     let system = &normal_requests[0].system;
     let tools = serde_json::to_value(&normal_requests[0].tools)?;
     let initial_message = serde_json::to_value(&normal_requests[0].messages[0])?;
     let comparison = json!({
         "normal_request_count": normal_requests.len(),
-        "summary_request_number": 3,
+        "compaction_request_number": 3,
         "first_post_compaction_request_number": 4,
         "evidence": {
             "scope": "Captured internal ModelRequest snapshots under provider_neutral_messages; durable messages.jsonl is the Chat-compatible projection. This is not proof of live provider KV-cache reuse.",
@@ -477,7 +472,6 @@ async fn write_trajectory_capture(
             "run.json",
             "messages.jsonl",
             "message_metadata.jsonl",
-            "compactions.jsonl",
             "events.jsonl",
             "final.md",
         ],

@@ -314,13 +314,7 @@ async fn history_search_without_a_checkpoint_returns_an_empty_result() {
     assert_eq!(output["matches"], json!([]));
     assert_eq!(output["truncated"], false);
     assert!(output["instruction"].is_null());
-    assert!(
-        store
-            .load_compactions(&result.run_id)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(trajectory.iter().all(|record| record.compaction.is_none()));
     let requests = provider.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert_eq!(

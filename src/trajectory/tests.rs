@@ -57,6 +57,7 @@ fn record(seq: u64, role: Role, content: Vec<MessageContent>) -> TrajectoryMessa
         seq,
         created_at: DateTime::from_timestamp(seq as i64, 0).unwrap(),
         message: Message { role, content },
+        compaction: None,
     }
 }
 

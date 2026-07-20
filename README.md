@@ -17,8 +17,8 @@ system.
 - exact-first, atomic multi-edit writes with CRLF/BOM preservation
 - versioned artifact spill for large tool results with bounded head/tail previews
 - run-level cumulative inline-result budget for stable context growth
-- optional local context compaction with append-only checkpoints and read-only
-  regex history retrieval
+- optional local context compaction recorded as ordinary messages, with
+  read-only regex history retrieval
 - Agent Skills discovery with progressive `SKILL.md` loading
 - MCP stdio servers adapted into the same tool registry
 - command hooks for run and tool lifecycle events
@@ -66,7 +66,6 @@ Runtime output is stored beneath the current project:
   messages.jsonl
   message_metadata.jsonl
   pending_inputs.jsonl # created when a running child is steered
-  compactions.jsonl  # created after the first checkpoint
   events.jsonl
   final.md
   artifacts/
@@ -100,10 +99,10 @@ unchanged across normal agent calls. At the start of each run, the first user
 message contains a synthetic `<runtime-reminder>` block before the original
 request. The reminder snapshots the workspace path, `AGENTS.md`, discovered
 skill metadata, memory locations, and any delegated-task instructions that
-apply to the profile. Compacted-history guidance appears only beside an actual
-checkpoint, not in the initial reminder. Tool schemas are sorted, and both the
-schemas and reminder are frozen for that run; configuration or file changes
-take effect on the next run.
+apply to the profile. Tool schemas are sorted, and both the schemas and
+reminder are frozen for that run; configuration or file changes take effect on
+the next run. Compaction reuses this stable system/tool prefix and adds one
+final user instruction only to the compaction request.
 
 `messages.jsonl` uses the `openai-chat-compatible` format: each line is one
 complete Chat message with ordinary `role` and `content` fields. The runtime
@@ -113,12 +112,14 @@ results use `role: "tool"`, `tool_call_id`, and `content`.
 
 Local fields do not alter those messages. Stable `message_id`, sequence,
 timestamp, exact-message and reconstruction-metadata hashes, internal content
-layout, tool-error state, and any opaque provider continuation items are stored
-in the paired `message_metadata.jsonl` sidecar. `run.json` declares
+layout, tool-error state, compaction purpose and boundaries, and any opaque
+provider continuation items are stored in the paired
+`message_metadata.jsonl` sidecar. `run.json` declares
 `"message_format": "openai-chat-compatible"` and retains the original user
-prompt. The metadata line is written last and commits its corresponding message;
-compaction never rewrites or deletes committed trajectory records. Its
-checkpoints are appended separately to `compactions.jsonl` when enabled.
+prompt. The metadata line is written last and commits its corresponding
+message. Compaction never rewrites or deletes committed trajectory records; its
+user request and assistant compacted state are ordinary Chat-compatible message
+lines.
 
 Stable agent instructions are folded scalar values in the typed, compile-time
 `prompts/agents.yaml` registry. Standalone base tool descriptions remain
@@ -225,31 +226,47 @@ MCP, hook, and memory settings.
 
 ## Context Compaction And History
 
-Automatic local checkpoint creation is disabled by default. Enable it with a
-threshold appropriate to the model's context window:
+Automatic local compacted-state creation is disabled by default. Enable it with
+thresholds appropriate to the model's context window:
 
 ```toml
+[runtime]
+max_output_tokens = 8192
+
 [compaction]
-trigger_tokens = 100000
+compact_at_tokens = 100000
+context_window_tokens = 131072
 keep_recent_tokens = 20000
 summary_max_output_tokens = 4096
 history_search_max_matches = 50
 ```
 
-After a provider reports input-token usage, picoagent tracks the active context
-and can make an additional model call when it reaches `trigger_tokens`. That
-call summarizes the older completed-message prefix. Later requests contain the
-checkpoint summary plus the exact recent suffix, while `messages.jsonl` remains
-append-only. Providers that do not report input-token usage do not trigger
-automatic compaction. Start/completion/failure records remain in `events.jsonl`.
-Compatible Chat `reasoning_content` and replayable opaque provider items are
-included in the between-call estimate.
+Picoagent estimates the complete input from the first request and replaces that
+estimate with provider-reported input usage whenever available. It can make an
+additional model call when the tracked input reaches `compact_at_tokens`. The
+call receives the original initial message, any previous compacted state, the
+native older messages being replaced, and one final compaction instruction.
+The successful user instruction and exact assistant response are appended to
+`messages.jsonl`; the assistant response is the durable compacted state. Later
+normal requests omit the compaction instruction and contain that exact
+assistant message plus the exact recent suffix.
+
+`context_window_tokens` is the model's configured nominal full window. Before
+normal and compaction requests, picoagent checks its provider-neutral estimate
+of system, schemas, active messages, and configured output allowance. It must
+be greater than `compact_at_tokens`; if compaction cannot reduce the estimate
+below it, the run fails locally. This is an early safety check, not a
+tokenizer-exact provider guarantee. Setting the window requires an explicit
+nonzero `runtime.max_output_tokens`; GeneralTask uses its separately configured
+profile limit. Start/completion/failure records remain in
+`events.jsonl`. Compatible Chat `reasoning_content` and replayable opaque
+provider items are included in the between-call estimate.
 
 The normal agent receives the `history_search` and `history_read` schemas from
-its first provider request whether or not `trigger_tokens` is configured.
-Changing the threshold controls checkpoint creation only; it does not change
-the normal system prompt or tool schemas. Before anything has been compacted,
-the history tools simply have no compacted prefix to search or read.
+its first provider request whether or not `compact_at_tokens` is configured.
+Changing the threshold controls compacted-state creation only; it does not
+change the normal system prompt or tool schemas. Before anything has been
+compacted, the history tools simply have no compacted prefix to search or read.
 
 Two read-only tools recover exact details omitted from the active request:
 
@@ -272,12 +289,12 @@ JSON/JSONL tool result is too large, its complete returned content is saved as
 an artifact and can be inspected with `read` or `bash`/`rg`. Query-limit
 omissions are not present in that artifact.
 
-Each assembled agent profile has a sorted, frozen toolset. A profile compacts only
-when both history tools and at least one artifact inspection tool (`read` or
-`bash`) are present. Checkpoint summaries use a separate, tool-free request
-profile rather than changing a normal agent registry.
+Each assembled agent profile has a sorted, frozen toolset. A profile compacts
+only when both history tools and at least one artifact inspection tool (`read`
+or `bash`) are present. The compaction request reuses the same system prompt and
+tool schemas; a tool-call response is rejected rather than executed.
 
-This release implements local model-generated checkpoints only. It does not use
+This release implements local model-generated compacted states only. It does not use
 OpenAI or another provider's server-side compaction API.
 
 ## Large Tool Results

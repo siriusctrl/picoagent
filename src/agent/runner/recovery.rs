@@ -138,7 +138,7 @@ pub(super) async fn append_interrupted_tool_results(
 ) -> Result<usize> {
     let Some(assistant_index) = trajectory
         .iter()
-        .rposition(|record| record.message.role == Role::Assistant)
+        .rposition(|record| record.compaction.is_none() && record.message.role == Role::Assistant)
     else {
         return Ok(0);
     };
@@ -184,7 +184,11 @@ pub(super) async fn append_interrupted_tool_results(
 }
 
 pub(super) fn resumable_final_text(trajectory: &[TrajectoryMessage]) -> Option<String> {
-    let message = &trajectory.last()?.message;
+    let record = trajectory.last()?;
+    if record.compaction.is_some() {
+        return None;
+    }
+    let message = &record.message;
     (message.role == Role::Assistant && message.tool_calls().is_empty())
         .then(|| message.visible_text())
 }
@@ -213,6 +217,7 @@ mod tests {
                     },
                 }],
             },
+            compaction: None,
         }];
 
         assert_eq!(remaining_preview_budget(100, &trajectory), 93);

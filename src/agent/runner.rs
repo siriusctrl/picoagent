@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -16,7 +16,10 @@ use crate::{
 };
 
 use super::{
-    compaction::{CompactionAttempt, build_active_context, estimate_message_tokens, maybe_compact},
+    compaction::{
+        CompactionAttempt, build_active_context, estimate_message_tokens,
+        estimate_request_input_tokens, maybe_compact,
+    },
     context::{build_runtime_reminder, build_system_prompt},
     task::{SpawnTool, TaskManager, TaskManagerConfig, TaskTool},
     tool_execution::DirectToolRuntime,
@@ -149,7 +152,7 @@ impl AgentRunner {
         let automatic_compaction_enabled = self
             .options
             .compaction
-            .trigger_tokens
+            .compact_at_tokens
             .is_some_and(|tokens| tokens > 0)
             && (registry.get("read").is_some() || registry.get("bash").is_some());
 
@@ -206,11 +209,11 @@ impl AgentRunner {
             task_manager.resume_agent_task(task).await?;
         }
         let outcome: Result<RunResult> = async {
-            let mut latest_checkpoint = self.store.load_latest_compaction(&run_id).await?;
-            let mut context_tokens: Option<u64> = None;
             let completed_steps = trajectory
                 .iter()
-                .filter(|record| record.message.role == Role::Assistant)
+                .filter(|record| {
+                    record.compaction.is_none() && record.message.role == Role::Assistant
+                })
                 .count();
             if mode == RunMode::Resume {
                 let interrupted_preview_bytes =
@@ -249,6 +252,12 @@ impl AgentRunner {
                 }
             }
 
+            let mut context_tokens = estimate_request_input_tokens(
+                &system,
+                &build_active_context(&trajectory)?,
+                &tool_specs,
+            );
+
             let mut step = completed_steps.saturating_add(1);
             loop {
                 let ready = task_manager.drain_completed().await?;
@@ -256,26 +265,23 @@ impl AgentRunner {
                     append_background_results(&self.store, &run_id, &mut trajectory, &ready)
                         .await?;
                 task_manager.mark_delivered(&ready).await?;
-                if let Some(tokens) = &mut context_tokens {
-                    *tokens = tokens.saturating_add(added);
-                }
+                context_tokens = context_tokens.saturating_add(added);
                 let steered = self
                     .store
                     .append_pending_inputs(&run_id, &mut trajectory)
                     .await?;
-                if let Some(tokens) = &mut context_tokens {
-                    *tokens = steered.iter().fold(*tokens, |total, record| {
-                        total.saturating_add(estimate_message_tokens(&record.message))
-                    });
-                }
+                context_tokens = steered.iter().fold(context_tokens, |total, record| {
+                    total.saturating_add(estimate_message_tokens(&record.message))
+                });
 
                 if automatic_compaction_enabled
-                    && let Some(checkpoint) = maybe_compact(CompactionAttempt {
+                    && let Some(completed) = maybe_compact(CompactionAttempt {
                         provider: &self.provider,
                         model: &model,
                         run_id: &run_id,
+                        system: &system,
+                        tools: &tool_specs,
                         trajectory: &trajectory,
-                        previous: latest_checkpoint.as_ref(),
                         tokens_before: context_tokens,
                         options: &self.options.compaction,
                         store: &self.store,
@@ -286,10 +292,28 @@ impl AgentRunner {
                     })
                     .await?
                 {
-                    latest_checkpoint = Some(checkpoint);
+                    context_tokens = completed.estimated_context_tokens;
+                    trajectory.extend(completed.records);
                 }
-                let active_messages =
-                    build_active_context(&trajectory, latest_checkpoint.as_ref())?;
+                let active_messages = build_active_context(&trajectory)?;
+                context_tokens = context_tokens.max(estimate_request_input_tokens(
+                    &system,
+                    &active_messages,
+                    &tool_specs,
+                ));
+                if let Some(context_window) = self.options.compaction.context_window_tokens {
+                    let reserved_output = max_output_tokens.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "context_window_tokens requires a configured max_output_tokens for this agent profile"
+                        )
+                    })? as u64;
+                    let estimated_total = context_tokens.saturating_add(reserved_output);
+                    if estimated_total >= context_window {
+                        bail!(
+                            "estimated model context is {estimated_total} tokens ({context_tokens} input + {reserved_output} configured output), at or above context_window_tokens={context_window}; compaction did not reduce it enough"
+                        )
+                    }
+                }
 
                 events
                     .emit(&RuntimeEvent::new(
@@ -346,9 +370,11 @@ impl AgentRunner {
                 let final_text = response.text();
                 let tool_calls = response.tool_calls();
                 let assistant_message = response.assistant;
-                context_tokens = response.usage.input_tokens.map(|tokens| {
-                    tokens.saturating_add(estimate_message_tokens(&assistant_message))
-                });
+                context_tokens = response
+                    .usage
+                    .input_tokens
+                    .unwrap_or(context_tokens)
+                    .saturating_add(estimate_message_tokens(&assistant_message));
                 let assistant_record = self
                     .store
                     .append_message(&run_id, &assistant_message)
@@ -361,11 +387,9 @@ impl AgentRunner {
                         .append_pending_inputs(&run_id, &mut trajectory)
                         .await?;
                     if !steered.is_empty() {
-                        if let Some(tokens) = &mut context_tokens {
-                            *tokens = steered.iter().fold(*tokens, |total, record| {
-                                total.saturating_add(estimate_message_tokens(&record.message))
-                            });
-                        }
+                        context_tokens = steered.iter().fold(context_tokens, |total, record| {
+                            total.saturating_add(estimate_message_tokens(&record.message))
+                        });
                         step = step.saturating_add(1);
                         continue;
                     }
@@ -379,9 +403,7 @@ impl AgentRunner {
                         )
                         .await?;
                         task_manager.mark_delivered(&ready).await?;
-                        if let Some(tokens) = &mut context_tokens {
-                            *tokens = tokens.saturating_add(added);
-                        }
+                        context_tokens = context_tokens.saturating_add(added);
                         step = step.saturating_add(1);
                         continue;
                     }
@@ -392,11 +414,9 @@ impl AgentRunner {
                         .append_pending_inputs_locked(&run_id, &mut trajectory)
                         .await?;
                     if !steered.is_empty() {
-                        if let Some(tokens) = &mut context_tokens {
-                            *tokens = steered.iter().fold(*tokens, |total, record| {
-                                total.saturating_add(estimate_message_tokens(&record.message))
-                            });
-                        }
+                        context_tokens = steered.iter().fold(context_tokens, |total, record| {
+                            total.saturating_add(estimate_message_tokens(&record.message))
+                        });
                         step = step.saturating_add(1);
                         continue;
                     }
@@ -411,9 +431,8 @@ impl AgentRunner {
                 for call in tool_calls {
                     let tool_message = direct_tools.execute(call).await?;
                     let record = self.store.append_message(&run_id, &tool_message).await?;
-                    if let Some(tokens) = &mut context_tokens {
-                        *tokens = tokens.saturating_add(estimate_message_tokens(&tool_message));
-                    }
+                    context_tokens =
+                        context_tokens.saturating_add(estimate_message_tokens(&tool_message));
                     trajectory.push(record);
                 }
                 step = step.saturating_add(1);

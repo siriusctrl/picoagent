@@ -1,8 +1,11 @@
 # ADR 0007: Emit Compacted-History Guidance Only at Its Active Boundary
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-07-17
 - Refines: ADR 0004 (recovery-guidance placement and prompt rendering)
+
+Superseded by ADR 0012, which stores and directly reuses the exact assistant
+compacted-state message and no longer emits a synthetic history wrapper.
 
 ADR 0008 replaces the generic Markdown reflow portion below. Folded YAML now
 handles source wrapping for built-in agent prompts; dynamic reminder inputs are

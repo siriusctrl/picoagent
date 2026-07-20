@@ -1,31 +1,12 @@
-use std::path::Path;
+use anyhow::{Result, bail, ensure};
+use chrono::Utc;
 
-use anyhow::{Context, Result, bail, ensure};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::{fs::OpenOptions, io::AsyncWriteExt};
+use crate::{
+    model::Message,
+    trajectory::{CompactionMessage, TrajectoryMessage},
+};
 
-use crate::{model::Message, trajectory::TrajectoryMessage};
-
-use super::{MESSAGE_FORMAT, RunDirStore, append_json_line, ensure_run_exists, message_log};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompactionCheckpoint {
-    pub version: u32,
-    pub checkpoint_id: String,
-    pub created_at: DateTime<Utc>,
-    pub strategy: String,
-    pub previous_checkpoint_id: Option<String>,
-    pub covered_through_message_ref: String,
-    pub first_kept_message_ref: String,
-    pub summary: String,
-    pub provider: String,
-    pub model: String,
-    pub tokens_before: u64,
-    pub summary_input_tokens: Option<u64>,
-    pub summary_output_tokens: Option<u64>,
-    pub compacted_message_count: usize,
-}
+use super::{MESSAGE_FORMAT, RunDirStore, ensure_run_exists, message_log};
 
 impl RunDirStore {
     pub async fn append_message(
@@ -42,6 +23,17 @@ impl RunDirStore {
         run_id: &str,
         message: &Message,
         message_ref: String,
+    ) -> Result<TrajectoryMessage> {
+        self.append_classified_message(run_id, message, message_ref, None)
+            .await
+    }
+
+    async fn append_classified_message(
+        &self,
+        run_id: &str,
+        message: &Message,
+        message_ref: String,
+        compaction: Option<CompactionMessage>,
     ) -> Result<TrajectoryMessage> {
         let mut sequences = self.write_lock.lock().await;
         // Invalidate the fast path before any cancellable I/O. If this future is
@@ -76,6 +68,7 @@ impl RunDirStore {
             seq: next,
             created_at: Utc::now(),
             message: message.clone(),
+            compaction,
         };
         message_log::append(&paths.messages, &paths.message_metadata, &record).await?;
         let lengths = message_log::lengths(&paths.messages, &paths.message_metadata).await?;
@@ -90,16 +83,15 @@ impl RunDirStore {
         Ok(record)
     }
 
-    pub async fn append_compaction(
+    pub(crate) async fn append_compaction_message(
         &self,
         run_id: &str,
-        checkpoint: &CompactionCheckpoint,
-    ) -> Result<()> {
-        let _guard = self.write_lock.lock().await;
-        let paths = self.paths(run_id);
-        ensure_run_exists(&paths).await?;
-        prepare_jsonl_append::<CompactionCheckpoint>(&paths.compactions).await?;
-        append_json_line(&paths.compactions, checkpoint).await
+        message: &Message,
+        compaction: CompactionMessage,
+        message_ref: String,
+    ) -> Result<TrajectoryMessage> {
+        self.append_classified_message(run_id, message, message_ref, Some(compaction))
+            .await
     }
 
     pub async fn load_messages(&self, run_id: &str) -> Result<Vec<Message>> {
@@ -127,115 +119,32 @@ impl RunDirStore {
         message_log::load(&paths.messages, &paths.message_metadata).await
     }
 
-    pub async fn load_compactions(&self, run_id: &str) -> Result<Vec<CompactionCheckpoint>> {
-        let path = self.paths(run_id).compactions;
-        read_jsonl(&path, "stored compaction checkpoint").await
-    }
-
-    pub async fn load_latest_compaction(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<CompactionCheckpoint>> {
-        Ok(self.load_compactions(run_id).await?.pop())
-    }
-
     /// Loads only the completed prefix hidden by the latest compaction.
     /// Messages still present in the active model context are never returned.
     pub async fn load_compacted_history(&self, run_id: &str) -> Result<Vec<TrajectoryMessage>> {
-        let Some(checkpoint) = self.load_latest_compaction(run_id).await? else {
+        let messages = self.load_trajectory(run_id).await?;
+        let Some((state_message_ref, state)) = messages.iter().rev().find_map(|record| {
+            record
+                .compaction_state()
+                .map(|state| (record.message_ref.as_str(), state))
+        }) else {
             return Ok(Vec::new());
         };
-        let messages = self.load_trajectory(run_id).await?;
         let Some(first_kept) = messages
             .iter()
-            .position(|message| message.message_ref == checkpoint.first_kept_message_ref)
+            .position(|message| message.message_ref == state.first_kept_message_ref)
         else {
             bail!(
-                "compaction checkpoint `{}` references missing first-kept message `{}`",
-                checkpoint.checkpoint_id,
-                checkpoint.first_kept_message_ref
+                "compacted state `{}` references missing first-kept message `{}`",
+                state_message_ref,
+                state.first_kept_message_ref
             );
         };
         Ok(messages
             .into_iter()
             .skip(1)
             .take(first_kept.saturating_sub(1))
+            .filter(|message| message.compaction.is_none())
             .collect())
-    }
-}
-
-async fn read_jsonl<T: DeserializeOwned>(path: &Path, record_name: &str) -> Result<Vec<T>> {
-    let bytes = read_optional_bytes(path).await?;
-    let has_torn_tail = !bytes.is_empty() && !bytes.ends_with(b"\n");
-    let mut records = Vec::new();
-    let mut lines = bytes.split(|byte| *byte == b'\n').peekable();
-    while let Some(line) = lines.next() {
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        match serde_json::from_slice(line) {
-            Ok(record) => records.push(record),
-            Err(_) if has_torn_tail && lines.peek().is_none() => break,
-            Err(error) => {
-                return Err(error).with_context(|| format!("parse {record_name}"));
-            }
-        }
-    }
-    Ok(records)
-}
-
-async fn prepare_jsonl_append<T: DeserializeOwned>(path: &Path) -> Result<u64> {
-    let bytes = read_optional_bytes(path).await?;
-    if bytes.is_empty() {
-        return Ok(0);
-    }
-
-    let complete_end = bytes
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |index| index + 1);
-    let complete = &bytes[..complete_end];
-    let complete_records = parse_complete_jsonl::<T>(complete)?;
-    if complete_end == bytes.len() {
-        return Ok(complete_records);
-    }
-
-    let tail = &bytes[complete_end..];
-    let valid_tail =
-        !tail.iter().all(u8::is_ascii_whitespace) && serde_json::from_slice::<T>(tail).is_ok();
-    let mut file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .open(path)
-        .await
-        .with_context(|| format!("open {} for tail recovery", path.display()))?;
-    if valid_tail {
-        file.write_all(b"\n").await?;
-        file.flush().await?;
-        Ok(complete_records.saturating_add(1))
-    } else {
-        file.set_len(complete_end as u64).await?;
-        file.flush().await?;
-        Ok(complete_records)
-    }
-}
-
-fn parse_complete_jsonl<T: DeserializeOwned>(bytes: &[u8]) -> Result<u64> {
-    let mut count = 0_u64;
-    for line in bytes.split(|byte| *byte == b'\n') {
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        serde_json::from_slice::<T>(line).context("parse complete JSONL record")?;
-        count = count.saturating_add(1);
-    }
-    Ok(count)
-}
-
-async fn read_optional_bytes(path: &Path) -> Result<Vec<u8>> {
-    match tokio::fs::read(path).await {
-        Ok(content) => Ok(content),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
     }
 }

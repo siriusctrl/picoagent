@@ -12,6 +12,9 @@ ADR 0009 refines only the memory-specific capability parts below. The dedicated
 `memory_update` tool and MemoryMaintenance profile are removed; normal profile
 schema stability remains accepted.
 
+ADR 0012 refines the compaction profile: compaction now reuses the normal
+system prompt and frozen schemas, while returned tool calls remain rejected.
+
 ## Context
 
 ADR 0003 established append-only local compaction and exact history retrieval.

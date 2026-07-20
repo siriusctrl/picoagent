@@ -19,7 +19,7 @@ job/CLI
            -> child AgentRunner
      -> ArtifactStore
      -> RunDirStore
-        -> compaction checkpoints / compacted-history reader
+        -> compacted-state metadata / compacted-history reader
      -> EventSink
 ```
 
@@ -78,8 +78,7 @@ disappear during one run.
 ### Run storage
 
 Each run is a portable directory beneath `<workspace>/.pico/runs/<run-id>/`.
-It contains run metadata, append-only complete messages, optional append-only
-compaction checkpoints, structured events, the final answer, artifacts, and
+It contains run metadata, append-only complete messages, structured events, the final answer, artifacts, and
 background task records. This is what persistence means in the launch runtime:
 a cloud worker can retain or inspect a job without a database.
 
@@ -95,7 +94,9 @@ line carries the stable message id, sequence, timestamp, SHA-256 of the exact
 Chat JSON, the layout needed to recover provider-neutral content, and a second
 SHA-256 over that reconstruction metadata. Tool-error state and opaque provider
 continuation items also remain there, as do structured result artifact refs and
-the exact preview-byte counts used to restore the per-run budget. None of these
+the exact preview-byte counts used to restore the per-run budget. Compaction
+request/state classification and state boundaries also live only in the
+sidecar. None of these
 private fields are added to the Chat message. `run.json` identifies the format
 as `openai-chat-compatible`.
 
@@ -107,9 +108,8 @@ Writing a message syncs its Chat line first, then syncs its metadata line. The
 metadata line is the commit marker: loading exposes only paired, hash-valid
 records. A lone final Chat line is an interrupted append and is removed before
 the next append; metadata ahead of the message log, mismatched hashes, and
-malformed completed records fail loading. Compaction JSONL independently
-tolerates only a torn final record. The current pre-release format intentionally
-does not load runs written by the earlier private message envelope.
+malformed completed records fail loading. The current pre-release format
+intentionally does not load older run-record versions.
 
 Both message files are created and directory-synced when the run is created.
 Reads, recovery, and paired appends hold a per-run file lock, so two
@@ -128,7 +128,7 @@ failed/running -> running  # explicit resume, if not already owned
 ```
 
 The loop itself is a small state machine too: inject newly completed background
-results, optionally checkpoint an old completed-message prefix, request model
+results, optionally compact an old completed-message prefix, request model
 output, persist the complete assistant message, execute zero or more direct
 tool calls, persist their results, then either repeat or complete. This makes
 crash boundaries and event ordering explicit without introducing a workflow
@@ -151,9 +151,9 @@ result with the same provider call id.
 
 The full run holds a filesystem execution lease. Resume rebuilds the recorded
 profile, validates provider/model/workspace identity, loads the paired message
-log and latest checkpoint, and continues after the last completed model step.
-An unpaired direct tool request becomes an explicit interrupted error result;
-it is never automatically replayed.
+log and latest completed compacted state, and continues after the last completed
+model step. An unpaired direct tool request becomes an explicit interrupted
+error result; it is never automatically replayed.
 
 ### Artifact storage
 
@@ -164,20 +164,22 @@ pages. See [artifacts.md](artifacts.md).
 
 ### Context compaction and trajectory retrieval
 
-Local compaction changes request assembly, not the durable trajectory.
-`messages.jsonl` and its metadata sidecar retain every committed completed
-message with a stable ref and sequence;
-`compactions.jsonl` appends summary checkpoints that identify the covered
-prefix and first exact message kept. The active request contains the initial
-runtime message, the newest checkpoint summary, and the exact recent suffix.
+Local compaction changes the active-context projection without rewriting prior
+messages. `messages.jsonl` retains every committed completed message with a
+stable ref and sequence, including the successful compaction user instruction
+and exact assistant compacted state. Sidecar metadata marks those two records
+and stores the covered prefix and first exact message kept. A normal active
+request excludes compaction instructions and older compacted states; it contains
+the initial runtime message, newest exact assistant state, and exact recent
+ordinary suffix.
 
-The trigger is deliberately based on provider-reported usage. If a provider
-does not report input tokens, automatic compaction does not run. Configuring
-`trigger_tokens` controls checkpoint creation only; the normal system prompt and
-history-tool schemas are already present and remain unchanged. A checkpoint
-summary is produced through an additional tool-free request profile using the
-same provider and model; picoagent does not implement provider/server-side
-compaction.
+The trigger uses a provider-neutral request estimate from the first call and
+adopts provider-reported input usage whenever available. Configuring
+`compact_at_tokens` controls compacted-state creation only; the normal system
+prompt and history-tool schemas are already present and remain unchanged. The
+additional request uses the same provider, model, system, and frozen schemas,
+then appends one compaction user instruction. Returned tool calls are rejected.
+Picoagent does not implement provider/server-side compaction.
 
 `history_search` and `history_read` expose a read-only `TrajectoryReader`
 boundary. The local implementation searches only messages outside the active
@@ -263,20 +265,17 @@ uses this same path rather than a special direct-tool child.
 
 ## Prompt And Cache Shape
 
-Normal agent calls use one invariant built-in system prompt and one sorted,
-frozen tool-schema set. The history schemas are included from the first call;
-automatic compaction never mutates this prefix. Project instructions,
+Agent and compaction calls use one invariant built-in system prompt and one
+sorted, frozen tool-schema set. The history schemas are included from the first
+call; automatic compaction never mutates this prefix. Project instructions,
 skill metadata, memory paths, and delegated instructions form a deterministic
 runtime reminder at the start of each run. The reminder is frozen for that run.
-When a checkpoint exists, recovery guidance appears in the synthetic active
-context immediately before the `<compacted-history>` block; it is absent from
-runs without compacted history. Optional schemas and a GeneralTask's
-delegating/leaf variant are selected before the run starts. Summary calls
-intentionally use a separate tool-free profile.
+Optional schemas and a GeneralTask's delegating/leaf variant are selected before
+the run starts. A compaction request changes only the message tail.
 
 The durable trajectory remains append-only; before a normal model call, an
-optional compaction checkpoint can replace its older active prefix with one
-summary while retaining the exact recent suffix. Large outputs become immutable
+optional assistant compacted-state message can replace its older active prefix
+while retaining the exact recent suffix. Large outputs become immutable
 artifacts with bounded previews. These choices bound request growth while
 keeping raw evidence inspectable and making provider KV-cache reuse possible
 without making cache behavior part of the core API.

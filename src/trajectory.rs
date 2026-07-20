@@ -57,6 +57,32 @@ pub struct TrajectoryMessage {
     pub seq: u64,
     pub created_at: DateTime<Utc>,
     pub message: Message,
+    /// Local context-management metadata stored only in message_metadata.jsonl.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<CompactionMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CompactionMessage {
+    Request,
+    State { state: CompactionState },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CompactionState {
+    pub covered_through_message_ref: String,
+    pub first_kept_message_ref: String,
+}
+
+impl TrajectoryMessage {
+    pub fn compaction_state(&self) -> Option<&CompactionState> {
+        match &self.compaction {
+            Some(CompactionMessage::State { state }) => Some(state),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

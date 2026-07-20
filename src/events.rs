@@ -49,18 +49,18 @@ pub enum RuntimeEventKind {
         reasoning_tokens: Option<u64>,
     },
     CompactionStarted {
-        checkpoint_id: String,
+        state_message_ref: String,
         tokens_before: u64,
     },
     CompactionCompleted {
-        checkpoint_id: String,
+        state_message_ref: String,
         covered_through_message_ref: String,
         first_kept_message_ref: String,
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
     },
     CompactionFailed {
-        checkpoint_id: String,
+        state_message_ref: String,
         error: String,
     },
     ToolStarted {

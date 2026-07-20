@@ -1,7 +1,11 @@
 # ADR 0003: Add Local Compaction Without Rewriting the Trajectory
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-07-15
+
+Superseded by ADR 0012, which keeps append-only exact-history recovery but
+records compaction requests and states in the paired message log instead of a
+separate checkpoint file.
 
 ADR 0004 refines only this record's prompt and history-tool placement: recovery
 guidance now lives in the initial runtime reminder, normal profiles register the

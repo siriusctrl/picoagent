@@ -29,8 +29,9 @@ compatible Chat requests replay it separately from visible assistant `content`.
 
 Each message has one corresponding line in `message_metadata.jsonl`. The
 sidecar holds the stable ref, sequence, timestamp, exact-message SHA-256,
-provider-neutral content layout, tool-error state, opaque provider items, and a
-result's optional `ArtifactRef` plus exact preview-byte count. A second SHA-256
+provider-neutral content layout, tool-error state, opaque provider items,
+optional compaction purpose/boundary state, and a result's optional
+`ArtifactRef` plus exact preview-byte count. A second SHA-256
 covers all reconstruction metadata. The two logs are created and
 directory-synced with the run. The Chat line is synced first and the metadata
 line is synced last as its commit marker. Reads, recovery, and appends take one
@@ -45,9 +46,9 @@ contract does not include a decoder for the previous private message envelope.
 For each model step:
 
 1. append newly completed background results to the current messages;
-2. if checkpointing is enabled and the provider-reported usage threshold is
-   reached, use a separate tool-free request to summarize an older
-   completed-message prefix into a compaction checkpoint;
+2. if compaction is enabled and the tracked usage threshold is reached, send
+   the native older prefix plus one compaction user instruction, then persist
+   the instruction and assistant compacted state as completed messages;
 3. assemble the active context and send sorted tool schemas to the provider;
 4. stream visible text and explicitly returned reasoning as separate events
    while collecting the complete response;
@@ -64,25 +65,29 @@ the tool again because its side effects are unknown.
 
 ## Compaction And History
 
-Automatic local compaction is off unless `compaction.trigger_tokens` is set.
-That option controls checkpoint creation only: every normal agent profile has
+Automatic local compaction is off unless `compaction.compact_at_tokens` is set.
+That option controls compacted-state creation only: every agent profile has
 both history tool schemas from its first call, and neither its system prompt nor
-toolset changes when a checkpoint appears. Compaction can trigger only after
-the provider reports input-token usage. Between calls, picoagent estimates the
-content adapters replay, including compatible Chat `reasoning_content` and
-opaque provider continuation items. The summary call uses the same provider and
-model with a separate system prompt, no tools, and a separate output limit; it
-does not consume a normal model-step slot. A
-summary failure emits a lifecycle event and leaves the prior/full context in
+toolset changes when a compacted state appears. Picoagent estimates the system,
+frozen schemas, and active messages before the first request, then adopts
+provider-reported input usage whenever available. Between calls it estimates
+new content adapters replay, including compatible Chat `reasoning_content` and
+opaque provider continuation items. The compaction call uses the same provider,
+model, system prompt, and frozen tool schemas, with a separate output limit and
+one final user instruction. A tool-call or failed response emits a lifecycle
+event and leaves the prior/full context in
 use. A fixed profile lacking either history tool or both generic artifact
 inspection tools (`read` and `bash`) would keep the full context instead of
 compacting without exact retrieval.
 
-Compaction does not mutate committed pairs in `messages.jsonl` and
-`message_metadata.jsonl`. It appends a checkpoint to `compactions.jsonl`, then
-assembles later model requests from the initial runtime message, latest summary,
-and exact recent messages. The raw trajectory therefore remains the source for
-read-only recovery:
+Compaction does not mutate committed message pairs. After a successful response,
+it appends the compaction user message and exact assistant compacted-state
+message to `messages.jsonl`; their sidecar records distinguish control from
+ordinary conversation and make the assistant record the commit marker. Normal
+context assembly excludes the compaction instruction and older compaction
+records, using the initial runtime message, latest exact assistant state, and
+exact recent ordinary messages. The omitted ordinary trajectory remains the
+source for read-only recovery:
 
 - `history_search` uses one Rust regex and returns newest matches only from the
   compacted prefix, including matches in linked full textual artifacts;
@@ -93,7 +98,10 @@ There is no cursor. The configured search maximum omits older query matches;
 refine the regex to reach them. If the already-bounded tool response is itself
 too large for model context, the normal artifact envelope preserves that full
 response. These are different truncation boundaries. Provider/server-side
-compaction is not implemented.
+compaction is not implemented. If configured, `context_window_tokens` rejects a
+normal or compaction request whose estimated input plus configured output
+allowance reaches the nominal full window. The provider-neutral estimate is not
+a tokenizer-exact guarantee.
 
 ## Tool Results
 
@@ -153,11 +161,11 @@ Reasoning is not included in `final.md`.
 The normal agent's built-in system prompt is workspace-independent, loaded from
 the embedded typed YAML registry, and invariant across its calls. Sorted tool
 schemas form the other stable request prefix and are frozen before the first
-call. Core history schemas are included regardless of `trigger_tokens`. Root
+call. Core history schemas are included regardless of `compact_at_tokens`. Root
 and a depth-eligible GeneralTask may include delegation schemas; each
 GeneralTask is assigned a delegating or leaf variant before it starts. Optional
 web and MCP schemas depend on startup configuration. Memory adds reminder paths,
-not a schema. Compaction summaries use a separate tool-free profile.
+not a schema. A compaction call reuses the same stable prefix.
 
 The first user message begins with a `<runtime-reminder>` text block containing
 the workspace snapshot: path, `AGENTS.md`, sorted skill metadata, memory paths,
@@ -168,9 +176,8 @@ wrapping in built-in agent prompts; dynamic reminder inputs remain exact.
 Tool output, background results, and later complete messages append at the
 durable conversation tail. Files or configuration changed during a run are
 observed by the next run rather than rewriting the stored trajectory. When
-enabled, a local compaction checkpoint can replace an older prefix only in the
-next provider request. That synthetic replacement puts recovery guidance
-immediately before the `<compacted-history>` block; no guidance is sent when no
-checkpoint exists. Large results remain behind stable artifact references.
+enabled, the latest stored assistant compacted state replaces an older prefix
+only in the projected provider context; the stored compaction instruction is
+not replayed in normal requests. Large results remain behind stable artifact references.
 These choices reduce context growth and improve the opportunity for provider-side
 prefix-cache reuse without coupling the loop to one cache API.
