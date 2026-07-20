@@ -24,7 +24,7 @@ impl TaskManager {
         name: String,
         arguments: Value,
     ) -> Result<BackgroundTaskRecord> {
-        if self.tools.get(&name).is_none() {
+        if self.spawnable_tools.get(&name).is_none() {
             bail!("unknown or non-spawnable tool `{name}`")
         }
         let task_id = self.create_tool_task(name.clone()).await?;

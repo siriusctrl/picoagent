@@ -23,16 +23,14 @@ mod execution;
 mod lifecycle;
 mod record;
 mod recovery;
-mod tools;
 
 use record::TaskRecordStore;
 pub use record::{BackgroundTaskRecord, BackgroundTaskState};
 pub use recovery::RecoverableSubagent;
-pub use tools::{SpawnTool, TaskTool};
 
 pub struct TaskManager {
     runner: Arc<AgentRunner>,
-    tools: ToolRegistry,
+    spawnable_tools: ToolRegistry,
     artifacts: ArtifactStore,
     preview_budget: Arc<Mutex<usize>>,
     store: RunDirStore,
@@ -53,7 +51,7 @@ pub struct TaskManager {
 
 pub struct TaskManagerConfig {
     pub runner: Arc<AgentRunner>,
-    pub tools: ToolRegistry,
+    pub candidate_tools: ToolRegistry,
     pub artifacts: ArtifactStore,
     pub preview_budget: Arc<Mutex<usize>>,
     pub store: RunDirStore,
@@ -86,7 +84,7 @@ impl TaskManager {
         );
         Arc::new(Self {
             runner: config.runner,
-            tools: config.tools,
+            spawnable_tools: config.candidate_tools.explicitly_spawnable(),
             artifacts: config.artifacts,
             preview_budget: config.preview_budget,
             store: config.store,
@@ -104,6 +102,10 @@ impl TaskManager {
             slots: Arc::new(Semaphore::new(config.max_parallel_tasks.max(1))),
             default_wait_timeout: Duration::from_secs(config.wait_timeout_seconds.max(1)),
         })
+    }
+
+    pub(crate) fn spawnable_tool_names(&self) -> Vec<String> {
+        self.spawnable_tools.names().map(str::to_owned).collect()
     }
 
     async fn create_tool_task(self: &Arc<Self>, name: String) -> Result<String> {
@@ -226,7 +228,7 @@ impl TaskManager {
 
     fn tool_executor(&self) -> ToolExecutor<'_> {
         ToolExecutor::new(
-            &self.tools,
+            &self.spawnable_tools,
             &self.hooks,
             &self.artifacts,
             &self.preview_budget,

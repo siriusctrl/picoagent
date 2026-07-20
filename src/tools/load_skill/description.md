@@ -1,0 +1,1 @@
+Load the full instructions for one skill listed in the runtime skill catalog. Call this before following a relevant skill. The result contains `Skill directory: <path>`, then the SKILL.md instruction body; name and description metadata are not repeated. Resolve relative files named by the instructions from the returned directory.

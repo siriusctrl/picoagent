@@ -21,9 +21,9 @@ use picoagent::{
         openai_compatible::{OpenAiCompatibleOptions, OpenAiCompatibleProvider},
         openai_oauth::{DEFAULT_OPENAI_OAUTH_BASE_URL, OpenAiOAuthProvider},
     },
-    skills::{LoadSkillTool, SkillRegistry},
+    skills::SkillRegistry,
     storage::RunDirStore,
-    tools::{ToolRegistry, WebSearchTool, register_defaults},
+    tools::{WebSearchTool, build_app_tools},
 };
 
 mod cli;
@@ -132,22 +132,22 @@ async fn run_action(
         .then(|| MemoryPaths::new(memory_home, workspace));
     let home = env::var_os("HOME").map(PathBuf::from);
     let skills = Arc::new(SkillRegistry::discover(workspace, home.as_deref())?);
-    let mut tools = ToolRegistry::default();
-    register_defaults(&mut tools)?;
-    tools.register(Arc::new(LoadSkillTool::new(skills.clone())))?;
-    if config.web_search.enabled {
+    let web_search = if config.web_search.enabled {
         let api_key = env::var(&config.web_search.api_key_env).with_context(|| {
             format!(
                 "web_search is enabled but `{}` is not set",
                 config.web_search.api_key_env
             )
         })?;
-        tools.register(Arc::new(WebSearchTool::with_endpoint(
+        Some(WebSearchTool::with_endpoint(
             &config.web_search.endpoint,
             api_key,
             config.web_search.default_count,
-        )))?;
-    }
+        ))
+    } else {
+        None
+    };
+    let mut tools = build_app_tools(skills.clone(), web_search)?;
 
     let mut mcp_clients = Vec::new();
     for (name, server) in &config.mcp {

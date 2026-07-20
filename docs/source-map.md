@@ -14,7 +14,6 @@
 - `src/agent/task/lifecycle.rs`: failed task state and events.
 - `src/agent/task/record.rs`: persisted background task state and model envelope.
 - `src/agent/task/recovery.rs`: task reload, child reconciliation, and cancellation.
-- `src/agent/task/tools.rs`: model-facing `spawn` plus status/wait/inspect/steer/stop schemas.
 - `src/storage/input.rs`: durable pending user input used by non-interrupting child steering.
 - `src/agent/context.rs`: deterministic prompt framing and dynamic reminder assembly.
 - `src/prompts.rs`: typed access to the embedded agent prompt registry.
@@ -27,9 +26,12 @@
 - `src/model/openai_oauth_credentials.rs`: auth-file, Codex import, and JWT helpers.
 - `src/model/openai_oauth_device.rs`: device-code request and polling.
 - `src/model/anthropic_compatible.rs`: Messages adapter.
-- `src/tools/mod.rs`: tool contract, sorted registry, and default registration.
-- `src/tools/{read,write,bash,web_search}/`: flat standalone base tools with
-  compile-time descriptions beside their Rust implementation.
+- `src/tools/mod.rs`: tool contract and sorted registry with explicit
+  `spawn(kind=tool)` policy.
+- `src/tools/assembly.rs`: the single process/run tool-assembly path.
+- `src/tools/{read,write,bash,web_search,load_skill,spawn,task}/`: flat local
+  model-facing adapters with compile-time descriptions beside their Rust
+  implementation.
 - `src/tools/{history_search,history_read}/`: read-only compacted-trajectory
   retrieval with compile-time descriptions and bounded contracts.
 - `src/trajectory.rs` and `src/trajectory/`: provider-neutral history reader
@@ -42,7 +44,8 @@
   persistence helpers.
 - `src/storage/trajectory.rs`: classified append-only messages and
   compacted-history loading.
-- `src/skills/mod.rs`: Agent Skills metadata discovery and body/path loading.
+- `src/skills/mod.rs`: Agent Skills metadata discovery and body/path loading;
+  the model-facing adapter is in `src/tools/load_skill/`.
 - `src/mcp.rs`: rmcp stdio client and tool adapters.
 - `src/hooks.rs`: deterministic command-hook pipeline.
 - `src/memory.rs`: user/project Markdown memory paths and reminder text.

@@ -11,11 +11,10 @@ job/CLI
   -> AgentRunner
      -> ModelProvider
      -> ToolRegistry
-        -> built-in Tool
-        -> MCP Tool adapter
-        -> load_skill Tool
-        -> spawn / task
-           -> background Tool
+        -> flat local Tool adapters
+        -> MCP Tool adapters
+        -> TaskManager
+           -> explicitly spawned Tool
            -> child AgentRunner
      -> ArtifactStore
      -> RunDirStore
@@ -49,10 +48,11 @@ Initial adapters:
 
 ### Tool registry
 
-Every model-callable action implements `Tool`. Built-ins, skills, MCP, and
-background control share the same registry. Memory uses the ordinary file
-tools. The registry is sorted and frozen before the first normal provider call
-so tool schema order and membership remain deterministic across requests.
+Every model-callable action implements `Tool`. Local adapters and MCP adapters
+share the same registry. Memory uses the ordinary file tools. The registry
+caches each adapter's spec at registration, stays sorted, and is frozen before
+the first normal provider call so tool schema order and membership remain
+deterministic across requests.
 
 This registry is the capability router: it maps a model-returned tool name to
 one implementation and one schema. It does not decide what to do or create a
@@ -60,11 +60,19 @@ second planning layer; the model selects a capability, and the runner performs
 the deterministic lookup. Duplicate names fail during startup instead of
 silently replacing an existing capability.
 
-Standalone base tools live in flat `src/tools/<tool>/` modules. Their
-model-facing description is compile-time Markdown beside the implementation;
-their name, input schema, argument validation, and execution stay together in
-Rust. Tools coupled to task supervision, skills, or MCP remain owned by those
-subsystems and adapt into the same registry.
+Every local model-facing adapter lives in a flat `src/tools/<tool>/` module.
+Its compile-time Markdown description, name, schema, argument validation, and
+execution adapter stay together. Domain engines remain separate: task state is
+owned by `TaskManager`, skills by `SkillRegistry`, and trajectory retrieval by
+`TrajectoryReader`. MCP lifecycle and its dynamic adapter remain in `mcp.rs`.
+
+`build_app_tools` assembles process-wide local capabilities. `RunToolAssembly`
+is the single path that adds run-scoped history and task controls. Every
+registration explicitly says whether the model may name that tool in
+`spawn(kind=tool)`; this does not affect automatic promotion of a direct call
+whose foreground window elapses. The `spawn` tool's schema enum exposes the
+exact allowed set, so the model-visible schema and resume hash commit the same
+capability contract.
 
 Root and delegating/leaf GeneralTask have explicit capability sets. Each normal
 profile registers `history_search` and
@@ -245,7 +253,7 @@ project files; it is not a special second workspace abstraction. Child
 transcripts stay out of the parent context; only the bounded final result and
 artifact reference return to the parent.
 
-`spawn` starts an ordinary tool or GeneralTask child in the background
+`spawn` starts a schema-listed tool or GeneralTask child in the background
 immediately. A direct ordinary tool starts in the foreground; when its configured
 foreground window elapses, the same in-flight future moves into this task
 lifecycle without stopping or restarting. Explicit background work has no hard
@@ -262,7 +270,8 @@ Each task record is durable coordination state only. Child messages remain in
 the child's run directory. Recovery derives delivered ids from the parent
 transcript, marks in-flight ordinary tools `interrupted` with unknown side
 effects, reconciles terminal children, and resumes queued/running children
-through the same runner.
+through the same runner. Resume validates the frozen tool-schema hash before
+task reconciliation can update any of those records.
 
 The durable child guarantee belongs to `spawn(kind="agent")` GeneralTask
 records, and the parent run is the only resume entrypoint. Memory consolidation

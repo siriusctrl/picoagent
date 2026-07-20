@@ -122,9 +122,9 @@ user request and assistant compacted state are ordinary Chat-compatible message
 lines.
 
 Stable agent instructions are folded scalar values in the typed, compile-time
-`prompts/agents.yaml` registry. Standalone base tool descriptions remain
-Markdown beside their Rust implementations under `src/tools/<tool>/`; names,
-schemas, validation, and execution remain Rust contracts.
+`prompts/agents.yaml` registry. Every local model-facing tool adapter and its
+Markdown description lives under `src/tools/<tool>/`; names, schemas,
+validation, assembly, and execution remain Rust contracts.
 
 ## Provider Setup
 
@@ -317,7 +317,7 @@ plus `rg`, avoiding repeated commands and unnecessary context growth. See
 
 ## Tools And Background Work
 
-The launch built-ins are intentionally small:
+The launch tool surface is intentionally small:
 
 - `read`: bounded UTF-8 reads for a known path
 - `write`: full-file creation/replacement or an atomic list of targeted edits
@@ -325,6 +325,9 @@ The launch built-ins are intentionally small:
   combined stdout/stderr and adds a status line only for unsuccessful completion
 - `history_search`: regex search over the compacted trajectory prefix
 - `history_read`: a bounded message window around a returned history ref
+- `load_skill`: progressive loading of a catalogued skill's full instructions
+- `spawn`: immediate background start for an allowed tool or GeneralTask child
+- `task`: status, wait, inspect, steer, and stop for background work
 - `web_search`: optional Brave-backed public web search
 
 Root and depth-eligible GeneralTask delegation capabilities are selected before
@@ -342,8 +345,8 @@ silently modify the wrong code.
 Every direct tool call starts in the foreground. If it exceeds
 `tasks.foreground_tool_timeout_seconds`, picoagent preserves that same future,
 moves it into the background task lifecycle, and returns its task id; the tool
-is neither stopped nor restarted. `spawn` starts an existing tool or the
-`general-task` agent profile in the background immediately. The `task` tool
+is neither stopped nor restarted. `spawn` starts a tool listed in its schema
+enum or the `general-task` agent profile in the background immediately. The `task` tool
 provides `status`, bounded `wait`, subagent `inspect`, non-interrupting `steer`,
 and `stop`. Terminal results are appended as new runtime messages at the next
 model boundary, preserving provider tool-call validity.
@@ -449,20 +452,19 @@ CLI/job
   -> AgentRunner
      -> ModelProvider
      -> ToolRegistry
-        -> built-in tools
-        -> MCP tools
-        -> load_skill
-        -> spawn / task
-           -> background Tool
+        -> flat local Tool adapters
+        -> MCP Tool adapters
+        -> TaskManager
+           -> explicitly spawned Tool
            -> child AgentRunner
      -> ArtifactStore
      -> RunDirStore
      -> EventSink
 ```
 
-Provider wire formats never enter the loop. MCP tools use the same `Tool`
-contract as built-ins. Subagents use the same runner. Large results use the same
-artifact contract regardless of source.
+Provider wire formats never enter the loop. MCP adapters use the same `Tool`
+contract as local adapters. Subagents use the same runner. Large results use the
+same artifact contract regardless of source.
 
 Read [architecture.md](docs/architecture.md) and
 [design-choices.md](docs/design-choices.md) for the detailed boundaries and

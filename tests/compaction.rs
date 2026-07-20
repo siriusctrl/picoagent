@@ -18,7 +18,7 @@ use picoagent::{
         ToolSpec,
     },
     storage::{RunDirStore, RunState},
-    tools::{RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
+    tools::{ExplicitSpawn, RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
     trajectory::CompactionMessage,
 };
 use serde_json::{Value, json};
@@ -197,9 +197,13 @@ fn runner_with_compaction(
 ) -> (Arc<AgentRunner>, RunDirStore) {
     let store = RunDirStore::new(workspace.path());
     let mut tools = ToolRegistry::default();
-    tools.register(Arc::new(MarkerTool)).unwrap();
+    tools
+        .register(Arc::new(MarkerTool), ExplicitSpawn::Allowed)
+        .unwrap();
     if exact_recovery_available {
-        tools.register(Arc::new(ReadTool)).unwrap();
+        tools
+            .register(Arc::new(ReadTool), ExplicitSpawn::Allowed)
+            .unwrap();
     }
     let options = RunnerOptions {
         max_output_tokens: Some(64),

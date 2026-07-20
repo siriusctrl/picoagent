@@ -12,9 +12,9 @@ navigation, invariants, verification, and handoff.
   same runner.
 - `src/model/`: provider-neutral message/tool contracts plus OpenAI OAuth,
   OpenAI-compatible, Anthropic-compatible, and deterministic echo adapters.
-- `src/tools/`: the stable tool contract and registry plus flat standalone base
-  tools (`read`, `write`, `bash`, and optional `web_search`). Each base tool owns
-  its implementation, schema, and compile-time Markdown description.
+- `src/tools/`: the stable tool contract, explicit assembly, and flat local
+  model-facing adapters. Each adapter owns its schema and compile-time Markdown
+  description while calling focused domain logic where needed.
 - `prompts/agents.yaml`: the typed registry of stable agent-level instructions
   embedded into the binary; dynamic assembly remains in `src/agent/context.rs`.
 - `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,
@@ -45,6 +45,9 @@ navigation, invariants, verification, and handoff.
 - Keep provider wire formats and auth outside the agent loop.
 - Keep one deterministic, namespaced tool registry. MCP tools adapt into the
   same `Tool` contract and cannot silently replace built-ins.
+- Declare explicit `spawn(kind=tool)` permission at every registration and
+  expose the exact allowed set in the `spawn` schema; do not infer it from
+  registration order.
 - Treat completed messages as the resumable boundary. Stream deltas are events,
   not durable conversation messages.
 - Keep `messages.jsonl` in the declared `openai-chat-compatible` shape. Store

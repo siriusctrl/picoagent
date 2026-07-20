@@ -64,7 +64,7 @@ pub struct BackgroundTaskOutput {
 }
 
 impl BackgroundTaskRecord {
-    pub(super) fn queued_tool(id: String, name: String) -> Self {
+    pub(crate) fn queued_tool(id: String, name: String) -> Self {
         Self {
             version: TASK_RECORD_VERSION,
             id,

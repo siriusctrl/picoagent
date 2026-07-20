@@ -67,3 +67,5 @@ Use these sections:
   deadline](0011-model-stream-idle-timeout-and-request-deadline.md)
 - [ADR 0012: Record compaction as messages](0012-record-compaction-as-messages.md)
 - [ADR 0013: Use sequence-addressed message refs](0013-sequence-addressed-message-refs.md)
+- [ADR 0014: Flat tool adapters and explicit
+  assembly](0014-flat-tool-adapters-and-explicit-assembly.md)

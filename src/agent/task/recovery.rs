@@ -57,14 +57,9 @@ impl Drop for TaskCancellationGuard {
 }
 
 impl TaskManager {
-    /// Reopen durable task coordination state for a resumed parent run.
-    ///
-    /// Completed child runs are folded into their parent task, in-flight tools
-    /// become `interrupted` (and are never re-executed), and live child runs are
-    /// returned to the caller for resumption by the shared `AgentRunner`.
-    pub async fn restore(
-        config: TaskManagerConfig,
-    ) -> Result<(Arc<Self>, Vec<RecoverableSubagent>)> {
+    /// Load durable task coordination without reconciling or mutating it. The
+    /// runner validates the frozen capability schema before reconciliation.
+    pub async fn load_for_resume(config: TaskManagerConfig) -> Result<Arc<Self>> {
         let task_store = TaskRecordStore::new(
             config
                 .store
@@ -86,6 +81,14 @@ impl TaskManager {
             .collect();
         let manager = Self::from_config(config, records, delivered);
         manager.restore_undelivered_preview_budget().await;
+        Ok(manager)
+    }
+
+    #[cfg(test)]
+    pub async fn restore(
+        config: TaskManagerConfig,
+    ) -> Result<(Arc<Self>, Vec<RecoverableSubagent>)> {
+        let manager = Self::load_for_resume(config).await?;
         let recoverable = manager.reconcile_after_restart().await?;
         Ok((manager, recoverable))
     }

@@ -10,8 +10,9 @@ use crate::{
     hooks::{HookEvent, HookPipeline},
     memory::MemoryPaths,
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role},
+    prompts::agent_prompts,
     storage::{RunDirStore, RunLease, RunState},
-    tools::{ToolRegistry, register_history_tools},
+    tools::{RunToolAssembly, ToolRegistry},
     trajectory::LocalTrajectoryReader,
 };
 
@@ -20,8 +21,8 @@ use super::{
         CompactionAttempt, build_active_context, estimate_message_tokens,
         estimate_request_input_tokens, maybe_compact,
     },
-    context::{build_runtime_reminder, build_system_prompt},
-    task::{SpawnTool, TaskManager, TaskManagerConfig, TaskTool},
+    context::build_runtime_reminder,
+    task::{TaskManager, TaskManagerConfig},
     tool_execution::DirectToolRuntime,
 };
 
@@ -122,7 +123,7 @@ impl AgentRunner {
             }
         };
 
-        let system = build_system_prompt();
+        let system = agent_prompts().system.clone();
         if needs_initial_message {
             let runtime_reminder = build_runtime_reminder(
                 &self.workspace,
@@ -143,9 +144,8 @@ impl AgentRunner {
             };
             trajectory.push(self.store.append_message(&run_id, &user_message).await?);
         }
-        let mut registry = self.base_tools.clone();
-        register_history_tools(
-            &mut registry,
+        let tool_assembly = RunToolAssembly::new(
+            self.base_tools.clone(),
             Arc::new(LocalTrajectoryReader::new(self.store.clone())),
             self.options.compaction.history_search_max_matches,
         )?;
@@ -154,7 +154,7 @@ impl AgentRunner {
             .compaction
             .compact_at_tokens
             .is_some_and(|tokens| tokens > 0)
-            && (registry.get("read").is_some() || registry.get("bash").is_some());
+            && (tool_assembly.contains("read") || tool_assembly.contains("bash"));
 
         let tool_preview_budget = Arc::new(tokio::sync::Mutex::new(remaining_preview_budget(
             self.artifacts.policy().max_inline_bytes_per_run,
@@ -162,7 +162,7 @@ impl AgentRunner {
         )));
         let task_config = TaskManagerConfig {
             runner: self.clone(),
-            tools: registry.clone(),
+            candidate_tools: tool_assembly.task_candidates(),
             artifacts: self.artifacts.clone(),
             preview_budget: tool_preview_budget.clone(),
             store: self.store.clone(),
@@ -175,16 +175,26 @@ impl AgentRunner {
             max_parallel_tasks: self.options.max_parallel_tasks,
             wait_timeout_seconds: self.options.task_wait_timeout_seconds,
         };
-        let (manager, recoverable_subagents) = if mode == RunMode::Resume {
-            TaskManager::restore(task_config).await?
+        let manager = if mode == RunMode::Resume {
+            TaskManager::load_for_resume(task_config).await?
         } else {
-            (TaskManager::new(task_config), Vec::new())
+            TaskManager::new(task_config)
         };
-        if plan.may_delegate {
-            registry.register(Arc::new(SpawnTool::new(manager.clone())))?;
-        }
-        registry.register(Arc::new(TaskTool::new(manager.clone())))?;
         let task_manager = manager;
+        let registry = tool_assembly.finish(task_manager.clone(), plan.may_delegate)?;
+        // Freeze the model-facing schema set once per run. Tool execution keeps
+        // using the registry, but every normal model request receives the exact
+        // same sorted schema prefix.
+        let tool_specs = registry.specs();
+        let tool_schema_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&tool_specs)?));
+        self.store
+            .verify_tool_schema(&run_id, &tool_schema_sha256)
+            .await?;
+        let recoverable_subagents = if mode == RunMode::Resume {
+            task_manager.reconcile_after_restart().await?
+        } else {
+            Vec::new()
+        };
         let mut task_guard = task_manager.cancellation_guard(cancellation_lease);
         let direct_tools = DirectToolRuntime {
             registry: &registry,
@@ -197,14 +207,6 @@ impl AgentRunner {
             manager: task_manager.clone(),
             foreground_timeout_seconds: self.options.foreground_tool_timeout_seconds,
         };
-        // Freeze the model-facing schema set once per run. Tool execution keeps
-        // using the registry, but every normal model request receives the exact
-        // same sorted schema prefix.
-        let tool_specs = registry.specs();
-        let tool_schema_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&tool_specs)?));
-        self.store
-            .verify_tool_schema(&run_id, &tool_schema_sha256)
-            .await?;
         for task in recoverable_subagents {
             task_manager.resume_agent_task(task).await?;
         }

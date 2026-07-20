@@ -113,12 +113,12 @@ immediately aborting the loop. Runtime/store/provider failures fail the run.
 
 ## Subagents
 
-`spawn` runs independent tools or general-task child agents concurrently up to
-the configured limit. Each child creates a normal run with a parent id. Children
-share the workspace, provider, and base tools. The default maximum depth of one
-keeps the initial execution model predictable. `task wait` is a bounded join; a
-wait timeout does not cancel the task. `task stop` is the explicit cancellation
-operation.
+`spawn` runs schema-listed tools or general-task child agents concurrently up
+to the configured limit. Each child creates a normal run with a parent id.
+Children share the workspace, provider, and base tools. The default maximum
+depth of one keeps the initial execution model predictable. `task wait` is a
+bounded join; a wait timeout does not cancel the task. `task stop` is the
+explicit cancellation operation.
 
 `task inspect` returns a child's latest durable Chat-compatible messages and can
 page backward by sequence. `task steer` queues a normal user message after the

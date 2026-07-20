@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     model::ToolSpec,
-    tools::{RawToolOutput, Tool, ToolContext, ToolRegistry},
+    tools::{ExplicitSpawn, RawToolOutput, Tool, ToolContext, ToolRegistry},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,19 +98,11 @@ impl McpStdioClient {
             .collect())
     }
 
-    pub async fn register_tools(
-        self: &Arc<Self>,
-        registry: &mut ToolRegistry,
-    ) -> Result<Vec<String>> {
-        let adapters = self.tool_adapters().await?;
-        let names = adapters
-            .iter()
-            .map(|tool| tool.spec().name)
-            .collect::<Vec<_>>();
-        for adapter in adapters {
-            registry.register(adapter)?;
+    pub async fn register_tools(self: &Arc<Self>, registry: &mut ToolRegistry) -> Result<()> {
+        for adapter in self.tool_adapters().await? {
+            registry.register(adapter, ExplicitSpawn::Allowed)?;
         }
-        Ok(names)
+        Ok(())
     }
 
     pub async fn shutdown(&self) -> Result<()> {

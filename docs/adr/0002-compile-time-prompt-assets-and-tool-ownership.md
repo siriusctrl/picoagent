@@ -1,11 +1,14 @@
 # ADR 0002: Embed Prompt Assets and Keep Tools With Their Owners
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-07-15
 
-ADR 0008 refines only agent-prompt packaging below: the separate Markdown files
-are now folded values in one typed YAML registry. Compile-time embedding and
-tool-description ownership remain accepted.
+Superseded by ADR 0014.
+
+ADR 0008 refined the agent-prompt packaging below. ADR 0014 later superseded
+this combined ownership decision: compile-time assets remain, but every local
+model-facing adapter now lives under `src/tools/` while domain logic stays in
+its focused subsystem.
 
 ## Context
 

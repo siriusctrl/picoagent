@@ -16,7 +16,10 @@ use picoagent::{
         ToolSpec,
     },
     storage::RunDirStore,
-    tools::{BashTool, RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry, WriteTool},
+    tools::{
+        BashTool, ExplicitSpawn, RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry,
+        WriteTool,
+    },
     trajectory::TrajectoryMessage,
 };
 use serde::Serialize;
@@ -204,9 +207,62 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
         ]
     );
     assert!(!requests[0].system.contains("history_search"));
+    for tool_name in ["`bash`", "`load_skill`", "`spawn`", "`write`"] {
+        assert!(!requests[0].system.contains(tool_name));
+    }
+    assert_eq!(
+        spawn_tool_enum(&requests[0]),
+        ["bash", "marker", "read", "write"]
+    );
     let reminder = text_content(&requests[0].messages[0]);
     assert!(!reminder.contains("<context-management>"));
     assert!(!reminder.contains("history_search"));
+}
+
+#[tokio::test]
+async fn denied_only_registry_exposes_an_agent_only_spawn_schema() {
+    let workspace = TempDir::new().unwrap();
+    let provider = Arc::new(CapturingFinalProvider::default());
+    let mut tools = ToolRegistry::default();
+    tools
+        .register(Arc::new(MarkerTool), ExplicitSpawn::Denied)
+        .unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: provider.clone(),
+        model: "test-model".to_owned(),
+        workspace: workspace.path().to_owned(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::default(),
+        store: RunDirStore::new(workspace.path()),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions::default(),
+    });
+
+    runner
+        .run(RunRequest::root("agent-only spawn schema"))
+        .await
+        .unwrap();
+
+    let requests = provider.requests.lock().unwrap();
+    let spawn = requests[0]
+        .tools
+        .iter()
+        .find(|tool| tool.name == "spawn")
+        .unwrap();
+    assert_eq!(
+        spawn.input_schema.pointer("/properties/kind/enum"),
+        Some(&json!(["agent"]))
+    );
+    assert!(spawn.input_schema.pointer("/properties/tool").is_none());
+    assert!(
+        spawn
+            .input_schema
+            .pointer("/properties/arguments")
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -276,6 +332,14 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
         ],
     );
     assert_eq!(serialized(&root[0].tools), serialized(&delegating[0].tools));
+    assert_eq!(
+        spawn_tool_enum(root[0]),
+        ["bash", "marker", "read", "write"]
+    );
+    assert_eq!(
+        spawn_tool_enum(delegating[0]),
+        ["bash", "marker", "read", "write"]
+    );
 
     let root_reminder = text_content(&root[0].messages[0]);
     let delegating_reminder = text_content(&delegating[0].messages[0]);
@@ -350,10 +414,18 @@ fn runner_with_store(
     store: RunDirStore,
 ) -> Arc<AgentRunner> {
     let mut tools = ToolRegistry::default();
-    tools.register(Arc::new(BashTool)).unwrap();
-    tools.register(Arc::new(MarkerTool)).unwrap();
-    tools.register(Arc::new(ReadTool)).unwrap();
-    tools.register(Arc::new(WriteTool::default())).unwrap();
+    tools
+        .register(Arc::new(BashTool), ExplicitSpawn::Allowed)
+        .unwrap();
+    tools
+        .register(Arc::new(MarkerTool), ExplicitSpawn::Allowed)
+        .unwrap();
+    tools
+        .register(Arc::new(ReadTool), ExplicitSpawn::Allowed)
+        .unwrap();
+    tools
+        .register(Arc::new(WriteTool::default()), ExplicitSpawn::Allowed)
+        .unwrap();
     AgentRunner::new(AgentRunnerConfig {
         provider,
         model: "test-model".to_owned(),
@@ -409,6 +481,22 @@ fn tool_names(request: &ModelRequest) -> Vec<&str> {
         .tools
         .iter()
         .map(|tool| tool.name.as_str())
+        .collect()
+}
+
+fn spawn_tool_enum(request: &ModelRequest) -> Vec<&str> {
+    request
+        .tools
+        .iter()
+        .find(|tool| tool.name == "spawn")
+        .unwrap()
+        .input_schema
+        .pointer("/properties/tool/enum")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap())
         .collect()
 }
 

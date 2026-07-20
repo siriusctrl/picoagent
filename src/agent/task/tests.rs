@@ -5,6 +5,7 @@ use crate::{
     events::{EventSink, NoopEventSink, RuntimeEvent, RuntimeEventKind},
     model::{Message, MessageContent, ModelProvider, Role, echo::EchoProvider},
     storage::{RunRecord, RunState},
+    tools::ExplicitSpawn,
 };
 
 async fn create_run(store: &RunDirStore, id: &str, parent: Option<String>) {
@@ -70,7 +71,7 @@ fn config(
     });
     TaskManagerConfig {
         runner,
-        tools: ToolRegistry::default(),
+        candidate_tools: ToolRegistry::default(),
         artifacts,
         preview_budget: Arc::new(Mutex::new(128 * 1024)),
         store: store.clone(),
@@ -644,6 +645,31 @@ async fn in_flight_tool_recovers_as_interrupted_regardless_of_task_age() {
     );
 }
 
+#[tokio::test]
+async fn resume_load_does_not_reconcile_tasks_before_capability_validation() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_tool("tool-task".to_owned(), "bash".to_owned());
+    task.state = BackgroundTaskState::Running;
+    task_store.write(&task).await.unwrap();
+
+    let manager = TaskManager::load_for_resume(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+    assert_eq!(
+        manager.get("tool-task").await.unwrap().state,
+        BackgroundTaskState::Running
+    );
+
+    manager.reconcile_after_restart().await.unwrap();
+    assert_eq!(
+        manager.get("tool-task").await.unwrap().state,
+        BackgroundTaskState::Interrupted
+    );
+}
+
 struct FastTool;
 
 #[async_trait::async_trait]
@@ -666,12 +692,34 @@ impl crate::tools::Tool for FastTool {
 }
 
 #[tokio::test]
+async fn task_manager_rejects_a_tool_denied_for_explicit_spawn() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let mut task_config = config(workspace.path(), &store, "parent");
+    task_config
+        .candidate_tools
+        .register(Arc::new(FastTool), ExplicitSpawn::Denied)
+        .unwrap();
+    let manager = TaskManager::new(task_config);
+
+    assert!(manager.spawnable_tool_names().is_empty());
+    let error = manager
+        .spawn_tool("fast".to_owned(), serde_json::json!({}))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("unknown or non-spawnable tool"));
+}
+
+#[tokio::test]
 async fn background_tool_has_no_execution_deadline() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
     let mut task_config = config(workspace.path(), &store, "parent");
-    task_config.tools.register(Arc::new(FastTool)).unwrap();
+    task_config
+        .candidate_tools
+        .register(Arc::new(FastTool), ExplicitSpawn::Allowed)
+        .unwrap();
     task_config.hooks.register(crate::hooks::CommandHook::new(
         "slow-before",
         crate::hooks::HookEvent::ToolBefore,
@@ -721,7 +769,10 @@ async fn background_tool_errors_use_the_artifact_and_preview_contract() {
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
     let mut task_config = config(workspace.path(), &store, "parent");
-    task_config.tools.register(Arc::new(FailingTool)).unwrap();
+    task_config
+        .candidate_tools
+        .register(Arc::new(FailingTool), ExplicitSpawn::Allowed)
+        .unwrap();
     task_config.artifacts = ArtifactStore::new(ArtifactPolicy {
         inline_limit_bytes: 64,
         max_inline_bytes_per_run: 128,
@@ -955,14 +1006,17 @@ async fn foreground_timeout_promotes_the_same_tool_future_instead_of_stopping_or
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut tools = ToolRegistry::default();
     tools
-        .register(Arc::new(SlowContinuationTool(calls.clone())))
+        .register(
+            Arc::new(SlowContinuationTool(calls.clone())),
+            ExplicitSpawn::Allowed,
+        )
         .unwrap();
     let artifacts = ArtifactStore::new(ArtifactPolicy::default());
     let preview_budget = Arc::new(Mutex::new(128 * 1024));
     let hooks = HookPipeline::new();
     let events: crate::events::SharedEventSink = Arc::new(NoopEventSink);
     let mut task_config = config(workspace.path(), &store, "parent");
-    task_config.tools = tools.clone();
+    task_config.candidate_tools = tools.clone();
     task_config.artifacts = artifacts.clone();
     task_config.preview_budget = preview_budget.clone();
     task_config.hooks = hooks.clone();
@@ -1049,11 +1103,14 @@ async fn stop_aborts_only_the_selected_background_task_and_commits_cancelled_sta
     let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut task_config = config(workspace.path(), &store, "parent");
     task_config
-        .tools
-        .register(Arc::new(BlockingDropTool {
-            started: started.clone(),
-            dropped: dropped.clone(),
-        }))
+        .candidate_tools
+        .register(
+            Arc::new(BlockingDropTool {
+                started: started.clone(),
+                dropped: dropped.clone(),
+            }),
+            ExplicitSpawn::Allowed,
+        )
         .unwrap();
     let manager = TaskManager::new(task_config);
     let task = manager

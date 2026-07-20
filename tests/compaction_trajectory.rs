@@ -21,7 +21,7 @@ use picoagent::{
         ToolSpec,
     },
     storage::RunDirStore,
-    tools::{RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
+    tools::{ExplicitSpawn, RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
     trajectory::TrajectoryMessage,
 };
 use serde_json::{Value, json};
@@ -200,8 +200,12 @@ fn runner(
 ) -> (Arc<AgentRunner>, RunDirStore) {
     let store = RunDirStore::new(workspace);
     let mut tools = ToolRegistry::default();
-    tools.register(Arc::new(MarkerTool)).unwrap();
-    tools.register(Arc::new(ReadTool)).unwrap();
+    tools
+        .register(Arc::new(MarkerTool), ExplicitSpawn::Allowed)
+        .unwrap();
+    tools
+        .register(Arc::new(ReadTool), ExplicitSpawn::Allowed)
+        .unwrap();
     let options = RunnerOptions {
         max_subagent_depth: 0,
         max_output_tokens: Some(4_096),

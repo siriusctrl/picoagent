@@ -1,9 +1,8 @@
+use std::sync::Arc;
+
 use picoagent::{
     artifact::ArtifactStore,
-    tools::{
-        BashTool, ReadTool, Tool, ToolContext, ToolRegistry, WebSearchTool, WriteTool,
-        register_defaults,
-    },
+    tools::{BashTool, ReadTool, Tool, ToolContext, WebSearchTool, WriteTool, build_app_tools},
 };
 use serde_json::json;
 #[cfg(target_os = "linux")]
@@ -34,14 +33,14 @@ async fn bash_text(workspace: &std::path::Path, call_id: &str, command: &str) ->
 }
 
 #[test]
-fn default_registry_uses_the_embedded_tool_descriptions() {
-    let mut registry = ToolRegistry::default();
-    register_defaults(&mut registry).unwrap();
+fn app_registry_uses_the_embedded_tool_descriptions() {
+    let registry = build_app_tools(Arc::new(Default::default()), None).unwrap();
 
     assert_eq!(
         registry.names().collect::<Vec<_>>(),
-        ["bash", "read", "write"]
+        ["bash", "load_skill", "read", "write"]
     );
+    assert_eq!(registry.explicit_spawn_names(), ["bash", "read", "write"]);
 
     let specs = registry
         .specs()
@@ -51,6 +50,10 @@ fn default_registry_uses_the_embedded_tool_descriptions() {
     assert_eq!(
         specs["bash"],
         include_str!("../src/tools/bash/description.md").trim()
+    );
+    assert_eq!(
+        specs["load_skill"],
+        include_str!("../src/tools/load_skill/description.md").trim()
     );
     assert_eq!(
         specs["read"],

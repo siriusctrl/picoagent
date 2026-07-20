@@ -1,21 +1,11 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use anyhow::{Context, Result, bail};
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use walkdir::WalkDir;
-
-use crate::{
-    model::ToolSpec,
-    tools::{RawToolOutput, Tool, ToolContext},
-};
-
-const LOAD_SKILL_DESCRIPTION: &str = include_str!("descriptions/load_skill.md");
 
 /// The location from which a skill was discovered. Later sources override
 /// earlier ones: user, workspace `.agents`, then workspace-local `skills`.
@@ -177,41 +167,6 @@ fn parse_skill_document(content: &str) -> Result<(String, String, &str)> {
         bail!("frontmatter `description` must not be empty");
     }
     Ok((name, description, &content[body_start..]))
-}
-
-#[derive(Clone)]
-pub struct LoadSkillTool {
-    registry: Arc<SkillRegistry>,
-}
-
-impl LoadSkillTool {
-    pub fn new(registry: Arc<SkillRegistry>) -> Self {
-        Self { registry }
-    }
-}
-
-#[async_trait]
-impl Tool for LoadSkillTool {
-    fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "load_skill".to_owned(),
-            description: LOAD_SKILL_DESCRIPTION.trim().to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": { "name": { "type": "string" } },
-                "required": ["name"],
-                "additionalProperties": false
-            }),
-        }
-    }
-
-    async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
-        let name = arguments
-            .get("name")
-            .and_then(Value::as_str)
-            .context("`name` is required")?;
-        Ok(RawToolOutput::text(self.registry.load(name)?))
-    }
 }
 
 #[cfg(test)]

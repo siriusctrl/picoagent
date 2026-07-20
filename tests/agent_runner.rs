@@ -10,7 +10,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use picoagent::{
-    agent::runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
+    agent::{
+        runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
+        task::{BackgroundTaskState, TaskManager, TaskManagerConfig},
+    },
     artifact::{ArtifactPolicy, ArtifactStore},
     events::{NoopEventSink, SharedEventSink},
     hooks::{CommandHook, HookEvent, HookPipeline},
@@ -19,7 +22,7 @@ use picoagent::{
         ToolCall, echo::EchoProvider,
     },
     storage::{RunDirStore, RunRecord, RunState},
-    tools::{RawToolOutput, Tool, ToolContext, ToolRegistry},
+    tools::{ExplicitSpawn, RawToolOutput, Tool, ToolContext, ToolRegistry},
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -178,7 +181,10 @@ async fn resume_marks_incomplete_tool_calls_interrupted_without_reexecution() {
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::default();
     tools
-        .register(Arc::new(CountingTool(tool_calls.clone())))
+        .register(
+            Arc::new(CountingTool(tool_calls.clone())),
+            ExplicitSpawn::Allowed,
+        )
         .unwrap();
     let runner = resume_runner(
         workspace.path(),
@@ -205,6 +211,73 @@ async fn resume_marks_incomplete_tool_calls_interrupted_without_reexecution() {
             ..
         }] if metadata.preview_bytes == content.len()
     ));
+}
+
+#[tokio::test]
+async fn resume_schema_mismatch_does_not_reconcile_background_tasks() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_interrupted_run(&store, workspace.path(), "resume-schema-preflight").await;
+    let model_calls = Arc::new(AtomicUsize::new(0));
+    let provider = ResumeProvider {
+        calls: model_calls.clone(),
+        require_interrupted_result: false,
+    };
+    let mut tools = ToolRegistry::default();
+    tools
+        .register(Arc::new(HangingTool), ExplicitSpawn::Allowed)
+        .unwrap();
+    let runner = resume_runner(workspace.path(), &store, provider, tools.clone());
+    let manager = TaskManager::new(TaskManagerConfig {
+        runner: runner.clone(),
+        candidate_tools: tools,
+        artifacts: ArtifactStore::default(),
+        preview_budget: Arc::new(tokio::sync::Mutex::new(128 * 1024)),
+        store: store.clone(),
+        workspace: workspace.path().to_owned(),
+        parent_run_id: "resume-schema-preflight".to_owned(),
+        parent_depth: 0,
+        child_can_delegate: false,
+        events: Arc::new(NoopEventSink),
+        hooks: HookPipeline::new(),
+        max_parallel_tasks: 1,
+        wait_timeout_seconds: 1,
+    });
+    let task = manager
+        .spawn_tool("hanging".to_owned(), json!({}))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let status = manager
+                .status(std::slice::from_ref(&task.id))
+                .await
+                .unwrap();
+            if status[0].state == BackgroundTaskState::Running {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let task_path = store
+        .paths("resume-schema-preflight")
+        .directory
+        .join("tasks")
+        .join(format!("{}.json", task.id));
+    let task_before = tokio::fs::read(&task_path).await.unwrap();
+    store
+        .verify_tool_schema("resume-schema-preflight", "deliberate-mismatch")
+        .await
+        .unwrap();
+
+    let error = runner.resume("resume-schema-preflight").await.unwrap_err();
+    assert!(error.to_string().contains("tool schemas differ"));
+    assert_eq!(model_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(tokio::fs::read(&task_path).await.unwrap(), task_before);
+
+    manager.stop(&task.id).await.unwrap();
 }
 
 #[tokio::test]
@@ -427,7 +500,9 @@ async fn resume_keeps_preview_budget_reserved_for_undelivered_tasks() {
     .await
     .unwrap();
     let mut tools = ToolRegistry::default();
-    tools.register(Arc::new(SmallOutputTool)).unwrap();
+    tools
+        .register(Arc::new(SmallOutputTool), ExplicitSpawn::Allowed)
+        .unwrap();
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: Arc::new(ResumeBudgetProvider),
         model: "scripted".to_owned(),
@@ -549,7 +624,9 @@ impl Tool for LargeOutputTool {
 async fn runner_persists_complete_messages_and_spills_large_tool_output() {
     let workspace = TempDir::new().unwrap();
     let mut tools = ToolRegistry::default();
-    tools.register(Arc::new(LargeOutputTool)).unwrap();
+    tools
+        .register(Arc::new(LargeOutputTool), ExplicitSpawn::Allowed)
+        .unwrap();
     let store = RunDirStore::new(workspace.path());
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: Arc::new(FileProducingProvider),
@@ -905,7 +982,9 @@ async fn task_wait_joins_a_background_tool_without_duplicate_result_injection() 
     let workspace = TempDir::new().unwrap();
     let store = RunDirStore::new(workspace.path());
     let mut tools = ToolRegistry::default();
-    tools.register(Arc::new(SlowOutputTool)).unwrap();
+    tools
+        .register(Arc::new(SlowOutputTool), ExplicitSpawn::Allowed)
+        .unwrap();
     let mut hooks = HookPipeline::new();
     hooks.register(CommandHook::new(
         "record-before",
@@ -1009,7 +1088,10 @@ async fn agent_loop_has_no_model_step_cap() {
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::default();
     tools
-        .register(Arc::new(CountingTool(tool_calls.clone())))
+        .register(
+            Arc::new(CountingTool(tool_calls.clone())),
+            ExplicitSpawn::Allowed,
+        )
         .unwrap();
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: Arc::new(LongLoopProvider(model_calls.clone())),
@@ -1191,7 +1273,9 @@ async fn steer_is_delivered_after_the_childs_current_tool_batch_before_its_next_
     let child_started = Arc::new(tokio::sync::Notify::new());
     let verified = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut tools = ToolRegistry::default();
-    tools.register(Arc::new(SteeringGateTool)).unwrap();
+    tools
+        .register(Arc::new(SteeringGateTool), ExplicitSpawn::Allowed)
+        .unwrap();
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: Arc::new(SteeringProvider {
             child_started,
@@ -1275,7 +1359,9 @@ async fn parent_failure_aborts_and_settles_background_tasks() {
     let workspace = TempDir::new().unwrap();
     let store = RunDirStore::new(workspace.path());
     let mut tools = ToolRegistry::default();
-    tools.register(Arc::new(HangingTool)).unwrap();
+    tools
+        .register(Arc::new(HangingTool), ExplicitSpawn::Allowed)
+        .unwrap();
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: Arc::new(FailingParentProvider),
         model: "scripted".to_owned(),

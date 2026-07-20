@@ -3,8 +3,8 @@ use std::{fs, path::Path, sync::Arc};
 use picoagent::{
     hooks::{CommandHook, HookEvent, HookPipeline},
     memory::MemoryPaths,
-    skills::{LoadSkillTool, SkillRegistry},
-    tools::{Tool, ToolContext, WriteTool},
+    skills::SkillRegistry,
+    tools::{LoadSkillTool, Tool, ToolContext, WriteTool},
 };
 use serde_json::json;
 use tempfile::TempDir;
