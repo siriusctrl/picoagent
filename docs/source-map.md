@@ -32,8 +32,9 @@
   contracts.
 - `src/tools/assembly.rs`: the single process/run tool-assembly path.
 - `src/tools/{bash,history_read,history_search,load_skill,read,spawn,task,web_search,write}/`:
-  flat local adapters with a typed compile-time `tool.yaml` beside their Rust
-  arguments, validation, and execution.
+  flat local adapters with a typed compile-time `tool.yaml` containing purpose,
+  return guidance, and input schema beside their Rust arguments, validation,
+  and execution.
 - `src/trajectory.rs` and `src/trajectory/`: provider-neutral history reader
   contracts plus local message/artifact search.
 - `src/artifact.rs`: versioned artifact envelope and spill.

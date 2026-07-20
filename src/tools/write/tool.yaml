@@ -7,6 +7,9 @@ description: >-
   line/indentation normalization only when exact matching fails. Prefer edits
   for existing files and include enough unchanged context to make each target
   unique.
+returns: >-
+  A short confirmation with the written byte count or applied replacement count
+  and path; normalized matches are reported.
 input_schema:
   type: object
   properties:

@@ -1,8 +1,11 @@
 name: read
 description: >-
   Read a UTF-8 local file or artifact by line range. offset is zero-based; limit
-  and max_bytes bound the returned content. Use bash for directory listing or
-  content discovery.
+  and max_bytes bound the read. Use bash for directory listing or content
+  discovery.
+returns: >-
+  The selected UTF-8 text. An explicit marker is appended when max_bytes
+  truncates the read.
 input_schema:
   type: object
   properties:

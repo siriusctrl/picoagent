@@ -61,13 +61,16 @@ the deterministic lookup. Duplicate names fail during startup instead of
 silently replacing an existing capability.
 
 Every local model-facing adapter lives in a flat `src/tools/<tool>/` module.
-Its typed compile-time `tool.yaml` keeps the static name, folded description,
-and input schema together; its Rust module owns arguments, semantic validation,
-dynamic schema augmentation, and execution. The common loader rejects unknown
-manifest fields, empty or padded prose, and non-object input schemas. Domain
-engines remain separate: task state is owned by `TaskManager`, skills by
-`SkillRegistry`, and trajectory retrieval by `TrajectoryReader`. MCP lifecycle
-and its server-provided dynamic adapter remain in `mcp.rs`.
+Its typed compile-time `tool.yaml` keeps the static name, folded purpose
+description, folded return guidance, and input schema together. The common
+loader validates both prose fields and joins them with a `Returns:` semantic
+boundary into the standard provider description. Its Rust module owns
+arguments, semantic validation, dynamic schema augmentation, and execution.
+The loader rejects unknown manifest fields, empty or padded prose, and
+non-object input schemas. Domain engines remain separate: task state is owned
+by `TaskManager`, skills by `SkillRegistry`, and trajectory retrieval by
+`TrajectoryReader`. MCP lifecycle and its server-provided dynamic adapter
+remain in `mcp.rs`.
 
 `build_app_tools` assembles process-wide local capabilities. `RunToolAssembly`
 is the single path that adds run-scoped history and task controls. Every

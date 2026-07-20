@@ -4,6 +4,10 @@
 - Date: 2026-07-20
 - Refines: ADR 0014 (local tool contract packaging)
 
+ADR 0016 later refines the authored prose fields: local manifests separate
+purpose in `description` from result guidance in `returns`, then compose both
+into the standard provider description. The other decisions remain accepted.
+
 ## Context
 
 ADR 0014 put every local model-facing adapter in one predictable directory,

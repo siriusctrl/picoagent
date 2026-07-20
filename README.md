@@ -124,8 +124,10 @@ lines.
 Stable agent instructions are folded scalar values in the typed, compile-time
 `prompts/agents.yaml` registry. Every local model-facing tool adapter and its
 typed `tool.yaml` live under `src/tools/<tool>/`; the manifest owns the static
-name, description, and input schema. Rust owns manifest validation, dynamic
-schema augmentation, argument validation, assembly, and execution.
+name, purpose description, return guidance, and input schema. Rust composes the
+two prose fields into the standard provider description and owns manifest
+validation, dynamic schema augmentation, argument validation, assembly, and
+execution.
 
 ## Provider Setup
 

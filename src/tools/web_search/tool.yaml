@@ -1,9 +1,11 @@
 name: web_search
 description: >-
-  Search the public web and return current result titles, URLs, and snippets.
-  Use this for information that may have changed, unfamiliar topics, or when
-  sources are needed. This searches the internet; use read for local files and
-  bash with rg for workspace text search.
+  Search the public web. Use this for information that may have changed,
+  unfamiliar topics, or when sources are needed. This searches the internet;
+  use read for local files and bash with rg for workspace text search.
+returns: >-
+  JSON containing the query and current results. Each result includes a title,
+  URL, and description, and may include age and extra snippets.
 input_schema:
   type: object
   properties:

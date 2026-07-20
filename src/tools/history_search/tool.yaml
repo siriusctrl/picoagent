@@ -3,8 +3,8 @@ description: >-
   Regex-search completed messages omitted from active context, including full
   text in linked foreground and background result artifacts. `pattern` uses
   Rust regex; use inline flags such as `(?i)`.
-
-  Returns one JSON object with `matches`, `truncated`, and `instruction`.
+returns: >-
+  One JSON object with `matches`, `truncated`, and `instruction`.
   `matches` is newest-first; each match has:
 
   - `ref`: `m<N>`, the stable 1-based message position in this run. Smaller

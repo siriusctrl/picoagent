@@ -9,6 +9,7 @@ use crate::model::ToolSpec;
 struct ToolDefinition {
     name: String,
     description: String,
+    returns: String,
     input_schema: Value,
 }
 
@@ -25,12 +26,19 @@ fn parse_tool_definition(source: &str) -> Result<ToolSpec> {
         "tool description must be non-empty and have no boundary whitespace"
     );
     ensure!(
+        !definition.returns.is_empty() && definition.returns.trim() == definition.returns,
+        "tool returns must be non-empty and have no boundary whitespace"
+    );
+    ensure!(
         definition.input_schema.get("type").and_then(Value::as_str) == Some("object"),
         "tool input_schema must describe an object"
     );
     Ok(ToolSpec {
         name: definition.name,
-        description: definition.description,
+        description: format!(
+            "{}\n\nReturns: {}",
+            definition.description, definition.returns
+        ),
         input_schema: definition.input_schema,
     })
 }
@@ -49,35 +57,53 @@ mod tests {
     #[test]
     fn definition_is_typed_folded_and_requires_an_object_schema() {
         let spec = parse_tool_definition(
-            "name: sample\ndescription: >-\n  Sample tool with\n  source wrapping.\ninput_schema:\n  type: object\n",
+            "name: sample\ndescription: >-\n  Sample tool with\n  source wrapping.\nreturns: >-\n  A sample\n  result.\ninput_schema:\n  type: object\n",
         )
         .unwrap();
         assert_eq!(spec.name, "sample");
-        assert_eq!(spec.description, "Sample tool with source wrapping.");
+        assert_eq!(
+            spec.description,
+            "Sample tool with source wrapping.\n\nReturns: A sample result."
+        );
 
         assert!(
             parse_tool_definition(
-                "name: sample\ndescription: Sample tool\ninput_schema:\n  type: array\n"
+                "name: sample\ndescription: Sample tool\nreturns: Sample result\ninput_schema:\n  type: array\n"
             )
             .is_err()
         );
         assert!(
             parse_tool_definition(
-                "name: sample\ndescription: Sample tool\ninput_schema:\n  type: object\nunknown: value\n"
+                "name: sample\ndescription: Sample tool\nreturns: Sample result\ninput_schema:\n  type: object\nunknown: value\n"
             )
             .is_err()
         );
         assert!(
-            parse_tool_definition("name: sample\ndescription: ''\ninput_schema:\n  type: object\n")
-                .is_err()
+            parse_tool_definition(
+                "name: sample\ndescription: ''\nreturns: Sample result\ninput_schema:\n  type: object\n"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_tool_definition(
+                "name: sample\ndescription: Sample tool\nreturns: ''\ninput_schema:\n  type: object\n"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_tool_definition(
+                "name: sample\ndescription: Sample tool\ninput_schema:\n  type: object\n"
+            )
+            .is_err()
         );
     }
 
     #[test]
     fn definition_rejects_boundary_whitespace() {
         for source in [
-            "name: ' sample'\ndescription: Sample tool\ninput_schema:\n  type: object\n",
-            "name: sample\ndescription: 'Sample tool '\ninput_schema:\n  type: object\n",
+            "name: ' sample'\ndescription: Sample tool\nreturns: Sample result\ninput_schema:\n  type: object\n",
+            "name: sample\ndescription: 'Sample tool '\nreturns: Sample result\ninput_schema:\n  type: object\n",
+            "name: sample\ndescription: Sample tool\nreturns: 'Sample result '\ninput_schema:\n  type: object\n",
         ] {
             assert!(parse_tool_definition(source).is_err());
         }
@@ -105,6 +131,10 @@ mod tests {
             .iter()
             .map(|spec| spec.name.as_str())
             .collect::<BTreeSet<_>>();
+
+        for spec in &specs {
+            assert_eq!(spec.description.matches("\n\nReturns: ").count(), 1);
+        }
 
         assert_eq!(
             names,

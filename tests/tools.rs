@@ -17,6 +17,14 @@ fn manifest(source: &str) -> serde_json::Value {
     serde_yaml_ng::from_str(source).unwrap()
 }
 
+fn model_description(definition: &serde_json::Value) -> String {
+    format!(
+        "{}\n\nReturns: {}",
+        definition["description"].as_str().unwrap(),
+        definition["returns"].as_str().unwrap()
+    )
+}
+
 fn context(workspace: &std::path::Path, call_id: &str) -> ToolContext {
     ToolContext {
         run_id: "run-1".to_owned(),
@@ -61,7 +69,7 @@ fn app_registry_uses_the_embedded_tool_manifests() {
         ("write", include_str!("../src/tools/write/tool.yaml")),
     ] {
         let definition = manifest(source);
-        assert_eq!(specs[name].description, definition["description"]);
+        assert_eq!(specs[name].description, model_description(&definition));
         assert_eq!(specs[name].input_schema, definition["input_schema"]);
     }
 }
@@ -441,7 +449,7 @@ async fn web_search_uses_brave_request_shape_and_returns_compact_results() {
     let tool = WebSearchTool::with_endpoint(format!("{}/search", server.uri()), "secret", 8);
     let definition = manifest(include_str!("../src/tools/web_search/tool.yaml"));
     let spec = tool.spec();
-    assert_eq!(spec.description, definition["description"]);
+    assert_eq!(spec.description, model_description(&definition));
     assert_eq!(spec.input_schema, definition["input_schema"]);
     let output = tool
         .execute(

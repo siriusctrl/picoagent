@@ -12,16 +12,25 @@ argument validation, and execution contracts remain in Rust. Project
 dynamic inputs and are not copied into this registry.
 
 Every local model-facing tool adapter lives in a flat `src/tools/<tool>/`
-module. Its typed `tool.yaml` owns the static name, folded description, and
-input schema; the Rust module owns arguments, semantic validation, dynamic
-schema changes, and execution. Domain state stays in its subsystem: for
-example, the task adapters call `TaskManager`, and `load_skill` calls
-`SkillRegistry`. Other stable model instructions live with the behavior that
-assembles them, such as `src/artifact/model-instruction.md`.
+module. Its typed `tool.yaml` owns the static name, folded `description`, folded
+`returns`, and input schema. `description` states purpose, usage, side effects,
+and constraints; `returns` states the successful result shape, interpretation,
+and tool-specific follow-up. The loader joins them as
+`<description>\n\nReturns: <returns>` for the standard provider description. The
+Rust module owns arguments, semantic validation, dynamic schema changes, and
+execution. Domain state stays in its subsystem: for example, the task adapters
+call `TaskManager`, and `load_skill` calls `SkillRegistry`. Other stable model
+instructions live with the behavior that assembles them, such as
+`src/artifact/model-instruction.md`.
 
 These are compile-time assets, not runtime overrides or dynamically discovered
 plugins. External executable tools integrate through MCP and keep their
 server-provided dynamic schemas rather than using local manifests.
+
+`returns` is required even when one short sentence is sufficient. Generic
+artifact spill and error behavior stays in shared runtime guidance rather than
+being copied into every manifest. This authoring split does not add a private
+provider field or claim a formal output schema.
 
 Tool descriptions are sent through the provider's sorted tool-schema
 field. Core history schemas are present from the first normal call regardless

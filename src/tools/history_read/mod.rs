@@ -142,7 +142,7 @@ mod tests {
         let workspace = tempdir().unwrap();
         let tool = HistoryReadTool::new(Arc::new(StubReader));
         let description = tool.spec().description;
-        assert!(description.contains("chronological JSONL"));
+        assert!(description.contains("Chronological JSONL"));
         assert!(description.contains("`source: \"artifact\"`"));
         assert!(description.contains("`m<N>`"));
         let output = tool

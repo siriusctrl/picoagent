@@ -71,3 +71,5 @@ Use these sections:
   assembly](0014-flat-tool-adapters-and-explicit-assembly.md)
 - [ADR 0015: Package local tool contracts as typed YAML
   manifests](0015-local-tool-yaml-manifests.md)
+- [ADR 0016: Separate tool purpose from return
+  guidance](0016-separate-tool-purpose-and-return-guidance.md)

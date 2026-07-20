@@ -187,16 +187,19 @@ reuse. See [ADR 0004](adr/0004-stable-agent-prefix-and-core-history-tools.md).
 ## Compile-Time Prompt Assets
 
 Stable agent instructions are folded values in one typed `agents.yaml` registry;
-each local tool keeps its static name, folded description, and input schema in
-one typed `tool.yaml` beside its adapter. These assets are embedded with
-`include_str!` and parsed strictly. Rust remains authoritative for prompt
-assembly, dynamic schema augmentation, argument validation, and execution.
+each local tool keeps its static name, folded purpose description, folded return
+guidance, and input schema in one typed `tool.yaml` beside its adapter. The
+loader joins the two prose fields into the provider's standard description.
+These assets are embedded with `include_str!` and parsed strictly. Rust remains
+authoritative for prompt assembly, dynamic schema augmentation, argument
+validation, and execution.
 Every local model-facing adapter uses a flat `src/tools/<tool>/` module, while
 domain engines remain in their focused subsystems. Process and run capabilities
 are assembled through one explicit path; the policy for `spawn(kind=tool)` is
 declared at registration and injected into its manifest-derived schema.
 
-See [ADR 0015](adr/0015-local-tool-yaml-manifests.md),
+See [ADR 0016](adr/0016-separate-tool-purpose-and-return-guidance.md),
+[ADR 0015](adr/0015-local-tool-yaml-manifests.md),
 [ADR 0014](adr/0014-flat-tool-adapters-and-explicit-assembly.md), and
 [ADR 0008](adr/0008-typed-agent-prompt-registry.md) for the packaging and
 ownership decisions.
