@@ -11,7 +11,6 @@ use crate::{
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
-const DESCRIPTION: &str = include_str!("description.md");
 const DEFAULT_INSPECT_LIMIT: usize = 6;
 const MAX_INSPECT_LIMIT: usize = 20;
 
@@ -44,23 +43,7 @@ struct TaskArgs {
 #[async_trait]
 impl Tool for TaskTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "task".to_owned(),
-            description: DESCRIPTION.trim().to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["status", "wait", "inspect", "steer", "stop"] },
-                    "task_ids": { "type": "array", "items": { "type": "string" }, "description": "Task ids for status/wait; empty means all" },
-                    "task_id": { "type": "string", "description": "One task id for inspect/steer/stop" },
-                    "message": { "type": "string", "description": "Steering instruction when action=steer" },
-                    "before_seq": { "type": "integer", "minimum": 1, "description": "For inspect, return messages with seq lower than this value" },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": MAX_INSPECT_LIMIT, "description": "For inspect, number of recent messages to return (default 6)" }
-                },
-                "required": ["action"],
-                "additionalProperties": false
-            }),
-        }
+        crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
     async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
@@ -115,6 +98,18 @@ fn task_records(records: Vec<BackgroundTaskRecord>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_limits_match_runtime_constants() {
+        let spec = crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!());
+        assert_eq!(
+            spec.input_schema.pointer("/properties/limit/maximum"),
+            Some(&json!(MAX_INSPECT_LIMIT))
+        );
+        assert!(spec.description.contains(&format!(
+            "latest {DEFAULT_INSPECT_LIMIT} messages by default"
+        )));
+    }
 
     #[test]
     fn task_status_is_structured_without_explanatory_messages() {

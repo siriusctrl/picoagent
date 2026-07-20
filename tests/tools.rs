@@ -13,6 +13,10 @@ use wiremock::{
     matchers::{header, method, path, query_param},
 };
 
+fn manifest(source: &str) -> serde_json::Value {
+    serde_yaml_ng::from_str(source).unwrap()
+}
+
 fn context(workspace: &std::path::Path, call_id: &str) -> ToolContext {
     ToolContext {
         run_id: "run-1".to_owned(),
@@ -33,7 +37,7 @@ async fn bash_text(workspace: &std::path::Path, call_id: &str, command: &str) ->
 }
 
 #[test]
-fn app_registry_uses_the_embedded_tool_descriptions() {
+fn app_registry_uses_the_embedded_tool_manifests() {
     let registry = build_app_tools(Arc::new(Default::default()), None).unwrap();
 
     assert_eq!(
@@ -45,24 +49,21 @@ fn app_registry_uses_the_embedded_tool_descriptions() {
     let specs = registry
         .specs()
         .into_iter()
-        .map(|spec| (spec.name, spec.description))
+        .map(|spec| (spec.name.clone(), spec))
         .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(
-        specs["bash"],
-        include_str!("../src/tools/bash/description.md").trim()
-    );
-    assert_eq!(
-        specs["load_skill"],
-        include_str!("../src/tools/load_skill/description.md").trim()
-    );
-    assert_eq!(
-        specs["read"],
-        include_str!("../src/tools/read/description.md").trim()
-    );
-    assert_eq!(
-        specs["write"],
-        include_str!("../src/tools/write/description.md").trim()
-    );
+    for (name, source) in [
+        ("bash", include_str!("../src/tools/bash/tool.yaml")),
+        (
+            "load_skill",
+            include_str!("../src/tools/load_skill/tool.yaml"),
+        ),
+        ("read", include_str!("../src/tools/read/tool.yaml")),
+        ("write", include_str!("../src/tools/write/tool.yaml")),
+    ] {
+        let definition = manifest(source);
+        assert_eq!(specs[name].description, definition["description"]);
+        assert_eq!(specs[name].input_schema, definition["input_schema"]);
+    }
 }
 
 #[tokio::test]
@@ -438,10 +439,10 @@ async fn web_search_uses_brave_request_shape_and_returns_compact_results() {
         .mount(&server)
         .await;
     let tool = WebSearchTool::with_endpoint(format!("{}/search", server.uri()), "secret", 8);
-    assert_eq!(
-        tool.spec().description,
-        include_str!("../src/tools/web_search/description.md").trim()
-    );
+    let definition = manifest(include_str!("../src/tools/web_search/tool.yaml"));
+    let spec = tool.spec();
+    assert_eq!(spec.description, definition["description"]);
+    assert_eq!(spec.input_schema, definition["input_schema"]);
     let output = tool
         .execute(
             context(tempdir().unwrap().path(), "web"),

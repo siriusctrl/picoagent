@@ -61,10 +61,13 @@ the deterministic lookup. Duplicate names fail during startup instead of
 silently replacing an existing capability.
 
 Every local model-facing adapter lives in a flat `src/tools/<tool>/` module.
-Its compile-time Markdown description, name, schema, argument validation, and
-execution adapter stay together. Domain engines remain separate: task state is
-owned by `TaskManager`, skills by `SkillRegistry`, and trajectory retrieval by
-`TrajectoryReader`. MCP lifecycle and its dynamic adapter remain in `mcp.rs`.
+Its typed compile-time `tool.yaml` keeps the static name, folded description,
+and input schema together; its Rust module owns arguments, semantic validation,
+dynamic schema augmentation, and execution. The common loader rejects unknown
+manifest fields, empty or padded prose, and non-object input schemas. Domain
+engines remain separate: task state is owned by `TaskManager`, skills by
+`SkillRegistry`, and trajectory retrieval by `TrajectoryReader`. MCP lifecycle
+and its server-provided dynamic adapter remain in `mcp.rs`.
 
 `build_app_tools` assembles process-wide local capabilities. `RunToolAssembly`
 is the single path that adds run-scoped history and task controls. Every
@@ -72,7 +75,9 @@ registration explicitly says whether the model may name that tool in
 `spawn(kind=tool)`; this does not affect automatic promotion of a direct call
 whose foreground window elapses. The `spawn` tool's schema enum exposes the
 exact allowed set, so the model-visible schema and resume hash commit the same
-capability contract.
+capability contract. `spawn/tool.yaml` contains the complete static superset;
+Rust injects the exact sorted tool enum and removes tool-only fields when that
+profile has no spawnable tools.
 
 Root and delegating/leaf GeneralTask have explicit capability sets. Each normal
 profile registers `history_search` and

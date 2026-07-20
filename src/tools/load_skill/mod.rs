@@ -2,15 +2,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     model::ToolSpec,
     skills::SkillRegistry,
     tools::{RawToolOutput, Tool, ToolContext},
 };
-
-const DESCRIPTION: &str = include_str!("description.md");
 
 #[derive(Clone)]
 pub struct LoadSkillTool {
@@ -26,16 +24,7 @@ impl LoadSkillTool {
 #[async_trait]
 impl Tool for LoadSkillTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "load_skill".to_owned(),
-            description: DESCRIPTION.trim().to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": { "name": { "type": "string" } },
-                "required": ["name"],
-                "additionalProperties": false
-            }),
-        }
+        crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
     async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {

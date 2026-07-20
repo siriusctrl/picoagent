@@ -28,12 +28,12 @@
 - `src/model/anthropic_compatible.rs`: Messages adapter.
 - `src/tools/mod.rs`: tool contract and sorted registry with explicit
   `spawn(kind=tool)` policy.
+- `src/tools/manifest.rs`: strict parser for embedded local `tool.yaml`
+  contracts.
 - `src/tools/assembly.rs`: the single process/run tool-assembly path.
-- `src/tools/{read,write,bash,web_search,load_skill,spawn,task}/`: flat local
-  model-facing adapters with compile-time descriptions beside their Rust
-  implementation.
-- `src/tools/{history_search,history_read}/`: read-only compacted-trajectory
-  retrieval with compile-time descriptions and bounded contracts.
+- `src/tools/{bash,history_read,history_search,load_skill,read,spawn,task,web_search,write}/`:
+  flat local adapters with a typed compile-time `tool.yaml` beside their Rust
+  arguments, validation, and execution.
 - `src/trajectory.rs` and `src/trajectory/`: provider-neutral history reader
   contracts plus local message/artifact search.
 - `src/artifact.rs`: versioned artifact envelope and spill.

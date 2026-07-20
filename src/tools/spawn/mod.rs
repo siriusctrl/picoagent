@@ -3,15 +3,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::{
     agent::task::TaskManager,
     model::ToolSpec,
     tools::{RawToolOutput, Tool, ToolContext},
 };
-
-const DESCRIPTION: &str = include_str!("description.md");
 
 pub struct SpawnTool {
     manager: Arc<TaskManager>,
@@ -39,43 +37,37 @@ struct SpawnArgs {
 impl Tool for SpawnTool {
     fn spec(&self) -> ToolSpec {
         let spawnable_tools = self.manager.spawnable_tool_names();
-        let mut kinds = vec!["agent"];
-        let mut properties = Map::from_iter([
-            (
-                "kind".to_owned(),
-                json!({ "type": "string", "enum": kinds }),
-            ),
-            (
-                "prompt".to_owned(),
-                json!({ "type": "string", "description": "Complete delegated task when kind=agent" }),
-            ),
-        ]);
-        if !spawnable_tools.is_empty() {
-            kinds.insert(0, "tool");
-            properties["kind"] = json!({ "type": "string", "enum": kinds });
-            properties.insert(
-                "tool".to_owned(),
-                json!({
-                    "type": "string",
-                    "enum": spawnable_tools,
-                    "description": "Allowed tool name when kind=tool"
-                }),
-            );
-            properties.insert(
-                "arguments".to_owned(),
-                json!({ "type": "object", "description": "Tool arguments when kind=tool" }),
-            );
+        let mut spec = crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!());
+        let properties = spec
+            .input_schema
+            .get_mut("properties")
+            .and_then(Value::as_object_mut)
+            .expect("spawn tool.yaml must define input_schema.properties");
+        for property in ["kind", "tool", "arguments", "prompt"] {
+            properties
+                .get(property)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| {
+                    panic!("spawn tool.yaml must define an object `{property}` property")
+                });
         }
-        ToolSpec {
-            name: "spawn".to_owned(),
-            description: DESCRIPTION.trim().to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": properties,
-                "required": ["kind"],
-                "additionalProperties": false
-            }),
+        let kind = properties
+            .get_mut("kind")
+            .and_then(Value::as_object_mut)
+            .expect("spawn tool.yaml must define a kind property");
+        if spawnable_tools.is_empty() {
+            kind.insert("enum".to_owned(), json!(["agent"]));
+            properties.remove("tool");
+            properties.remove("arguments");
+        } else {
+            kind.insert("enum".to_owned(), json!(["tool", "agent"]));
+            properties
+                .get_mut("tool")
+                .and_then(Value::as_object_mut)
+                .expect("spawn tool.yaml must define a tool property")
+                .insert("enum".to_owned(), json!(spawnable_tools));
         }
+        spec
     }
 
     async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {

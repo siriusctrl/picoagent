@@ -13,8 +13,9 @@ navigation, invariants, verification, and handoff.
 - `src/model/`: provider-neutral message/tool contracts plus OpenAI OAuth,
   OpenAI-compatible, Anthropic-compatible, and deterministic echo adapters.
 - `src/tools/`: the stable tool contract, explicit assembly, and flat local
-  model-facing adapters. Each adapter owns its schema and compile-time Markdown
-  description while calling focused domain logic where needed.
+  model-facing adapters. Each adapter owns a typed compile-time `tool.yaml`
+  containing its name, description, and static input schema while calling
+  focused domain logic where needed.
 - `prompts/agents.yaml`: the typed registry of stable agent-level instructions
   embedded into the binary; dynamic assembly remains in `src/agent/context.rs`.
 - `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,
@@ -78,9 +79,10 @@ navigation, invariants, verification, and handoff.
   and use the run's existing profile for compaction. Select the GeneralTask
   variant from remaining depth before its run starts; do not add or remove
   schemas during a run.
-- Keep stable agent prose in the typed compile-time YAML registry and tool
-  descriptions beside their owners. Keep prompt assembly, schemas, validation,
-  and execution contracts in Rust.
+- Keep stable agent prose in the typed compile-time prompt registry and every
+  local tool's static name, description, and input schema in its typed
+  compile-time `tool.yaml`. Keep prompt assembly, dynamic schema augmentation,
+  argument validation, and execution contracts in Rust.
 - Memory is durable user/project knowledge outside the live transcript. Inspect
   and update its ordinary Markdown with the general tools; do not inject the
   tree into every prompt or add a memory-specific tool.

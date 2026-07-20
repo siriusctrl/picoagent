@@ -11,7 +11,7 @@ use std::os::unix::process::ExitStatusExt;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::process::Command;
 use tokio::{
     fs::OpenOptions,
@@ -24,8 +24,6 @@ use crate::{
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
-const DESCRIPTION: &str = include_str!("description.md");
-
 #[derive(Debug, Default)]
 pub struct BashTool;
 
@@ -37,18 +35,7 @@ struct BashArgs {
 #[async_trait]
 impl Tool for BashTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "bash".to_owned(),
-            description: DESCRIPTION.trim().to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string" }
-                },
-                "required": ["command"],
-                "additionalProperties": false
-            }),
-        }
+        crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
     async fn execute(&self, context: ToolContext, arguments: Value) -> Result<RawToolOutput> {

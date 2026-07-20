@@ -11,7 +11,6 @@ use crate::{
     trajectory::{HistoryReadRequest, TrajectoryReader, message_ref_seq},
 };
 
-const DESCRIPTION: &str = include_str!("description.md");
 const DEFAULT_CONTEXT_MESSAGES: usize = 2;
 const MAX_CONTEXT_MESSAGES: usize = 10;
 
@@ -42,37 +41,7 @@ fn default_context_messages() -> usize {
 #[async_trait]
 impl Tool for HistoryReadTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "history_read".to_owned(),
-            description: DESCRIPTION.trim().to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "ref": {
-                        "type": "string",
-                        "minLength": 1,
-                        "pattern": "^m[1-9][0-9]*$",
-                        "description": "Stable m<N> ref from history_search; smaller N is older"
-                    },
-                    "before": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": MAX_CONTEXT_MESSAGES,
-                        "default": DEFAULT_CONTEXT_MESSAGES,
-                        "description": "Nearby omitted messages before ref"
-                    },
-                    "after": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": MAX_CONTEXT_MESSAGES,
-                        "default": DEFAULT_CONTEXT_MESSAGES,
-                        "description": "Nearby omitted messages after ref"
-                    }
-                },
-                "required": ["ref"],
-                "additionalProperties": false
-            }),
-        }
+        crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
     async fn execute(&self, context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
@@ -148,6 +117,23 @@ mod tests {
                     },
                 }],
             })
+        }
+    }
+
+    #[test]
+    fn manifest_limits_match_runtime_constants() {
+        let spec = crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!());
+        for field in ["before", "after"] {
+            assert_eq!(
+                spec.input_schema
+                    .pointer(&format!("/properties/{field}/default")),
+                Some(&json!(DEFAULT_CONTEXT_MESSAGES))
+            );
+            assert_eq!(
+                spec.input_schema
+                    .pointer(&format!("/properties/{field}/maximum")),
+                Some(&json!(MAX_CONTEXT_MESSAGES))
+            );
         }
     }
 

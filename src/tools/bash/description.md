@@ -1,1 +1,0 @@
-Run a Bash command in the current workspace. Use it for file discovery, local text search with rg, tests, builds, and other command-line work. Returns combined stdout/stderr in capture order. Empty successful output is `(no output)`; non-zero exits and signals append a final picoagent status line. Large output is preserved as an artifact. No sandbox is provided.

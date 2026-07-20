@@ -1,0 +1,26 @@
+name: read
+description: >-
+  Read a UTF-8 local file or artifact by line range. offset is zero-based; limit
+  and max_bytes bound the returned content. Use bash for directory listing or
+  content discovery.
+input_schema:
+  type: object
+  properties:
+    path:
+      type: string
+      description: Workspace-relative or absolute file path
+    offset:
+      type: integer
+      minimum: 0
+      default: 0
+    limit:
+      type: integer
+      minimum: 1
+      default: 200
+    max_bytes:
+      type: integer
+      minimum: 1
+      default: 65536
+  required:
+    - path
+  additionalProperties: false

@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::Mutex;
 use ulid::Ulid;
 
@@ -20,8 +20,6 @@ use super::paths::{display_path, resolve_path};
 use matching::{detect_line_ending, match_replacement, normalize_line_endings};
 
 mod matching;
-
-const DESCRIPTION: &str = include_str!("description.md");
 
 #[derive(Debug, Clone, Deserialize)]
 struct Replacement {
@@ -44,37 +42,7 @@ pub struct WriteTool {
 #[async_trait]
 impl Tool for WriteTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "write".to_owned(),
-            description: DESCRIPTION.trim().to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Workspace-relative or absolute file path" },
-                    "content": { "type": "string", "description": "Complete new file content; mutually exclusive with edits" },
-                    "edits": {
-                        "type": "array",
-                        "minItems": 1,
-                        "description": "Atomic replacements matched against the original file, not sequentially",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "old_text": { "type": "string", "description": "Unique text to replace; keep it small but include enough context" },
-                                "new_text": { "type": "string", "description": "Replacement text" }
-                            },
-                            "required": ["old_text", "new_text"],
-                            "additionalProperties": false
-                        }
-                    }
-                },
-                "required": ["path"],
-                "oneOf": [
-                    { "required": ["content"] },
-                    { "required": ["edits"] }
-                ],
-                "additionalProperties": false
-            }),
-        }
+        crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
     async fn execute(&self, context: ToolContext, arguments: Value) -> Result<RawToolOutput> {

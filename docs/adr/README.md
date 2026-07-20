@@ -69,3 +69,5 @@ Use these sections:
 - [ADR 0013: Use sequence-addressed message refs](0013-sequence-addressed-message-refs.md)
 - [ADR 0014: Flat tool adapters and explicit
   assembly](0014-flat-tool-adapters-and-explicit-assembly.md)
+- [ADR 0015: Package local tool contracts as typed YAML
+  manifests](0015-local-tool-yaml-manifests.md)

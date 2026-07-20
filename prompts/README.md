@@ -6,18 +6,22 @@ the final newline before Rust sees the value. `src/prompts.rs` parses the
 embedded file once, rejects unknown or empty fields, and exposes the three named
 prompts directly.
 
-Runtime assembly, precedence, dynamic values, tool schemas, and execution
-contracts remain in Rust. Project `AGENTS.md`, skill metadata, memory paths, and
-delegated instructions are dynamic inputs and are not copied into this registry.
+Runtime assembly, precedence, dynamic values, dynamic schema augmentation,
+argument validation, and execution contracts remain in Rust. Project
+`AGENTS.md`, skill metadata, memory paths, and delegated instructions are
+dynamic inputs and are not copied into this registry.
 
-Every local model-facing tool adapter and its description lives in a flat
-`src/tools/<tool>/` module. Domain state stays in its subsystem: for example,
-the task adapters call `TaskManager`, and `load_skill` calls `SkillRegistry`.
-Other stable model instructions live with the behavior that assembles them,
-such as `src/artifact/model-instruction.md`.
+Every local model-facing tool adapter lives in a flat `src/tools/<tool>/`
+module. Its typed `tool.yaml` owns the static name, folded description, and
+input schema; the Rust module owns arguments, semantic validation, dynamic
+schema changes, and execution. Domain state stays in its subsystem: for
+example, the task adapters call `TaskManager`, and `load_skill` calls
+`SkillRegistry`. Other stable model instructions live with the behavior that
+assembles them, such as `src/artifact/model-instruction.md`.
 
 These are compile-time assets, not runtime overrides or dynamically discovered
-plugins. External executable tools integrate through MCP.
+plugins. External executable tools integrate through MCP and keep their
+server-provided dynamic schemas rather than using local manifests.
 
 Tool descriptions are sent through the provider's sorted tool-schema
 field. Core history schemas are present from the first normal call regardless
@@ -29,3 +33,7 @@ tools and therefore adds no schema. GeneralTask is assigned a delegating or
 leaf variant from its remaining depth before it starts; every assembled profile
 is then frozen for the run. Compaction reuses that system/tool prefix and adds
 the `compaction_request` prompt as the final user message.
+
+`spawn/tool.yaml` describes the complete static shape. Rust replaces its tool
+enum with the exact sorted allowlist, or removes tool-only fields when a profile
+cannot spawn tools. No other local manifest has runtime schema placeholders.

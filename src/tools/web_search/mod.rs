@@ -9,9 +9,8 @@ use crate::{
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
-const DESCRIPTION: &str = include_str!("description.md");
-
 const DEFAULT_BRAVE_ENDPOINT: &str = "https://api.search.brave.com/res/v1/web/search";
+const MAX_SEARCH_RESULTS: usize = 20;
 
 #[derive(Clone)]
 pub struct WebSearchTool {
@@ -35,7 +34,7 @@ impl WebSearchTool {
             client: Client::new(),
             endpoint: endpoint.into(),
             api_key: api_key.into(),
-            default_count: default_count.clamp(1, 20),
+            default_count: default_count.clamp(1, MAX_SEARCH_RESULTS),
         }
     }
 }
@@ -62,21 +61,7 @@ struct SearchResult {
 #[async_trait]
 impl Tool for WebSearchTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "web_search".to_owned(),
-            description: DESCRIPTION.trim().to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "Focused web search query" },
-                    "count": { "type": "integer", "minimum": 1, "maximum": 20 },
-                    "country": { "type": "string", "description": "Optional two-letter result country" },
-                    "search_lang": { "type": "string", "description": "Optional result language code" }
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            }),
-        }
+        crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
     async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
@@ -86,7 +71,10 @@ impl Tool for WebSearchTool {
         if query.is_empty() {
             bail!("web_search query must not be empty");
         }
-        let count = args.count.unwrap_or(self.default_count).clamp(1, 20);
+        let count = args
+            .count
+            .unwrap_or(self.default_count)
+            .clamp(1, MAX_SEARCH_RESULTS);
         let mut url = url::Url::parse(&self.endpoint).context("invalid web search endpoint")?;
         {
             let mut query_pairs = url.query_pairs_mut();
@@ -154,4 +142,18 @@ fn string_field(value: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_limit_matches_runtime_limit() {
+        let spec = crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!());
+        assert_eq!(
+            spec.input_schema.pointer("/properties/count/maximum"),
+            Some(&json!(MAX_SEARCH_RESULTS))
+        );
+    }
 }

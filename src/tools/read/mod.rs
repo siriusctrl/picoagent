@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::io::AsyncReadExt;
 
 use crate::{
@@ -10,8 +10,6 @@ use crate::{
 };
 
 use super::paths::resolve_path;
-
-const DESCRIPTION: &str = include_str!("description.md");
 
 #[derive(Debug, Default)]
 pub struct ReadTool;
@@ -38,21 +36,7 @@ fn default_read_bytes() -> usize {
 #[async_trait]
 impl Tool for ReadTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "read".to_owned(),
-            description: DESCRIPTION.trim().to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Workspace-relative or absolute file path" },
-                    "offset": { "type": "integer", "minimum": 0, "default": 0 },
-                    "limit": { "type": "integer", "minimum": 1, "default": 200 },
-                    "max_bytes": { "type": "integer", "minimum": 1, "default": 65536 }
-                },
-                "required": ["path"],
-                "additionalProperties": false
-            }),
-        }
+        crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
     async fn execute(&self, context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
@@ -115,5 +99,29 @@ fn decode_bounded_utf8(bytes: Vec<u8>) -> Result<String> {
             Ok(String::from_utf8(error.into_bytes()[..valid].to_vec())?)
         }
         Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn manifest_defaults_match_runtime_defaults() {
+        let spec = ReadTool.spec();
+        assert_eq!(
+            spec.input_schema.pointer("/properties/offset/default"),
+            Some(&json!(usize::default()))
+        );
+        assert_eq!(
+            spec.input_schema.pointer("/properties/limit/default"),
+            Some(&json!(default_read_limit()))
+        );
+        assert_eq!(
+            spec.input_schema.pointer("/properties/max_bytes/default"),
+            Some(&json!(default_read_bytes()))
+        );
     }
 }

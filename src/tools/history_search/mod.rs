@@ -12,8 +12,6 @@ use crate::{
     trajectory::{HistorySearchRequest, TrajectoryReader},
 };
 
-const DESCRIPTION: &str = include_str!("description.md");
-
 pub struct HistorySearchTool {
     reader: Arc<dyn TrajectoryReader>,
     max_matches: usize,
@@ -39,22 +37,7 @@ struct HistorySearchArgs {
 #[async_trait]
 impl Tool for HistorySearchTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "history_search".to_owned(),
-            description: DESCRIPTION.trim().to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Rust regex"
-                    }
-                },
-                "required": ["pattern"],
-                "additionalProperties": false
-            }),
-        }
+        crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
     async fn execute(&self, context: ToolContext, arguments: Value) -> Result<RawToolOutput> {

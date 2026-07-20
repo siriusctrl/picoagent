@@ -1,0 +1,43 @@
+name: write
+description: >-
+  Create, overwrite, or precisely patch one UTF-8 file. Provide content for an
+  intentional full-file write, or edits for one atomic set of targeted
+  replacements. Every old_text is matched against the original file, must
+  resolve to one non-overlapping region, and may use conservative
+  line/indentation normalization only when exact matching fails. Prefer edits
+  for existing files and include enough unchanged context to make each target
+  unique.
+input_schema:
+  type: object
+  properties:
+    path:
+      type: string
+      description: Workspace-relative or absolute file path
+    content:
+      type: string
+      description: Complete new file content; mutually exclusive with edits
+    edits:
+      type: array
+      minItems: 1
+      description: Atomic replacements matched against the original file, not sequentially
+      items:
+        type: object
+        properties:
+          old_text:
+            type: string
+            description: Unique text to replace; keep it small but include enough context
+          new_text:
+            type: string
+            description: Replacement text
+        required:
+          - old_text
+          - new_text
+        additionalProperties: false
+  required:
+    - path
+  oneOf:
+    - required:
+        - content
+    - required:
+        - edits
+  additionalProperties: false

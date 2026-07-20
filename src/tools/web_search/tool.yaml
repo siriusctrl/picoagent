@@ -1,0 +1,24 @@
+name: web_search
+description: >-
+  Search the public web and return current result titles, URLs, and snippets.
+  Use this for information that may have changed, unfamiliar topics, or when
+  sources are needed. This searches the internet; use read for local files and
+  bash with rg for workspace text search.
+input_schema:
+  type: object
+  properties:
+    query:
+      type: string
+      description: Focused web search query
+    count:
+      type: integer
+      minimum: 1
+      maximum: 20
+    country:
+      type: string
+      description: Optional two-letter result country
+    search_lang:
+      type: string
+      description: Optional result language code
+  required: [query]
+  additionalProperties: false

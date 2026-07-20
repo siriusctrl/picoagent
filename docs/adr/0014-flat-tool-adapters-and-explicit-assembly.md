@@ -4,6 +4,10 @@
 - Date: 2026-07-20
 - Supersedes: ADR 0002
 
+ADR 0015 later refines only the local tool contract packaging: a per-tool typed
+YAML manifest now owns the static name, description, and input schema. The
+other decisions in this record remain accepted.
+
 ## Context
 
 Model-facing tools had two ownership patterns. Base and history adapters lived

@@ -1,0 +1,40 @@
+name: task
+description: >-
+  Control background tools and subagents. status, wait, and stop return
+  `{tasks:[{task_id,kind,name,status}]}`; wait is bounded and never stops work.
+  inspect returns
+  `{task_id,status,child_run_id,messages:[{seq,message}],has_earlier,next_before_seq}`
+  (latest 6 messages by default); use next_before_seq as before_seq to page
+  backward. steer queues an instruction after the child's current
+  assistant/tool batch and returns
+  `{task_id,child_run_id,status,input_id,message}`. Resolve every live task
+  before the final answer; terminal results also arrive as durable
+  background-result messages.
+input_schema:
+  type: object
+  properties:
+    action:
+      type: string
+      enum: [status, wait, inspect, steer, stop]
+    task_ids:
+      type: array
+      items:
+        type: string
+      description: Task ids for status/wait; empty means all
+    task_id:
+      type: string
+      description: One task id for inspect/steer/stop
+    message:
+      type: string
+      description: Steering instruction when action=steer
+    before_seq:
+      type: integer
+      minimum: 1
+      description: For inspect, return messages with seq lower than this value
+    limit:
+      type: integer
+      minimum: 1
+      maximum: 20
+      description: For inspect, number of recent messages to return (default 6)
+  required: [action]
+  additionalProperties: false
