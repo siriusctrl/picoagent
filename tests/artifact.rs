@@ -133,8 +133,7 @@ async fn spills_large_results_with_versioned_sidecar_and_head_tail_preview() {
     assert!(model_content.contains("media_type: text/plain"));
     assert!(model_content.contains("preview_head=8; preview_tail=8"));
     assert!(model_content.contains("preview_limitation: none"));
-    assert!(model_content.contains("small `max_bytes`"));
-    assert!(model_content.contains("advance line `offset`"));
+    assert!(model_content.contains("returned `line_offset` or `byte_offset`"));
     assert!(model_content.contains("`bash`/`rg`"));
 
     let artifact = output.artifact.unwrap();

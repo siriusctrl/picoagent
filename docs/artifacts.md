@@ -42,8 +42,8 @@ compact `[Tool output]` envelope with:
 - media type
 - SHA-256 digest
 - stable relative path
-- instructions to use `read` with a small `max_bytes` and advancing line
-  offsets, or `bash` with `rg`
+- instructions to use `read` with its returned `line_offset` or `byte_offset`,
+  or `bash` with `rg`
 
 An artifact may have `truncated: false` when its configured preview contains
 all source bytes; artifact-backed and truncated are separate properties.

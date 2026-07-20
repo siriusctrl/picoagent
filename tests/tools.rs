@@ -75,22 +75,28 @@ fn app_registry_uses_the_embedded_tool_manifests() {
 #[tokio::test]
 async fn read_returns_a_bounded_line_range() {
     let workspace = tempdir().unwrap();
-    tokio::fs::write(
-        workspace.path().join("sample.txt"),
-        "zero\none\ntwo\nthree\n",
-    )
-    .await
-    .unwrap();
+    let content = (0..202)
+        .map(|line| format!("line-{line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    tokio::fs::write(workspace.path().join("sample.txt"), content)
+        .await
+        .unwrap();
     let output = ReadTool
         .execute(
             context(workspace.path(), "read"),
-            json!({ "path": "sample.txt", "offset": 1, "limit": 2 }),
+            json!({ "path": "sample.txt", "line_offset": 1 }),
         )
         .await
         .unwrap();
+    let text = String::from_utf8(output.content).unwrap();
+    let (selected, marker) = text.split_once("\n[read truncated:").unwrap();
+    assert_eq!(selected.lines().count(), 200);
+    assert!(selected.starts_with("line-1\n"));
+    assert!(selected.ends_with("line-200"));
     assert_eq!(
-        String::from_utf8(output.content).unwrap(),
-        "one\ntwo\n[read truncated: line limit reached; continue with offset=3]"
+        marker,
+        " line limit reached; continue with line_offset=201]"
     );
 }
 
@@ -103,7 +109,7 @@ async fn read_does_not_report_truncation_at_exact_line_ending_eof() {
     let output = ReadTool
         .execute(
             context(workspace.path(), "read-exact"),
-            json!({ "path": "exact.txt", "limit": 2 }),
+            json!({ "path": "exact.txt" }),
         )
         .await
         .unwrap();
@@ -112,22 +118,53 @@ async fn read_does_not_report_truncation_at_exact_line_ending_eof() {
 }
 
 #[tokio::test]
-async fn read_bounds_a_single_long_utf8_line_by_bytes() {
+async fn read_continues_a_single_long_utf8_line_by_bytes() {
     let workspace = tempdir().unwrap();
-    tokio::fs::write(workspace.path().join("long.txt"), "甲".repeat(10_000))
+    let content = "甲".repeat(30_000);
+    tokio::fs::write(workspace.path().join("long.txt"), &content)
         .await
         .unwrap();
-    let output = ReadTool
+    let first = ReadTool
         .execute(
             context(workspace.path(), "read-long"),
-            json!({ "path": "long.txt", "max_bytes": 101 }),
+            json!({ "path": "long.txt" }),
         )
         .await
         .unwrap();
-    let text = String::from_utf8(output.content).unwrap();
-    assert!(text.len() < 256);
-    assert!(text.contains("read truncated: max_bytes reached"));
-    assert!(!text.contains('\u{fffd}'));
+    let first = String::from_utf8(first.content).unwrap();
+    let (first_content, marker) = first.split_once("\n[read truncated:").unwrap();
+    assert_eq!(
+        marker,
+        " internal byte limit reached; continue with byte_offset=65535]"
+    );
+    assert!(!first.contains('\u{fffd}'));
+
+    let second = ReadTool
+        .execute(
+            context(workspace.path(), "read-long-next"),
+            json!({ "path": "long.txt", "byte_offset": 65_535 }),
+        )
+        .await
+        .unwrap();
+    let second = String::from_utf8(second.content).unwrap();
+    assert_eq!(format!("{first_content}{second}"), content);
+}
+
+#[tokio::test]
+async fn read_rejects_combined_line_and_byte_offsets() {
+    let workspace = tempdir().unwrap();
+    tokio::fs::write(workspace.path().join("sample.txt"), "one\ntwo\n")
+        .await
+        .unwrap();
+
+    let error = ReadTool
+        .execute(
+            context(workspace.path(), "read-offsets"),
+            json!({ "path": "sample.txt", "line_offset": 1, "byte_offset": 1 }),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("mutually exclusive"));
 }
 
 #[tokio::test]

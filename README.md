@@ -293,8 +293,8 @@ Neither tool has a cursor. `history_search_max_matches` limits a query to its
 newest matches; if reached, older matches are omitted and the model must refine
 the regex. This is distinct from artifact preview truncation: if the bounded
 JSON/JSONL tool result is too large, its complete returned content is saved as
-an artifact and can be inspected with `read` using a small `max_bytes` and
-advancing line offsets; `bash`/`rg` is also useful for targeted searches. Query-limit
+an artifact and can be inspected with `read`, continuing from the returned
+`line_offset` or `byte_offset`; `bash`/`rg` is also useful for targeted searches. Query-limit
 omissions are not present in that artifact.
 
 Each assembled agent profile has a sorted, frozen toolset. A profile compacts

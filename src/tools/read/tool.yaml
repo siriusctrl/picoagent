@@ -1,31 +1,29 @@
 name: read
 description: >-
-  Read a UTF-8 local file or artifact by line range. offset is zero-based; limit
-  and max_bytes bound the read. Use bash for directory listing or content
-  discovery.
+  Read a bounded UTF-8 range from a local file or artifact. Start at a
+  zero-based line_offset for normal text, or use byte_offset for a long single
+  line. The two offsets are mutually exclusive; the harness bounds lines and
+  bytes internally. Use bash for directory listing or content discovery.
 returns: >-
-  The selected UTF-8 text. If unread content remains because limit or max_bytes
-  was reached, an explicit truncation marker explains how to continue. A line
-  limit marker includes the next zero-based offset.
+  The selected UTF-8 text. If unread content remains because the line or
+  internal byte limit was reached, the truncation marker gives the exact
+  line_offset or byte_offset for the next read.
 input_schema:
   type: object
   properties:
     path:
       type: string
       description: Workspace-relative or absolute file path
-    offset:
+    line_offset:
       type: integer
       minimum: 0
       default: 0
-    limit:
+      description: Zero-based line to start at; do not combine with a nonzero byte_offset
+    byte_offset:
       type: integer
-      minimum: 1
-      default: 200
-    max_bytes:
-      type: integer
-      minimum: 1
-      default: 65536
-      description: Byte cap; use a small value such as 2048 when inspecting a spilled artifact
+      minimum: 0
+      default: 0
+      description: Zero-based byte to start at; use a continuation value returned by read
   required:
     - path
   additionalProperties: false
