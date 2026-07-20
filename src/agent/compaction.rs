@@ -32,6 +32,8 @@ pub(crate) struct CompletedCompaction {
     pub estimated_context_tokens: u64,
 }
 
+const MAX_INVALID_COMPACTION_RESPONSES: usize = 2;
+
 pub(crate) async fn maybe_compact(
     attempt: CompactionAttempt<'_>,
 ) -> Result<Option<CompletedCompaction>> {
@@ -114,30 +116,34 @@ pub(crate) async fn maybe_compact(
         .acquire()
         .await
         .map_err(|_| anyhow!("model concurrency limiter closed"))?;
-    let response = tokio::time::timeout(
-        Duration::from_secs(request_deadline_seconds),
-        provider.complete(request, Arc::new(NoopEventSink)),
-    )
-    .await;
-    drop(model_permit);
-    let response = response
+    let mut accepted = None;
+    for attempt_index in 1..=MAX_INVALID_COMPACTION_RESPONSES {
+        let response = tokio::time::timeout(
+            Duration::from_secs(request_deadline_seconds),
+            provider.complete(request.clone(), Arc::new(NoopEventSink)),
+        )
+        .await
         .map_err(|_| {
             anyhow!("compaction model request deadline exceeded {request_deadline_seconds} seconds")
         })
-        .and_then(|response| response)
-        .and_then(|response| {
-            response.validate_completed()?;
-            if !response.tool_calls().is_empty() {
-                bail!("compaction model returned tool calls")
+        .and_then(|response| response);
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                events
+                    .emit(&RuntimeEvent::new(
+                        run_id,
+                        RuntimeEventKind::CompactionFailed {
+                            state_message_ref,
+                            error: format!("{error:#}"),
+                        },
+                    ))
+                    .await?;
+                drop(model_permit);
+                return Ok(None);
             }
-            if response.text().trim().is_empty() {
-                bail!("compaction model returned an empty state")
-            }
-            Ok(response)
-        });
-    let response = match response {
-        Ok(response) => response,
-        Err(error) => {
+        };
+        if let Err(error) = response.validate_completed() {
             events
                 .emit(&RuntimeEvent::new(
                     run_id,
@@ -147,8 +153,35 @@ pub(crate) async fn maybe_compact(
                     },
                 ))
                 .await?;
+            drop(model_permit);
             return Ok(None);
         }
+        let invalid = if !response.tool_calls().is_empty() {
+            Some("compaction model returned tool calls")
+        } else if response.text().trim().is_empty() {
+            Some("compaction model returned an empty state")
+        } else {
+            None
+        };
+        let Some(error) = invalid else {
+            accepted = Some(response);
+            break;
+        };
+        events
+            .emit(&RuntimeEvent::new(
+                run_id,
+                RuntimeEventKind::CompactionFailed {
+                    state_message_ref: state_message_ref.clone(),
+                    error: format!(
+                        "{error} (attempt {attempt_index}/{MAX_INVALID_COMPACTION_RESPONSES})"
+                    ),
+                },
+            ))
+            .await?;
+    }
+    drop(model_permit);
+    let Some(response) = accepted else {
+        return Ok(None);
     };
 
     let state = CompactionState {

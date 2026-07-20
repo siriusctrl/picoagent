@@ -31,20 +31,15 @@ async fn keeps_small_results_inline() {
 }
 
 #[tokio::test]
-async fn cumulative_budget_forces_later_small_results_to_artifacts() {
+async fn each_small_result_stays_inline_independently() {
     let workspace = tempdir().unwrap();
     let store = ArtifactStore::new(ArtifactPolicy {
         inline_limit_bytes: 32,
-        max_inline_bytes_per_run: 10,
         preview_head_bytes: 8,
         preview_tail_bytes: 4,
     });
     let first = store
-        .persist_output_with_budget(
-            &context(workspace.path()),
-            RawToolOutput::text("12345678"),
-            10,
-        )
+        .persist_output(&context(workspace.path()), RawToolOutput::text("12345678"))
         .await
         .unwrap();
     assert!(first.artifact.is_none());
@@ -52,41 +47,12 @@ async fn cumulative_budget_forces_later_small_results_to_artifacts() {
     let mut second_raw = RawToolOutput::text("abcdefgh");
     second_raw.is_error = true;
     let second = store
-        .persist_output_with_budget(&context(workspace.path()), second_raw, 2)
+        .persist_output(&context(workspace.path()), second_raw)
         .await
         .unwrap();
-    assert!(second.artifact.is_some());
-    assert!(second.preview.len() <= 2);
-    let model_content = second.model_content();
-    assert!(model_content.contains("is_error: true"));
-    assert!(model_content.contains("bytes: total=8; preview_head=2; preview_tail=0; omitted=6"));
-    assert!(model_content.contains("preview_limitation: run_preview_budget_limited"));
-}
-
-#[tokio::test]
-async fn identifies_budget_as_the_reason_when_a_small_result_spills() {
-    let workspace = tempdir().unwrap();
-    let store = ArtifactStore::new(ArtifactPolicy {
-        inline_limit_bytes: 128,
-        max_inline_bytes_per_run: 40,
-        preview_head_bytes: 1,
-        preview_tail_bytes: 1,
-    });
-    let output = store
-        .persist_output_with_budget(
-            &context(workspace.path()),
-            RawToolOutput::text("x".repeat(50)),
-            40,
-        )
-        .await
-        .unwrap();
-
-    assert!(output.artifact.is_some());
-    assert!(
-        output
-            .model_content()
-            .contains("preview_limitation: run_preview_budget_limited")
-    );
+    assert_eq!(second.preview, "abcdefgh");
+    assert!(second.artifact.is_none());
+    assert!(second.is_error);
 }
 
 #[tokio::test]
@@ -94,7 +60,6 @@ async fn artifact_backed_full_preview_is_not_labeled_truncated() {
     let workspace = tempdir().unwrap();
     let store = ArtifactStore::new(ArtifactPolicy {
         inline_limit_bytes: 4,
-        max_inline_bytes_per_run: 100,
         preview_head_bytes: 8,
         preview_tail_bytes: 8,
     });
@@ -113,33 +78,6 @@ async fn artifact_backed_full_preview_is_not_labeled_truncated() {
             .contains("bytes: total=6; preview_head=6; preview_tail=0; omitted=0")
     );
     assert!(output.model_content().contains("preview_limitation: none"));
-}
-
-#[tokio::test]
-async fn exhausted_preview_budget_returns_metadata_and_inspection_guidance() {
-    let workspace = tempdir().unwrap();
-    let store = ArtifactStore::new(ArtifactPolicy {
-        inline_limit_bytes: 32,
-        max_inline_bytes_per_run: 0,
-        preview_head_bytes: 8,
-        preview_tail_bytes: 4,
-    });
-    let mut raw = RawToolOutput::text("abcdefgh");
-    raw.is_error = true;
-    let output = store
-        .persist_output_with_budget(&context(workspace.path()), raw, 0)
-        .await
-        .unwrap();
-
-    assert!(output.preview.is_empty());
-    let model_content = output.model_content();
-    assert!(model_content.contains("is_error: true"));
-    assert!(model_content.contains("bytes: total=8; preview_head=0; preview_tail=0; omitted=8"));
-    assert!(model_content.contains("preview_limitation: run_preview_budget_exhausted"));
-    assert!(model_content.contains("artifact preserves the complete returned output"));
-    assert!(model_content.contains("`read` (`path`, `offset`, `limit`)"));
-    assert!(model_content.contains("`bash`/`rg`"));
-    assert!(!model_content.contains("[Preview]"));
 }
 
 #[tokio::test]
@@ -177,7 +115,6 @@ async fn spills_large_results_with_versioned_sidecar_and_head_tail_preview() {
     let workspace = tempdir().unwrap();
     let store = ArtifactStore::new(ArtifactPolicy {
         inline_limit_bytes: 20,
-        max_inline_bytes_per_run: 100,
         preview_head_bytes: 8,
         preview_tail_bytes: 8,
     });
@@ -196,7 +133,8 @@ async fn spills_large_results_with_versioned_sidecar_and_head_tail_preview() {
     assert!(model_content.contains("media_type: text/plain"));
     assert!(model_content.contains("preview_head=8; preview_tail=8"));
     assert!(model_content.contains("preview_limitation: none"));
-    assert!(model_content.contains("`read` (`path`, `offset`, `limit`)"));
+    assert!(model_content.contains("small `max_bytes`"));
+    assert!(model_content.contains("advance line `offset`"));
     assert!(model_content.contains("`bash`/`rg`"));
 
     let artifact = output.artifact.unwrap();
@@ -234,7 +172,6 @@ async fn repeated_call_ids_do_not_overwrite_prior_artifacts() {
     let workspace = tempdir().unwrap();
     let store = ArtifactStore::new(ArtifactPolicy {
         inline_limit_bytes: 1,
-        max_inline_bytes_per_run: 100,
         preview_head_bytes: 1,
         preview_tail_bytes: 1,
     });
@@ -266,7 +203,6 @@ async fn preview_does_not_split_utf8_code_points() {
     let workspace = tempdir().unwrap();
     let store = ArtifactStore::new(ArtifactPolicy {
         inline_limit_bytes: 4,
-        max_inline_bytes_per_run: 100,
         preview_head_bytes: 5,
         preview_tail_bytes: 5,
     });
@@ -289,7 +225,6 @@ async fn spooled_file_preview_does_not_split_utf8_code_points() {
     tokio::fs::write(&source, content).await.unwrap();
     let store = ArtifactStore::new(ArtifactPolicy {
         inline_limit_bytes: 4,
-        max_inline_bytes_per_run: 100,
         preview_head_bytes: 5,
         preview_tail_bytes: 5,
     });

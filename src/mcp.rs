@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     model::ToolSpec,
-    tools::{ExplicitSpawn, RawToolOutput, Tool, ToolContext, ToolRegistry},
+    tools::{RawToolOutput, Tool, ToolContext, ToolRegistry},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,7 +100,7 @@ impl McpStdioClient {
 
     pub async fn register_tools(self: &Arc<Self>, registry: &mut ToolRegistry) -> Result<()> {
         for adapter in self.tool_adapters().await? {
-            registry.register(adapter, ExplicitSpawn::Allowed)?;
+            registry.register(adapter)?;
         }
         Ok(())
     }

@@ -118,7 +118,10 @@ provider-specific server-side compaction API. See
 
 Large results are preserved in full but represented in model context by a small
 versioned envelope. This was chosen over destructive truncation and over placing
-unbounded stdout in every subsequent model request.
+unbounded stdout in every subsequent model request. Each result is limited
+independently; picoagent does not retain a cumulative preview budget across a
+run because compaction can free context and later small results should remain
+directly readable. See [ADR 0018](adr/0018-limit-tool-output-per-result.md).
 
 ## Markdown Memory
 
@@ -134,12 +137,13 @@ and making raw transcripts or artifacts equivalent to curated memory. See
 
 ## One Background Task Lifecycle
 
-Direct tools start in the foreground and preserve the same future if their
-foreground window moves them to the background. `spawn` enters that lifecycle
-immediately for an ordinary tool or GeneralTask child. One `task` control tool
-provides status, bounded wait, child-message inspect, non-interrupting steer,
-and explicit stop. Agent loops have no arbitrary model-step cap, and background
-work has no hard execution deadline. See [ADR 0010](adr/0010-parent-controlled-background-work.md).
+Direct calls from one assistant message start concurrently under one shared
+foreground window. Results remain in original call order; only unfinished exact
+futures move to the background. `delegate` starts a GeneralTask child
+asynchronously. Separate `task_status`, `task_wait`, `task_inspect`,
+`task_steer`, and `task_stop` tools keep each schema small and explicit.
+Agent loops have no arbitrary model-step cap, and background work has no hard
+execution deadline. See [ADR 0017](adr/0017-concurrent-tool-batches-and-explicit-task-controls.md).
 
 ## Conservative File Mutation
 
@@ -191,12 +195,11 @@ each local tool keeps its static name, folded purpose description, folded return
 guidance, and input schema in one typed `tool.yaml` beside its adapter. The
 loader joins the two prose fields into the provider's standard description.
 These assets are embedded with `include_str!` and parsed strictly. Rust remains
-authoritative for prompt assembly, dynamic schema augmentation, argument
-validation, and execution.
+authoritative for prompt assembly, argument validation, and execution.
 Every local model-facing adapter uses a flat `src/tools/<tool>/` module, while
 domain engines remain in their focused subsystems. Process and run capabilities
-are assembled through one explicit path; the policy for `spawn(kind=tool)` is
-declared at registration and injected into its manifest-derived schema.
+are assembled through one explicit path; ordinary tools are called directly,
+while `delegate` and the task controls are complete static adapters.
 
 See [ADR 0016](adr/0016-separate-tool-purpose-and-return-guidance.md),
 [ADR 0015](adr/0015-local-tool-yaml-manifests.md),

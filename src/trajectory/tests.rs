@@ -121,7 +121,6 @@ async fn write_artifact(
 fn artifact_metadata(artifact: &ArtifactRef) -> ResultMetadata {
     ResultMetadata {
         artifact: Some(artifact.clone()),
-        preview_bytes: "bounded preview".len(),
     }
 }
 

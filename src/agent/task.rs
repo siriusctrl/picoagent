@@ -6,17 +6,15 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use tokio::sync::{Mutex, Notify, Semaphore};
+use tokio::sync::{Mutex, Semaphore, watch};
 
 use crate::{
     artifact::{ArtifactStore, ToolOutput},
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
-    hooks::HookPipeline,
     storage::RunDirStore,
-    tools::ToolRegistry,
 };
 
-use super::{runner::AgentRunner, tool_execution::ToolExecutor};
+use super::runner::AgentRunner;
 
 mod control;
 mod execution;
@@ -30,38 +28,32 @@ pub use recovery::RecoverableSubagent;
 
 pub struct TaskManager {
     runner: Arc<AgentRunner>,
-    spawnable_tools: ToolRegistry,
     artifacts: ArtifactStore,
-    preview_budget: Arc<Mutex<usize>>,
     store: RunDirStore,
     workspace: PathBuf,
     parent_run_id: String,
     parent_depth: usize,
     child_can_delegate: bool,
     events: SharedEventSink,
-    hooks: HookPipeline,
     records: Mutex<BTreeMap<String, BackgroundTaskRecord>>,
     delivered: Mutex<BTreeSet<String>>,
     task_store: TaskRecordStore,
     handles: StdMutex<BTreeMap<String, tokio::task::JoinHandle<()>>>,
-    notify: Notify,
-    slots: Arc<Semaphore>,
+    activity: watch::Sender<u64>,
+    subagent_slots: Arc<Semaphore>,
     default_wait_timeout: Duration,
 }
 
 pub struct TaskManagerConfig {
     pub runner: Arc<AgentRunner>,
-    pub candidate_tools: ToolRegistry,
     pub artifacts: ArtifactStore,
-    pub preview_budget: Arc<Mutex<usize>>,
     pub store: RunDirStore,
     pub workspace: PathBuf,
     pub parent_run_id: String,
     pub parent_depth: usize,
     pub child_can_delegate: bool,
     pub events: SharedEventSink,
-    pub hooks: HookPipeline,
-    pub max_parallel_tasks: usize,
+    pub max_parallel_subagents: usize,
     pub wait_timeout_seconds: u64,
 }
 
@@ -75,6 +67,7 @@ impl TaskManager {
         records: BTreeMap<String, BackgroundTaskRecord>,
         delivered: BTreeSet<String>,
     ) -> Arc<Self> {
+        let (activity, _) = watch::channel(0);
         let task_store = TaskRecordStore::new(
             config
                 .store
@@ -84,34 +77,31 @@ impl TaskManager {
         );
         Arc::new(Self {
             runner: config.runner,
-            spawnable_tools: config.candidate_tools.explicitly_spawnable(),
             artifacts: config.artifacts,
-            preview_budget: config.preview_budget,
             store: config.store,
             workspace: config.workspace,
             parent_run_id: config.parent_run_id,
             parent_depth: config.parent_depth,
             child_can_delegate: config.child_can_delegate,
             events: config.events,
-            hooks: config.hooks,
             records: Mutex::new(records),
             delivered: Mutex::new(delivered),
             task_store,
             handles: StdMutex::new(BTreeMap::new()),
-            notify: Notify::new(),
-            slots: Arc::new(Semaphore::new(config.max_parallel_tasks.max(1))),
+            activity,
+            subagent_slots: Arc::new(Semaphore::new(config.max_parallel_subagents.max(1))),
             default_wait_timeout: Duration::from_secs(config.wait_timeout_seconds.max(1)),
         })
     }
 
-    pub(crate) fn spawnable_tool_names(&self) -> Vec<String> {
-        self.spawnable_tools.names().map(str::to_owned).collect()
-    }
-
-    async fn create_tool_task(self: &Arc<Self>, name: String) -> Result<String> {
+    async fn create_tool_task(
+        self: &Arc<Self>,
+        name: String,
+        origin_call_id: String,
+    ) -> Result<String> {
         let mut records = self.records.lock().await;
         let task_id = next_task_id(&records);
-        let record = BackgroundTaskRecord::queued_tool(task_id.clone(), name);
+        let record = BackgroundTaskRecord::queued_tool(task_id.clone(), name, origin_call_id);
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);
         Ok(task_id)
@@ -179,7 +169,7 @@ impl TaskManager {
             record.error = Some(error);
         }
         drop(records);
-        self.notify.notify_one();
+        self.signal_activity();
     }
 
     async fn interrupt(&self, task_id: &str, error: String) -> Result<BackgroundTaskRecord> {
@@ -216,26 +206,17 @@ impl TaskManager {
         self.persist(&record).await?;
         records.insert(task_id.to_owned(), record.clone());
         drop(records);
-        // `notify_one` retains a permit when completion races with a waiter
-        // between its state check and `.notified().await`.
-        self.notify.notify_one();
+        self.signal_activity();
         Ok(record)
+    }
+
+    fn signal_activity(&self) {
+        self.activity
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
     }
 
     async fn persist(&self, record: &BackgroundTaskRecord) -> Result<()> {
         self.task_store.write(record).await
-    }
-
-    fn tool_executor(&self) -> ToolExecutor<'_> {
-        ToolExecutor::new(
-            &self.spawnable_tools,
-            &self.hooks,
-            &self.artifacts,
-            &self.preview_budget,
-            &self.events,
-            &self.workspace,
-            &self.parent_run_id,
-        )
     }
 
     async fn persist_output(
@@ -243,7 +224,7 @@ impl TaskManager {
         context: &crate::tools::ToolContext,
         output: crate::tools::RawToolOutput,
     ) -> Result<ToolOutput> {
-        self.tool_executor().persist_output(context, output).await
+        self.artifacts.persist_output(context, output).await
     }
 
     async fn get(&self, task_id: &str) -> Result<BackgroundTaskRecord> {
@@ -255,8 +236,30 @@ impl TaskManager {
             .with_context(|| format!("unknown background task `{task_id}`"))
     }
 
+    pub(crate) async fn find_undelivered_promotion(
+        &self,
+        call_id: &str,
+        tool_name: &str,
+        not_before: chrono::DateTime<chrono::Utc>,
+    ) -> Option<BackgroundTaskRecord> {
+        let delivered = self.delivered.lock().await.clone();
+        self.records
+            .lock()
+            .await
+            .values()
+            .filter(|record| {
+                record.origin_call_id.as_deref() == Some(call_id)
+                    && record.name == tool_name
+                    && record.created_at >= not_before
+                    && !delivered.contains(&record.id)
+            })
+            .max_by(|left, right| left.created_at.cmp(&right.created_at))
+            .cloned()
+    }
+
     pub async fn wait(&self, task_ids: &[String]) -> Result<Vec<BackgroundTaskRecord>> {
         let deadline = tokio::time::Instant::now() + self.default_wait_timeout;
+        let mut activity = self.activity.subscribe();
         loop {
             let records = self.select(task_ids).await?;
             if records.iter().all(|record| record.state.is_terminal()) {
@@ -264,7 +267,7 @@ impl TaskManager {
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero()
-                || tokio::time::timeout(remaining, self.notify.notified())
+                || tokio::time::timeout(remaining, activity.changed())
                     .await
                     .is_err()
             {
@@ -328,6 +331,7 @@ impl TaskManager {
     /// filling the trajectory with duplicate running snapshots.
     pub async fn pending_before_finish(&self) -> Result<Vec<BackgroundTaskRecord>> {
         let deadline = tokio::time::Instant::now() + self.default_wait_timeout;
+        let mut activity = self.activity.subscribe();
         loop {
             let records = self.select(&[]).await?;
             let delivered = self.delivered.lock().await.clone();
@@ -348,7 +352,7 @@ impl TaskManager {
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero()
-                || tokio::time::timeout(remaining, self.notify.notified())
+                || tokio::time::timeout(remaining, activity.changed())
                     .await
                     .is_err()
             {
@@ -383,6 +387,7 @@ impl TaskManager {
     }
 
     pub async fn wait_all(&self) -> Result<Vec<BackgroundTaskRecord>> {
+        let mut activity = self.activity.subscribe();
         loop {
             let records = self.select(&[]).await?;
             if records.iter().all(|record| record.state.is_terminal()) {
@@ -392,7 +397,7 @@ impl TaskManager {
                     .filter(|record| !delivered.contains(&record.id))
                     .collect());
             }
-            self.notify.notified().await;
+            activity.changed().await?;
         }
     }
 }

@@ -1,0 +1,16 @@
+name: delegate
+description: >-
+  Delegate independent work to a general-task subagent. The subagent always
+  starts asynchronously; continue independent work or use task_wait before
+  consuming its result.
+returns: >-
+  JSON with task_id and status. The terminal result is appended as a durable
+  background-result message at a later model boundary.
+input_schema:
+  type: object
+  properties:
+    prompt:
+      type: string
+      description: Complete task and all context the subagent needs
+  required: [prompt]
+  additionalProperties: false

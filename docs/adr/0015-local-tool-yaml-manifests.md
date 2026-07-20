@@ -8,6 +8,10 @@ ADR 0016 later refines the authored prose fields: local manifests separate
 purpose in `description` from result guidance in `returns`, then compose both
 into the standard provider description. The other decisions remain accepted.
 
+ADR 0017 later removes the sole runtime schema augmentation that this record
+allowed. With `spawn` removed, every local manifest now describes one complete
+static schema; profile selection changes membership only.
+
 ## Context
 
 ADR 0014 put every local model-facing adapter in one predictable directory,

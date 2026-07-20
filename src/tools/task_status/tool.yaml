@@ -1,0 +1,15 @@
+name: task_status
+description: >-
+  Inspect the current state of selected background tasks without waiting. Omit
+  task_ids to list every task in this run.
+returns: >-
+  JSON `{tasks:[{task_id,kind,name,status}]}`.
+input_schema:
+  type: object
+  properties:
+    task_ids:
+      type: array
+      items:
+        type: string
+      description: Task ids to inspect; omit to inspect all tasks
+  additionalProperties: false

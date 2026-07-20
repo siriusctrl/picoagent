@@ -1,0 +1,14 @@
+name: task_stop
+description: >-
+  Stop one background task. A terminal task is returned unchanged. Stopping a
+  running delegated subagent also cancels its child run.
+returns: >-
+  JSON `{task_id,kind,name,status}` for the selected task.
+input_schema:
+  type: object
+  properties:
+    task_id:
+      type: string
+      description: Task id to stop
+  required: [task_id]
+  additionalProperties: false

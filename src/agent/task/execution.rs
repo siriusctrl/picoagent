@@ -1,16 +1,11 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail, ensure};
-use serde_json::Value;
 use ulid::Ulid;
 
 use crate::{
-    agent::{
-        runner::RunRequest,
-        tool_execution::{ToolExecutionFuture, ToolExecutionMode, ToolExecutionOutcome},
-    },
+    agent::{runner::RunRequest, tool_execution::ToolExecutionFuture},
     events::{RuntimeEvent, RuntimeEventKind},
-    model::ToolCall,
     prompts::agent_prompts,
     storage::RunLeaseBusy,
     tools::{RawToolOutput, ToolContext},
@@ -18,75 +13,70 @@ use crate::{
 
 use super::{BackgroundTaskRecord, TaskManager};
 
-impl TaskManager {
-    pub async fn spawn_tool(
-        self: &Arc<Self>,
-        name: String,
-        arguments: Value,
-    ) -> Result<BackgroundTaskRecord> {
-        if self.spawnable_tools.get(&name).is_none() {
-            bail!("unknown or non-spawnable tool `{name}`")
-        }
-        let task_id = self.create_tool_task(name.clone()).await?;
-        let manager = self.clone();
-        let task_id_for_future = task_id.clone();
-        let handle = tokio::spawn(async move {
-            let task_id = task_id_for_future;
-            let permit = match manager.slots.clone().acquire_owned().await {
-                Ok(permit) => permit,
-                Err(error) => {
-                    manager.finish_failed(&task_id, &name, error.into()).await;
-                    return;
-                }
-            };
-            let outcome = async {
-                manager.set_running(&task_id).await?;
-                let _ = manager
-                    .events
-                    .emit(&RuntimeEvent::new(
-                        &manager.parent_run_id,
-                        RuntimeEventKind::BackgroundTaskStarted {
-                            task_id: task_id.clone(),
-                            name: name.clone(),
-                        },
-                    ))
-                    .await;
-                let call = ToolCall {
-                    id: format!("background-{task_id}"),
-                    name: name.clone(),
-                    arguments,
-                };
-                manager
-                    .tool_executor()
-                    .execute(call, ToolExecutionMode::Background)
-                    .await
-            }
-            .await;
-            drop(permit);
-            match outcome {
-                Ok(ToolExecutionOutcome::Completed(output)) => {
-                    manager.finish_tool_output(&task_id, &name, *output).await;
-                }
-                Ok(ToolExecutionOutcome::Failed(error)) | Err(error) => {
-                    manager.finish_failed(&task_id, &name, error).await;
-                }
-            }
-        });
-        self.track(task_id.clone(), handle);
-        self.get(&task_id).await
-    }
+pub(crate) struct PreparedToolPromotion {
+    task_id: String,
+    name: String,
+    call_id: String,
+    promotion_ready: tokio::sync::oneshot::Sender<()>,
+}
 
+impl TaskManager {
     /// Continue a direct tool future after its foreground window elapsed. The
     /// future itself is preserved, so no work is restarted and no timeout is
     /// treated as a failure.
-    pub(crate) async fn promote_running_tool(
+    pub(crate) async fn prepare_tool_promotion(
         self: &Arc<Self>,
         name: String,
         call_id: String,
         execution: ToolExecutionFuture,
-    ) -> Result<String> {
-        let task_id = self.create_tool_task(name.clone()).await?;
+    ) -> Result<PreparedToolPromotion> {
+        let task_id = self.create_tool_task(name.clone(), call_id.clone()).await?;
         self.set_running(&task_id).await?;
+        // `execution` has already been polled in the foreground and may be
+        // suspended while holding a resource also needed by task events (for
+        // example, the run event-log lock). Resume it before awaiting those
+        // events, otherwise promotion can deadlock against its own future.
+        // Delay the terminal task transition until the promotion events have
+        // been committed so task lifecycle events remain ordered.
+        let (promotion_ready, wait_for_promotion) = tokio::sync::oneshot::channel();
+        let manager = self.clone();
+        let task_id_for_future = task_id.clone();
+        let name_for_future = name.clone();
+        let handle = tokio::spawn(async move {
+            let outcome = execution.await;
+            let _ = wait_for_promotion.await;
+            match outcome {
+                Ok(output) => {
+                    manager
+                        .finish_tool_output(&task_id_for_future, &name_for_future, output)
+                        .await;
+                }
+                Err(error) => {
+                    manager
+                        .finish_failed(&task_id_for_future, &name_for_future, error)
+                        .await;
+                }
+            }
+        });
+        self.track(task_id.clone(), handle);
+        Ok(PreparedToolPromotion {
+            task_id,
+            name,
+            call_id,
+            promotion_ready,
+        })
+    }
+
+    pub(crate) async fn announce_tool_promotion(
+        &self,
+        promotion: PreparedToolPromotion,
+    ) -> Result<String> {
+        let PreparedToolPromotion {
+            task_id,
+            name,
+            call_id,
+            promotion_ready,
+        } = promotion;
         self.events
             .emit(&RuntimeEvent::new(
                 &self.parent_run_id,
@@ -106,23 +96,7 @@ impl TaskManager {
                 },
             ))
             .await?;
-        let manager = self.clone();
-        let task_id_for_future = task_id.clone();
-        let handle = tokio::spawn(async move {
-            match execution.await {
-                Ok(ToolExecutionOutcome::Completed(output)) => {
-                    manager
-                        .finish_tool_output(&task_id_for_future, &name, *output)
-                        .await;
-                }
-                Ok(ToolExecutionOutcome::Failed(error)) | Err(error) => {
-                    manager
-                        .finish_failed(&task_id_for_future, &name, error)
-                        .await;
-                }
-            }
-        });
-        self.track(task_id.clone(), handle);
+        let _ = promotion_ready.send(());
         Ok(task_id)
     }
 
@@ -173,7 +147,7 @@ impl TaskManager {
         }
     }
 
-    pub async fn spawn_agent(self: &Arc<Self>, prompt: String) -> Result<BackgroundTaskRecord> {
+    pub async fn delegate(self: &Arc<Self>, prompt: String) -> Result<BackgroundTaskRecord> {
         if prompt.trim().is_empty() {
             bail!("agent prompt must not be empty");
         }
@@ -241,7 +215,7 @@ impl TaskManager {
     ) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
-            let permit = match manager.slots.clone().acquire_owned().await {
+            let permit = match manager.subagent_slots.clone().acquire_owned().await {
                 Ok(permit) => permit,
                 Err(error) => {
                     manager

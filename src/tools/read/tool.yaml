@@ -5,7 +5,7 @@ description: >-
   discovery.
 returns: >-
   The selected UTF-8 text. An explicit marker is appended when max_bytes
-  truncates the read.
+  truncates the read; reduce limit or continue from a later line offset.
 input_schema:
   type: object
   properties:
@@ -24,6 +24,7 @@ input_schema:
       type: integer
       minimum: 1
       default: 65536
+      description: Byte cap; use a small value such as 2048 when inspecting a spilled artifact
   required:
     - path
   additionalProperties: false

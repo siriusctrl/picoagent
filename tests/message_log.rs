@@ -6,7 +6,7 @@ use picoagent::{
     storage::{MESSAGE_FORMAT, RunDirStore, RunRecord},
 };
 
-fn result_metadata(call_id: &str, preview_bytes: usize) -> ResultMetadata {
+fn result_metadata(call_id: &str) -> ResultMetadata {
     ResultMetadata {
         artifact: Some(ArtifactRef {
             version: 1,
@@ -19,7 +19,6 @@ fn result_metadata(call_id: &str, preview_bytes: usize) -> ResultMetadata {
             bytes: 100,
             sha256: "a".repeat(64),
         }),
-        preview_bytes,
     }
 }
 use serde_json::{Value, json};
@@ -100,7 +99,7 @@ async fn messages_are_native_chat_json_and_sidecar_preserves_stable_refs() {
                     call_id: "call_1".into(),
                     content: "file contents".into(),
                     is_error: true,
-                    metadata: result_metadata("call_1", "file contents".len()),
+                    metadata: result_metadata("call_1"),
                 }],
             },
         )
@@ -159,7 +158,6 @@ async fn messages_are_native_chat_json_and_sidecar_preserves_stable_refs() {
         assert_eq!(item["reconstruction_sha256"].as_str().unwrap().len(), 64);
         assert!(item["layout"].is_array());
     }
-    assert_eq!(metadata[2]["layout"][0]["metadata"]["preview_bytes"], 13);
     assert_eq!(
         metadata[2]["layout"][0]["metadata"]["artifact"]["call_id"],
         "call_1"
@@ -204,7 +202,7 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
                     name: "worker".into(),
                     status: "completed".into(),
                     content: "后台结果".into(),
-                    metadata: result_metadata("background-task-1", "后台结果".len()),
+                    metadata: result_metadata("background-task-1"),
                 },
             ],
         },

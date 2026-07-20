@@ -46,9 +46,15 @@ navigation, invariants, verification, and handoff.
 - Keep provider wire formats and auth outside the agent loop.
 - Keep one deterministic, namespaced tool registry. MCP tools adapt into the
   same `Tool` contract and cannot silently replace built-ins.
-- Declare explicit `spawn(kind=tool)` permission at every registration and
-  expose the exact allowed set in the `spawn` schema; do not infer it from
-  registration order.
+- Execute one assistant tool-call batch concurrently under one shared
+  foreground window. Commit its tool-result messages in original call order,
+  while events may preserve actual completion order. Promote only unfinished
+  exact futures when the window elapses; never stop and restart them. Resume
+  and track every pending future before awaiting any promotion event, then
+  announce promotions in original call order.
+- Use `delegate` as the sole asynchronous GeneralTask start operation. Keep
+  status, bounded wait, inspect, steer, and stop as separate task-control tools;
+  ordinary tools enter task control only through foreground promotion.
 - Treat completed messages as the resumable boundary. Stream deltas are events,
   not durable conversation messages.
 - Keep `messages.jsonl` in the declared `openai-chat-compatible` shape. Store
@@ -63,8 +69,12 @@ navigation, invariants, verification, and handoff.
   before cancellable writes or whenever durable file lengths change.
 - Spill large tool results to `.pico/runs/<run-id>/artifacts/`; preserve the full
   result and return a bounded head/tail preview plus an immutable artifact ref.
-- Enforce both the per-result inline threshold and the cumulative per-run preview
-  budget; once the latter is exhausted, return artifact references without previews.
+- Limit each tool result independently. Keep small UTF-8 results inline; spill
+  larger results with a bounded head/tail preview. Do not carry a cumulative
+  preview budget across tool calls or compaction boundaries.
+- Correlate foreground `ToolResult` messages by provider `tool_call_id` and
+  promoted terminal background messages by `task_id`; artifact metadata for a
+  promoted result retains the originating provider call id.
 - Keep artifact ids and metadata stable. Changing content under the same hash or
   identity is a contract violation.
 - Keep prompt prefixes deterministic: stable section order, sorted tools and
@@ -83,8 +93,7 @@ navigation, invariants, verification, and handoff.
   local tool's static name, purpose description, return guidance, and input
   schema in its typed compile-time `tool.yaml`. Compose the two prose fields
   deterministically into the provider description. Keep prompt assembly,
-  dynamic schema augmentation, argument validation, and execution contracts in
-  Rust.
+  argument validation, and execution contracts in Rust.
 - Memory is durable user/project knowledge outside the live transcript. Inspect
   and update its ordinary Markdown with the general tools; do not inject the
   tree into every prompt or add a memory-specific tool.
@@ -110,6 +119,8 @@ navigation, invariants, verification, and handoff.
   type, hash, stable relative path, and useful beginning/end previews.
 - `read` must support bounded reads so the model can inspect an artifact
   without loading it all back into context.
+- Apply inline and preview limits independently to each result; prior tool
+  output must not change how a later result is represented.
 - Run directories and artifact manifests are portable job outputs. Avoid
   machine-specific absolute paths in persisted references.
 

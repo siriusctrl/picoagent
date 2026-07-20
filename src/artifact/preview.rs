@@ -21,16 +21,12 @@ pub struct PreviewInfo {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PreviewLimitation {
-    RunPreviewBudgetLimited,
-    RunPreviewBudgetExhausted,
     BinaryOrNonUtf8,
 }
 
 impl PreviewLimitation {
     pub(super) fn as_str(self) -> &'static str {
         match self {
-            Self::RunPreviewBudgetLimited => "run_preview_budget_limited",
-            Self::RunPreviewBudgetExhausted => "run_preview_budget_exhausted",
             Self::BinaryOrNonUtf8 => "binary_or_non_utf8",
         }
     }
@@ -46,23 +42,9 @@ pub(super) fn textual_preview(
     content: &[u8],
     head_limit: usize,
     tail_limit: usize,
-    preview_budget: usize,
 ) -> (String, PreviewInfo) {
-    if preview_budget == 0 {
-        return unavailable_preview(content.len() as u64, 0);
-    }
-
     let desired = preview_bytes(content, head_limit, tail_limit);
-    if desired.text.len() <= preview_budget {
-        return preview_output(desired, content.len() as u64, None);
-    }
-
-    let limited = head_bytes(content, head_limit.min(preview_budget));
-    preview_output(
-        limited,
-        content.len() as u64,
-        Some(PreviewLimitation::RunPreviewBudgetLimited),
-    )
+    preview_output(desired, content.len() as u64, None)
 }
 
 pub(super) async fn file_preview(
@@ -70,45 +52,21 @@ pub(super) async fn file_preview(
     bytes: u64,
     head_limit: usize,
     tail_limit: usize,
-    preview_budget: usize,
 ) -> Result<(String, PreviewInfo)> {
-    if preview_budget == 0 {
-        return Ok(unavailable_preview(bytes, 0));
-    }
-
     let Some(desired) = preview_file(path, bytes, head_limit, tail_limit).await? else {
-        return Ok(unavailable_preview(bytes, preview_budget));
+        return Ok(unavailable_preview(bytes));
     };
-    if desired.text.len() <= preview_budget {
-        return Ok(preview_output(desired, bytes, None));
-    }
-
-    let Some(limited) = head_file(path, bytes, head_limit.min(preview_budget)).await? else {
-        return Ok(unavailable_preview(bytes, preview_budget));
-    };
-    Ok(preview_output(
-        limited,
-        bytes,
-        Some(PreviewLimitation::RunPreviewBudgetLimited),
-    ))
+    Ok(preview_output(desired, bytes, None))
 }
 
-pub(super) fn unavailable_preview(
-    total_bytes: u64,
-    preview_budget: usize,
-) -> (String, PreviewInfo) {
-    let limitation = if preview_budget == 0 {
-        PreviewLimitation::RunPreviewBudgetExhausted
-    } else {
-        PreviewLimitation::BinaryOrNonUtf8
-    };
+pub(super) fn unavailable_preview(total_bytes: u64) -> (String, PreviewInfo) {
     (
         String::new(),
         PreviewInfo {
             shown_head_bytes: 0,
             shown_tail_bytes: 0,
             omitted_bytes: total_bytes,
-            limitation: Some(limitation),
+            limitation: Some(PreviewLimitation::BinaryOrNonUtf8),
         },
     )
 }
@@ -157,15 +115,6 @@ fn preview_bytes(content: &[u8], head_bytes: usize, tail_bytes: usize) -> Previe
     }
 }
 
-fn head_bytes(content: &[u8], limit: usize) -> PreviewSlice {
-    let shown_head_bytes = floor_char_boundary(content, limit.min(content.len()));
-    PreviewSlice {
-        text: String::from_utf8_lossy(&content[..shown_head_bytes]).into_owned(),
-        shown_head_bytes,
-        shown_tail_bytes: 0,
-    }
-}
-
 async fn preview_file(
     path: &Path,
     bytes: u64,
@@ -205,23 +154,6 @@ async fn preview_file(
             shown_tail_bytes: tail.len(),
         })),
         _ => Ok(None),
-    }
-}
-
-async fn head_file(path: &Path, bytes: u64, limit: usize) -> Result<Option<PreviewSlice>> {
-    let read = limit.saturating_add(4).min(bytes as usize);
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut head = vec![0_u8; read];
-    file.read_exact(&mut head).await?;
-    let shown_head_bytes = floor_char_boundary(&head, limit.min(head.len()));
-    head.truncate(shown_head_bytes);
-    match String::from_utf8(head) {
-        Ok(text) => Ok(Some(PreviewSlice {
-            text,
-            shown_head_bytes,
-            shown_tail_bytes: 0,
-        })),
-        Err(_) => Ok(None),
     }
 }
 

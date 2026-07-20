@@ -62,7 +62,8 @@ are more valuable than preserving the separate checkpoint format.
   paired message log instead of coordinating a second JSONL file.
 - The compaction request benefits from the same stable prompt/tool prefix as
   normal calls. Schemas are present but cannot cause side effects because tool
-  responses fail the compaction attempt.
+  responses are rejected without execution. One invalid tool-call or empty
+  response is retried to tolerate occasional protocol-following failures.
 - Durable order and provider-input order intentionally differ after compaction:
   the state is appended after messages it summarizes, then projected before the
   exact recent suffix on later requests.

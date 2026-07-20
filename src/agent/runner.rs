@@ -32,10 +32,7 @@ mod lifecycle;
 mod recovery;
 
 use lifecycle::RunMode;
-use recovery::{
-    append_background_results, append_interrupted_tool_results, remaining_preview_budget,
-    resumable_final_text,
-};
+use recovery::{append_background_results, append_interrupted_tool_results, resumable_final_text};
 
 pub struct AgentRunner {
     provider: Arc<dyn ModelProvider>,
@@ -156,23 +153,16 @@ impl AgentRunner {
             .is_some_and(|tokens| tokens > 0)
             && (tool_assembly.contains("read") || tool_assembly.contains("bash"));
 
-        let tool_preview_budget = Arc::new(tokio::sync::Mutex::new(remaining_preview_budget(
-            self.artifacts.policy().max_inline_bytes_per_run,
-            &trajectory,
-        )));
         let task_config = TaskManagerConfig {
             runner: self.clone(),
-            candidate_tools: tool_assembly.task_candidates(),
             artifacts: self.artifacts.clone(),
-            preview_budget: tool_preview_budget.clone(),
             store: self.store.clone(),
             workspace: self.workspace.clone(),
             parent_run_id: run_id.clone(),
             parent_depth: request.depth,
             child_can_delegate: request.depth + 1 < self.options.max_subagent_depth,
             events: events.clone(),
-            hooks: self.hooks.clone(),
-            max_parallel_tasks: self.options.max_parallel_tasks,
+            max_parallel_subagents: self.options.max_parallel_subagents,
             wait_timeout_seconds: self.options.task_wait_timeout_seconds,
         };
         let manager = if mode == RunMode::Resume {
@@ -200,7 +190,6 @@ impl AgentRunner {
             registry: &registry,
             hooks: &self.hooks,
             artifacts: &self.artifacts,
-            preview_budget: &tool_preview_budget,
             events: &events,
             workspace: &self.workspace,
             run_id: &run_id,
@@ -218,11 +207,13 @@ impl AgentRunner {
                 })
                 .count();
             if mode == RunMode::Resume {
-                let interrupted_preview_bytes =
-                    append_interrupted_tool_results(&self.store, &run_id, &mut trajectory).await?;
-                let mut remaining = tool_preview_budget.lock().await;
-                *remaining = remaining.saturating_sub(interrupted_preview_bytes);
-                drop(remaining);
+                append_interrupted_tool_results(
+                    &self.store,
+                    &run_id,
+                    &mut trajectory,
+                    &task_manager,
+                )
+                .await?;
                 let resumed_inputs = self
                     .store
                     .append_pending_inputs(&run_id, &mut trajectory)
@@ -430,8 +421,8 @@ impl AgentRunner {
                     });
                 }
 
-                for call in tool_calls {
-                    let tool_message = direct_tools.execute(call).await?;
+                let tool_messages = direct_tools.execute_batch(tool_calls).await?;
+                for tool_message in tool_messages {
                     let record = self.store.append_message(&run_id, &tool_message).await?;
                     context_tokens =
                         context_tokens.saturating_add(estimate_message_tokens(&tool_message));

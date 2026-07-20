@@ -62,9 +62,15 @@ impl TaskManager {
 
     pub(super) async fn finish_failed(&self, task_id: &str, name: &str, error: anyhow::Error) {
         let mut error = format!("{error:#}");
+        let artifact_call_id = self
+            .get(task_id)
+            .await
+            .ok()
+            .and_then(|record| record.origin_call_id)
+            .unwrap_or_else(|| format!("background-{task_id}"));
         let context = ToolContext {
             run_id: self.parent_run_id.clone(),
-            call_id: format!("background-{task_id}"),
+            call_id: artifact_call_id,
             workspace: self.workspace.clone(),
         };
         let raw = RawToolOutput {

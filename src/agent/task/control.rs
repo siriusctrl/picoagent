@@ -50,7 +50,6 @@ impl TaskManager {
         Ok(json!({
             "task_id": record.id,
             "status": record.status(),
-            "child_run_id": child_run_id,
             "messages": messages,
             "has_earlier": has_earlier,
             "next_before_seq": next_before_seq,
@@ -101,10 +100,7 @@ impl TaskManager {
         drop(records);
         Ok(json!({
             "task_id": task_id,
-            "child_run_id": child_run_id,
             "status": record.status(),
-            "input_id": input_id,
-            "message": "Steering was queued after the child's current assistant/tool batch and before its next model request.",
         }))
     }
 

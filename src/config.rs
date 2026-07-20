@@ -155,7 +155,7 @@ impl ProviderConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub max_subagent_depth: usize,
-    pub max_parallel_tasks: usize,
+    pub max_parallel_subagents: usize,
     pub max_parallel_model_calls: usize,
     pub model_stream_idle_timeout_seconds: u64,
     pub model_request_deadline_seconds: u64,
@@ -172,8 +172,8 @@ pub struct TaskConfig {
 impl Default for TaskConfig {
     fn default() -> Self {
         Self {
-            foreground_tool_timeout_seconds: 300,
-            wait_timeout_seconds: 30,
+            foreground_tool_timeout_seconds: 30,
+            wait_timeout_seconds: 10,
         }
     }
 }
@@ -204,7 +204,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             max_subagent_depth: 1,
-            max_parallel_tasks: 4,
+            max_parallel_subagents: 4,
             max_parallel_model_calls: 1,
             model_stream_idle_timeout_seconds: 300,
             model_request_deadline_seconds: 3_600,
@@ -217,7 +217,6 @@ impl Default for RuntimeConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct ArtifactConfig {
     pub inline_bytes: usize,
-    pub max_inline_bytes_per_run: usize,
     pub preview_head_bytes: usize,
     pub preview_tail_bytes: usize,
 }
@@ -226,7 +225,6 @@ impl Default for ArtifactConfig {
     fn default() -> Self {
         Self {
             inline_bytes: 32 * 1024,
-            max_inline_bytes_per_run: 128 * 1024,
             preview_head_bytes: 8 * 1024,
             preview_tail_bytes: 8 * 1024,
         }
@@ -310,8 +308,8 @@ impl AppConfig {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.runtime.max_parallel_tasks == 0 {
-            bail!("`runtime.max_parallel_tasks` must be greater than zero")
+        if self.runtime.max_parallel_subagents == 0 {
+            bail!("`runtime.max_parallel_subagents` must be greater than zero")
         }
         if self.runtime.max_parallel_model_calls == 0 {
             bail!("`runtime.max_parallel_model_calls` must be greater than zero")
@@ -614,7 +612,7 @@ mod tests {
     #[test]
     fn rejects_zero_runtime_and_task_limits() {
         for source in [
-            "[runtime]\nmax_parallel_tasks = 0",
+            "[runtime]\nmax_parallel_subagents = 0",
             "[runtime]\nmax_parallel_model_calls = 0",
             "[runtime]\nmodel_stream_idle_timeout_seconds = 0",
             "[runtime]\nmodel_request_deadline_seconds = 0",
@@ -627,6 +625,14 @@ mod tests {
             let config: AppConfig = toml::from_str(source).unwrap();
             assert!(config.validate().is_err(), "accepted {source}");
         }
+    }
+
+    #[test]
+    fn task_defaults_use_a_short_shared_foreground_window() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.tasks.foreground_tool_timeout_seconds, 30);
+        assert_eq!(config.tasks.wait_timeout_seconds, 10);
     }
 
     #[test]

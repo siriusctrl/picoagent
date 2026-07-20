@@ -1,8 +1,9 @@
 name: bash
 description: >-
   Run a Bash command in the current workspace. Use it for file discovery, local
-  text search with rg, tests, builds, and other command-line work. No sandbox is
-  provided.
+  text search with rg, tests, builds, and other command-line work. The
+  non-login shell inherits picoagent's environment without loading profile
+  files. No sandbox is provided.
 returns: >-
   Combined stdout/stderr in capture order. Empty successful output is `(no
   output)`; non-zero exits and signals append a final picoagent status line.

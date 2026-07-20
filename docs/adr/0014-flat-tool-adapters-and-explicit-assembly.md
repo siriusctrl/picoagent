@@ -8,6 +8,11 @@ ADR 0015 later refines only the local tool contract packaging: a per-tool typed
 YAML manifest now owns the static name, description, and input schema. The
 other decisions in this record remain accepted.
 
+ADR 0017 later removes the explicit ordinary-tool spawn policy and its dynamic
+schema. Ordinary tools are direct capabilities with automatic foreground
+promotion; `delegate` and the five task controls are separate flat adapters.
+The flat ownership and single assembly decisions here remain accepted.
+
 ## Context
 
 Model-facing tools had two ownership patterns. Base and history adapters lived

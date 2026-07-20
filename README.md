@@ -16,14 +16,14 @@ system.
 - compact `read`, `write`, and `bash` built-ins plus optional `web_search`
 - exact-first, atomic multi-edit writes with CRLF/BOM preservation
 - versioned artifact spill for large tool results with bounded head/tail previews
-- run-level cumulative inline-result budget for stable context growth
 - optional local context compaction recorded as ordinary messages, with
   read-only regex history retrieval
 - Agent Skills discovery with progressive `SKILL.md` loading
 - MCP stdio servers adapted into the same tool registry
 - command hooks for run and tool lifecycle events
-- foreground tools that can continue through generic background task control
-- in-process general-task subagents that reuse the same runner
+- concurrent direct-tool batches whose unfinished calls continue through
+  generic background task control
+- asynchronously delegated general-task subagents that reuse the same runner
 - ordinary Markdown user/project memory maintained with normal file tools
 - self-contained run directories and optional NDJSON events
 
@@ -88,8 +88,8 @@ Resume never replays a direct tool call whose result was not durably recorded.
 It appends an error result saying the outcome and side effects are unknown, then
 lets the model inspect the workspace before deciding what to do. Background
 ordinary tools are likewise marked `interrupted`; child-agent runs keep their
-own transcripts. Durable GeneralTask children created by `spawn` continue when
-their parent is resumed; resume the parent run rather than invoking `pico
+own transcripts. Durable GeneralTask children created by `delegate` continue
+when their parent is resumed; resume the parent run rather than invoking `pico
 resume` on a child id directly.
 
 ## Prompt Layout
@@ -126,8 +126,7 @@ Stable agent instructions are folded scalar values in the typed, compile-time
 typed `tool.yaml` live under `src/tools/<tool>/`; the manifest owns the static
 name, purpose description, return guidance, and input schema. Rust composes the
 two prose fields into the standard provider description and owns manifest
-validation, dynamic schema augmentation, argument validation, assembly, and
-execution.
+validation, argument validation, assembly, and execution.
 
 ## Provider Setup
 
@@ -293,7 +292,8 @@ Neither tool has a cursor. `history_search_max_matches` limits a query to its
 newest matches; if reached, older matches are omitted and the model must refine
 the regex. This is distinct from artifact preview truncation: if the bounded
 JSON/JSONL tool result is too large, its complete returned content is saved as
-an artifact and can be inspected with `read` or `bash`/`rg`. Query-limit
+an artifact and can be inspected with `read` using a small `max_bytes` and
+advancing line offsets; `bash`/`rg` is also useful for targeted searches. Query-limit
 omissions are not present in that artifact.
 
 Each assembled agent profile has a sorted, frozen toolset. A profile compacts
@@ -314,8 +314,9 @@ current run and replaced in model context with:
 - SHA-256 digest
 - stable project-relative path
 
-The model can inspect the complete output with bounded `read` calls or `bash`
-plus `rg`, avoiding repeated commands and unnecessary context growth. See
+The model can inspect the complete output with bounded `read` calls or search it
+with `bash` plus `rg`. Every tool result is limited independently; a previous
+large result never suppresses a later small result. See
 [artifacts.md](docs/artifacts.md).
 
 ## Tools And Background Work
@@ -325,17 +326,23 @@ The launch tool surface is intentionally small:
 - `read`: bounded UTF-8 reads for a known path
 - `write`: full-file creation/replacement or an atomic list of targeted edits
 - `bash`: local discovery, `rg`, tests, builds, and other Bash commands; returns
-  combined stdout/stderr and adds a status line only for unsuccessful completion
+  combined stdout/stderr and adds a status line only for unsuccessful
+  completion. It uses a non-login shell and inherits picoagent's environment
+  without loading profile files
 - `history_search`: regex search over the compacted trajectory prefix
 - `history_read`: a bounded message window around a returned history ref
 - `load_skill`: progressive loading of a catalogued skill's full instructions
-- `spawn`: immediate background start for an allowed tool or GeneralTask child
-- `task`: status, wait, inspect, steer, and stop for background work
+- `delegate`: asynchronously start a GeneralTask child
+- `task_status`: inspect current task state
+- `task_wait`: wait for selected tasks for one bounded interval
+- `task_inspect`: read a bounded window of a child agent's messages
+- `task_steer`: queue input for a running child agent
+- `task_stop`: cancel one background task
 - `web_search`: optional Brave-backed public web search
 
 Root and depth-eligible GeneralTask delegation capabilities are selected before
-the run starts; a leaf GeneralTask cannot spawn another child but retains task
-control for automatically backgrounded tools. Memory adds paths to
+the run starts; a leaf GeneralTask cannot delegate another child but retains
+task control for automatically backgrounded tools. Memory adds paths to
 the reminder, not a tool schema. `web_search` and MCP tools depend on startup
 configuration. The resulting schemas are sorted and frozen before the run's
 first normal provider call.
@@ -345,29 +352,40 @@ the original file. It tries exact matching first, then a conservative whole-line
 indentation normalization. It does not use broad fuzzy similarity that could
 silently modify the wrong code.
 
-Every direct tool call starts in the foreground. If it exceeds
-`tasks.foreground_tool_timeout_seconds`, picoagent preserves that same future,
-moves it into the background task lifecycle, and returns its task id; the tool
-is neither stopped nor restarted. `spawn` starts a tool listed in its schema
-enum or the `general-task` agent profile in the background immediately. The `task` tool
-provides `status`, bounded `wait`, subagent `inspect`, non-interrupting `steer`,
-and `stop`. Terminal results are appended as new runtime messages at the next
-model boundary, preserving provider tool-call validity.
+All direct tool calls in one assistant message start concurrently and share one
+foreground window. If all finish early, picoagent returns immediately. At the
+configured deadline, it preserves each unfinished exact future, moves only
+those calls into the background task lifecycle, and returns their task ids; no
+tool is stopped or restarted. Tool-result messages are committed in the
+assistant's original call order and retain their original `tool_call_id`, even
+though completion events can arrive in another order. The model should put only
+independent calls in one batch and issue dependent work after seeing results. A
+result containing `task_id` is only the running acknowledgement for that direct
+call; dependent work must wait for its terminal background result.
+
+`delegate` starts a `general-task` child asynchronously. The five `task_*`
+tools observe and control delegated children and automatically promoted direct
+tools. Terminal background results are appended as new runtime messages at the
+next model boundary and are correlated by `task_id`, preserving provider
+tool-call validity. Any artifact produced by a promoted call retains its
+original provider call id in metadata.
 
 The task-control calls are intentionally small:
 
-```json
-{"action":"status","task_ids":[]}
-{"action":"wait","task_ids":["..."]}
-{"action":"inspect","task_id":"...","limit":6,"before_seq":42}
-{"action":"steer","task_id":"...","message":"check the failing test first"}
-{"action":"stop","task_id":"..."}
+```text
+delegate({"prompt":"inspect the failing tests and report the cause"})
+task_status({"task_ids":[]})
+task_wait({"task_ids":["t1"]})
+task_inspect({"task_id":"t1","limit":6,"before_seq":42})
+task_steer({"task_id":"t1","message":"check the failing test first"})
+task_stop({"task_id":"t1"})
 ```
 
 An empty `task_ids` means all tasks owned by that run. `before_seq` is exclusive
-and optional; inspect returns `next_before_seq` when older messages exist. Task
-ids are short references local to their parent run (`t1`, `t2`, ...); child run
-ids remain internal durable-storage identities.
+and optional; inspect returns
+`next_before_seq` when older messages exist. Task ids are short references
+local to their parent run (`t1`, `t2`, ...); child run ids remain internal
+durable-storage identities.
 
 ## Skills
 
@@ -387,8 +405,8 @@ pico skills list
 
 ## Subagents
 
-`spawn` with `kind = "agent"` automatically starts the sole `general-task`
-profile; there is no model-facing profile choice. Before the child starts, the
+`delegate` asynchronously starts the sole `general-task` profile; there is no
+model-facing profile choice. Before the child starts, the
 runtime fixes it as delegating or leaf from the remaining depth. With the
 default `max_subagent_depth = 1`, it is a leaf. A child is another invocation of
 the same runner, not a second agent class. Each child:
@@ -398,11 +416,11 @@ the same runner, not a second agent class. Each child:
 - records its parent run id
 - shares the working project, so it can inspect and modify the same files
 - receives its own model/output profile
-- cannot spawn another child at the default depth limit
+- cannot delegate another child at the default depth limit
 
 Parent and child model requests share `runtime.max_parallel_model_calls`, which
-defaults to one for compatibility with rate-limited endpoints. Background tool
-capacity remains independently controlled by `runtime.max_parallel_tasks`.
+defaults to one for compatibility with rate-limited endpoints. Delegated-child
+capacity remains independently controlled by `runtime.max_parallel_subagents`.
 `runtime.model_stream_idle_timeout_seconds` (default 300) stops a model stream
 that produces no valid SSE event for that interval, while
 `runtime.model_request_deadline_seconds` (default 3600) caps the complete model
@@ -432,7 +450,7 @@ an ordinary agent's initial runtime reminder:
 - `<workspace>/.pico/memory/project/` for project-specific knowledge
 
 There are no special memory tools. The model uses `read`, `write`, and `bash`
-for small focused changes. For a large independent update, it can spawn an
+for small focused changes. For a large independent update, it can delegate an
 ordinary `general-task` child, continue useful work, and reconcile the child
 result before finishing.
 
@@ -458,8 +476,8 @@ CLI/job
         -> flat local Tool adapters
         -> MCP Tool adapters
         -> TaskManager
-           -> explicitly spawned Tool
-           -> child AgentRunner
+           -> promoted direct Tool future
+           -> delegated child AgentRunner
      -> ArtifactStore
      -> RunDirStore
      -> EventSink

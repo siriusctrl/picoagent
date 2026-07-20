@@ -32,7 +32,7 @@ sidecar holds the stable `m<N>` ref whose number equals the one-based sequence,
 timestamp, exact-message SHA-256, provider-neutral content layout, tool-error
 state, opaque provider items, an optional pending-input idempotency id, optional
 compaction purpose/boundary state, and a result's optional
-`ArtifactRef` plus exact preview-byte count. A second SHA-256
+`ArtifactRef`. A second SHA-256
 covers all reconstruction metadata. The two logs are created and
 directory-synced with the run. The Chat line is synced first and the metadata
 line is synced last as its commit marker. Reads, recovery, and appends take one
@@ -54,15 +54,18 @@ For each model step:
 4. stream visible text and explicitly returned reasoning as separate events
    while collecting the complete response;
 5. persist the complete assistant message;
-6. execute requested tools sequentially;
-7. artifact large outputs and persist complete tool messages;
+6. execute the assistant's requested tools concurrently under one shared
+   foreground window;
+7. artifact large outputs and persist complete tool messages in original call
+   order;
 8. repeat, join outstanding background work before finalization, or write
    `final.md` when no tool calls or tasks remain.
 
 On resume, a complete final assistant message is finalized without another
-model call. If the last assistant message contains a tool call without a paired
-durable result, picoagent appends an interrupted error result and does not run
-the tool again because its side effects are unknown.
+model call. If a matching promoted task record exists for an unpaired tool
+call, picoagent reconstructs its task acknowledgement and separately delivers
+the durable terminal task result. Otherwise it appends an interrupted error
+result and does not run the tool again because its side effects are unknown.
 
 ## Compaction And History
 
@@ -75,9 +78,10 @@ provider-reported input usage whenever available. Between calls it estimates
 new content adapters replay, including compatible Chat `reasoning_content` and
 opaque provider continuation items. The compaction call uses the same provider,
 model, system prompt, and frozen tool schemas, with a separate output limit and
-one final user instruction. A tool-call or failed response emits a lifecycle
-event and leaves the prior/full context in
-use. A fixed profile lacking either history tool or both generic artifact
+one final user instruction. A tool-call or empty state emits a lifecycle event
+and is retried once without execution; a request error or two invalid responses
+leave the prior/full context in use. A fixed profile lacking either history
+tool or both generic artifact
 inspection tools (`read` and `bash`) would keep the full context instead of
 compacting without exact retrieval.
 
@@ -113,17 +117,17 @@ immediately aborting the loop. Runtime/store/provider failures fail the run.
 
 ## Subagents
 
-`spawn` runs schema-listed tools or general-task child agents concurrently up
-to the configured limit. Each child creates a normal run with a parent id.
-Children share the workspace, provider, and base tools. The default maximum
-depth of one keeps the initial execution model predictable. `task wait` is a
-bounded join; a wait timeout does not cancel the task. `task stop` is the
-explicit cancellation operation.
+`delegate` starts a general-task child asynchronously. Each child creates a
+normal run with a parent id. Children share the workspace, provider, and base
+tools. The default maximum depth of one keeps the initial execution model
+predictable. `task_wait` is a bounded join; a wait timeout does not cancel the
+task. `task_stop` is the explicit cancellation operation.
 
-`task inspect` returns a child's latest durable Chat-compatible messages and can
-page backward by sequence. `task steer` queues a normal user message after the
-current assistant/tool batch and before the next provider call. It does not
-interrupt the current tool batch.
+`task_inspect` returns a child's latest durable Chat-compatible messages and
+can page backward by sequence. `task_steer` queues a normal user message after
+the current assistant/tool batch and before the next provider call. It does not
+interrupt the current tool batch. `task_status` reports state without adding
+an explanatory pseudo-message.
 
 Task JSON is coordination state, not a second transcript. Delivery is derived
 from `BackgroundTaskResult` entries already committed to the parent message

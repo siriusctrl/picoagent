@@ -84,7 +84,7 @@ impl Tool for ReadTool {
             .with_context(|| format!("read UTF-8 file {}", path.display()))?;
         if byte_truncated {
             text.push_str(
-                "\n[read byte limit reached; use bash with dd or another byte-range command for the remaining bytes]",
+                "\n[read max_bytes reached; reduce limit or continue from a later line offset]",
             );
         }
         Ok(RawToolOutput::text(text))

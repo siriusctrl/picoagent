@@ -22,7 +22,7 @@ use picoagent::{
         ToolCall, echo::EchoProvider,
     },
     storage::{RunDirStore, RunRecord, RunState},
-    tools::{ExplicitSpawn, RawToolOutput, Tool, ToolContext, ToolRegistry},
+    tools::{RawToolOutput, Tool, ToolContext, ToolRegistry},
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -181,10 +181,7 @@ async fn resume_marks_incomplete_tool_calls_interrupted_without_reexecution() {
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::default();
     tools
-        .register(
-            Arc::new(CountingTool(tool_calls.clone())),
-            ExplicitSpawn::Allowed,
-        )
+        .register(Arc::new(CountingTool(tool_calls.clone())))
         .unwrap();
     let runner = resume_runner(
         workspace.path(),
@@ -209,8 +206,167 @@ async fn resume_marks_incomplete_tool_calls_interrupted_without_reexecution() {
             is_error: true,
             metadata,
             ..
-        }] if metadata.preview_bytes == content.len()
+        }] if metadata.artifact.is_none() && !content.is_empty()
     ));
+}
+
+struct CompletedPromotionRecoveryProvider;
+
+#[async_trait]
+impl ModelProvider for CompletedPromotionRecoveryProvider {
+    fn name(&self) -> &str {
+        "completed-promotion-recovery"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        let acknowledgement = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .find_map(|content| match content {
+                MessageContent::ToolResult {
+                    call_id,
+                    content,
+                    is_error,
+                    ..
+                } if call_id == "promoted-call" => Some((content, is_error)),
+                _ => None,
+            })
+            .context("resume omitted the promoted tool acknowledgement")?;
+        let acknowledgement_json: Value = serde_json::from_str(acknowledgement.0)?;
+        if *acknowledgement.1
+            || acknowledgement_json != json!({"task_id": "t1", "status": "completed"})
+        {
+            bail!("resume synthesized the wrong acknowledgement: {acknowledgement:?}");
+        }
+        let delivered = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|content| {
+                matches!(
+                    content,
+                    MessageContent::BackgroundTaskResult {
+                        task_id,
+                        status,
+                        content,
+                        ..
+                    } if task_id == "t1" && status == "completed" && content.contains("completed output")
+                )
+            });
+        if !delivered {
+            bail!("resume omitted the durable completed background result");
+        }
+        Ok(text_response(
+            "recovered completed promotion",
+            ModelUsage::default(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn resume_reconstructs_a_missing_promotion_ack_from_its_terminal_task() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let provider = Arc::new(CompletedPromotionRecoveryProvider);
+    store
+        .create_run(
+            &RunRecord::new(
+                "resume-completed-promotion",
+                "resume a promoted tool",
+                provider.name(),
+                "scripted",
+                workspace.path().to_path_buf(),
+                None,
+            )
+            .with_provider_resume_fingerprint(provider.resume_fingerprint()),
+        )
+        .await
+        .unwrap();
+    store
+        .update_state("resume-completed-promotion", RunState::Running)
+        .await
+        .unwrap();
+    store
+        .append_message(
+            "resume-completed-promotion",
+            &Message::text(Role::User, "resume a promoted tool"),
+        )
+        .await
+        .unwrap();
+    store
+        .append_message(
+            "resume-completed-promotion",
+            &Message::assistant(vec![MessageContent::ToolCall {
+                id: "promoted-call".to_owned(),
+                name: "side_effect".to_owned(),
+                arguments: json!({}),
+            }]),
+        )
+        .await
+        .unwrap();
+    let tasks = store
+        .paths("resume-completed-promotion")
+        .directory
+        .join("tasks");
+    tokio::fs::create_dir_all(&tasks).await.unwrap();
+    tokio::fs::write(
+        tasks.join("t1.json"),
+        serde_json::to_vec_pretty(&json!({
+            "version": 5,
+            "id": "t1",
+            "kind": "tool",
+            "name": "side_effect",
+            "origin_call_id": "promoted-call",
+            "state": "completed",
+            "result": {
+                "content": "completed output",
+                "metadata": {"artifact": null}
+            },
+            "error": null,
+            "child_run_id": null,
+            "child_can_delegate": null,
+            "prompt": null,
+            "created_at": chrono::Utc::now()
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let mut tools = ToolRegistry::default();
+    tools
+        .register(Arc::new(CountingTool(Arc::new(AtomicUsize::new(0)))))
+        .unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider,
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_path_buf(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions::default(),
+    });
+
+    let result = runner.resume("resume-completed-promotion").await.unwrap();
+    assert_eq!(result.final_output, "recovered completed promotion");
+    let messages = store
+        .load_messages("resume-completed-promotion")
+        .await
+        .unwrap();
+    assert!(
+        !messages
+            .iter()
+            .any(|message| { message.visible_text().contains("side effects are unknown") })
+    );
 }
 
 #[tokio::test]
@@ -224,29 +380,34 @@ async fn resume_schema_mismatch_does_not_reconcile_background_tasks() {
         require_interrupted_result: false,
     };
     let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(HangingTool), ExplicitSpawn::Allowed)
-        .unwrap();
+    tools.register(Arc::new(HangingTool)).unwrap();
     let runner = resume_runner(workspace.path(), &store, provider, tools.clone());
-    let manager = TaskManager::new(TaskManagerConfig {
-        runner: runner.clone(),
-        candidate_tools: tools,
+    let background_runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(SlowModelProvider),
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_owned(),
+        skill_catalog: String::new(),
+        tools: ToolRegistry::default(),
         artifacts: ArtifactStore::default(),
-        preview_budget: Arc::new(tokio::sync::Mutex::new(128 * 1024)),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions::default(),
+    });
+    let manager = TaskManager::new(TaskManagerConfig {
+        runner: background_runner,
+        artifacts: ArtifactStore::default(),
         store: store.clone(),
         workspace: workspace.path().to_owned(),
         parent_run_id: "resume-schema-preflight".to_owned(),
         parent_depth: 0,
         child_can_delegate: false,
         events: Arc::new(NoopEventSink),
-        hooks: HookPipeline::new(),
-        max_parallel_tasks: 1,
+        max_parallel_subagents: 1,
         wait_timeout_seconds: 1,
     });
-    let task = manager
-        .spawn_tool("hanging".to_owned(), json!({}))
-        .await
-        .unwrap();
+    let task = manager.delegate("hang child".to_owned()).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             let status = manager
@@ -393,152 +554,6 @@ async fn run_end_hook_failure_does_not_downgrade_a_durable_completion() {
     assert!(!events.contains("\"type\":\"run_failed\""));
 }
 
-struct ResumeBudgetProvider;
-
-#[async_trait]
-impl ModelProvider for ResumeBudgetProvider {
-    fn name(&self) -> &str {
-        "resume-budget"
-    }
-
-    async fn complete(
-        &self,
-        request: ModelRequest,
-        _events: SharedEventSink,
-    ) -> Result<ModelResponse> {
-        let has_small_result = request.messages.iter().any(|message| {
-            message.content.iter().any(|content| {
-                matches!(content, MessageContent::ToolResult { call_id, .. } if call_id == "small-call")
-            })
-        });
-        if has_small_result {
-            return Ok(text_response("resumed with budget", ModelUsage::default()));
-        }
-        assert!(request.messages.iter().any(|message| {
-            message
-                .content
-                .iter()
-                .any(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
-        }));
-        Ok(tool_response(
-            vec![ToolCall {
-                id: "small-call".to_owned(),
-                name: "small_output".to_owned(),
-                arguments: json!({}),
-            }],
-            ModelUsage::default(),
-        ))
-    }
-}
-
-struct SmallOutputTool;
-
-#[async_trait]
-impl Tool for SmallOutputTool {
-    fn spec(&self) -> picoagent::model::ToolSpec {
-        picoagent::model::ToolSpec {
-            name: "small_output".to_owned(),
-            description: "Return fifteen bytes".to_owned(),
-            input_schema: json!({"type": "object"}),
-        }
-    }
-
-    async fn execute(&self, _context: ToolContext, _arguments: Value) -> Result<RawToolOutput> {
-        Ok(RawToolOutput::text("s".repeat(15)))
-    }
-}
-
-#[tokio::test]
-async fn resume_keeps_preview_budget_reserved_for_undelivered_tasks() {
-    let workspace = TempDir::new().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let run_id = "resume-budget";
-    store
-        .create_run(
-            &RunRecord::new(
-                run_id,
-                "resume with a completed task",
-                ResumeBudgetProvider.name(),
-                "scripted",
-                workspace.path().to_path_buf(),
-                None,
-            )
-            .with_provider_resume_fingerprint(ResumeBudgetProvider.resume_fingerprint()),
-        )
-        .await
-        .unwrap();
-    store.update_state(run_id, RunState::Running).await.unwrap();
-    store
-        .append_message(
-            run_id,
-            &Message::text(Role::User, "resume with a completed task"),
-        )
-        .await
-        .unwrap();
-    let task_directory = store.paths(run_id).directory.join("tasks");
-    tokio::fs::create_dir_all(&task_directory).await.unwrap();
-    tokio::fs::write(
-        task_directory.join("reserved.json"),
-        serde_json::to_vec_pretty(&json!({
-            "version": 4,
-            "id": "reserved",
-            "kind": "tool",
-            "name": "earlier-tool",
-            "state": "completed",
-            "result": {
-                "content": "u".repeat(20),
-                "metadata": { "artifact": null, "preview_bytes": 20 }
-            },
-            "error": null,
-            "child_run_id": null,
-            "child_can_delegate": null,
-            "prompt": null,
-            "created_at": chrono::Utc::now()
-        }))
-        .unwrap(),
-    )
-    .await
-    .unwrap();
-    let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(SmallOutputTool), ExplicitSpawn::Allowed)
-        .unwrap();
-    let runner = AgentRunner::new(AgentRunnerConfig {
-        provider: Arc::new(ResumeBudgetProvider),
-        model: "scripted".to_owned(),
-        workspace: workspace.path().to_path_buf(),
-        skill_catalog: String::new(),
-        tools,
-        artifacts: ArtifactStore::new(ArtifactPolicy {
-            inline_limit_bytes: 100,
-            max_inline_bytes_per_run: 30,
-            preview_head_bytes: 8,
-            preview_tail_bytes: 8,
-        }),
-        store: store.clone(),
-        hooks: HookPipeline::new(),
-        memory: None,
-        extra_events: Arc::new(NoopEventSink),
-        options: RunnerOptions::default(),
-    });
-
-    let result = runner.resume(run_id).await.unwrap();
-    assert_eq!(result.final_output, "resumed with budget");
-    let messages = store.load_messages(run_id).await.unwrap();
-    assert!(messages.iter().any(|message| {
-        message.content.iter().any(|content| {
-            matches!(
-                content,
-                MessageContent::ToolResult {
-                    call_id,
-                    metadata,
-                    ..
-                } if call_id == "small-call" && metadata.artifact.is_some()
-            )
-        })
-    }));
-}
-
 struct FileProducingProvider;
 
 #[async_trait]
@@ -552,13 +567,16 @@ impl ModelProvider for FileProducingProvider {
         request: ModelRequest,
         _events: SharedEventSink,
     ) -> Result<ModelResponse> {
-        let has_result = request.messages.iter().any(|message| {
-            message
-                .content
-                .iter()
-                .any(|content| matches!(content, MessageContent::ToolResult { .. }))
-        });
-        if has_result {
+        let completed = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|content| match content {
+                MessageContent::ToolResult { call_id, .. } => Some(call_id.as_str()),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        if completed.contains("small-call") {
             Ok(ModelResponse::new(
                 Message::assistant(vec![
                     MessageContent::Reasoning {
@@ -574,6 +592,15 @@ impl ModelProvider for FileProducingProvider {
                     cached_input_tokens: Some(8),
                     reasoning_tokens: Some(3),
                 },
+            ))
+        } else if completed.contains("large-call") {
+            Ok(tool_response(
+                vec![ToolCall {
+                    id: "small-call".to_owned(),
+                    name: "small_output".to_owned(),
+                    arguments: json!({}),
+                }],
+                ModelUsage::default(),
             ))
         } else {
             let call = ToolCall {
@@ -620,13 +647,29 @@ impl Tool for LargeOutputTool {
     }
 }
 
+struct SmallOutputTool;
+
+#[async_trait]
+impl Tool for SmallOutputTool {
+    fn spec(&self) -> picoagent::model::ToolSpec {
+        picoagent::model::ToolSpec {
+            name: "small_output".to_owned(),
+            description: "Produce a small deterministic result".to_owned(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    async fn execute(&self, _context: ToolContext, _arguments: Value) -> Result<RawToolOutput> {
+        Ok(RawToolOutput::text("small"))
+    }
+}
+
 #[tokio::test]
-async fn runner_persists_complete_messages_and_spills_large_tool_output() {
+async fn runner_spills_a_large_result_without_affecting_the_next_small_result() {
     let workspace = TempDir::new().unwrap();
     let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(LargeOutputTool), ExplicitSpawn::Allowed)
-        .unwrap();
+    tools.register(Arc::new(LargeOutputTool)).unwrap();
+    tools.register(Arc::new(SmallOutputTool)).unwrap();
     let store = RunDirStore::new(workspace.path());
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: Arc::new(FileProducingProvider),
@@ -636,7 +679,6 @@ async fn runner_persists_complete_messages_and_spills_large_tool_output() {
         tools,
         artifacts: ArtifactStore::new(ArtifactPolicy {
             inline_limit_bytes: 64,
-            max_inline_bytes_per_run: 128,
             preview_head_bytes: 16,
             preview_tail_bytes: 16,
         }),
@@ -658,7 +700,7 @@ async fn runner_persists_complete_messages_and_spills_large_tool_output() {
     );
 
     let messages = store.load_messages(&result.run_id).await.unwrap();
-    assert_eq!(messages.len(), 4);
+    assert_eq!(messages.len(), 6);
     assert_eq!(
         messages
             .iter()
@@ -667,17 +709,28 @@ async fn runner_persists_complete_messages_and_spills_large_tool_output() {
             .count(),
         2
     );
-    let tool_result = messages
+    let tool_results = messages
         .iter()
         .flat_map(|message| &message.content)
-        .find_map(|content| match content {
-            MessageContent::ToolResult { content, .. } => Some(content),
+        .filter_map(|content| match content {
+            MessageContent::ToolResult {
+                call_id,
+                content,
+                metadata,
+                ..
+            } => Some((call_id.as_str(), content.as_str(), metadata)),
             _ => None,
         })
-        .unwrap();
-    assert!(tool_result.contains("[Tool output]"));
-    assert!(tool_result.contains("artifact: .pico/runs/"));
-    assert!(tool_result.contains("truncated: true"));
+        .collect::<Vec<_>>();
+    assert_eq!(tool_results.len(), 2);
+    assert_eq!(tool_results[0].0, "large-call");
+    assert!(tool_results[0].1.contains("[Tool output]"));
+    assert!(tool_results[0].1.contains("artifact: .pico/runs/"));
+    assert!(tool_results[0].1.contains("truncated: true"));
+    assert!(tool_results[0].2.artifact.is_some());
+    assert_eq!(tool_results[1].0, "small-call");
+    assert_eq!(tool_results[1].1, "small");
+    assert!(tool_results[1].2.artifact.is_none());
     let events = tokio::fs::read_to_string(store.paths(&result.run_id).events)
         .await
         .unwrap();
@@ -715,24 +768,18 @@ impl ModelProvider for DelegatingProvider {
         if first_user == "child two" {
             bail!("scripted child failure");
         }
-        if first_user == "spawn work" && !has_result {
+        if first_user == "delegate work" && !has_result {
             return Ok(tool_response(
                 vec![
                     ToolCall {
-                        id: "spawn-one".to_owned(),
-                        name: "spawn".to_owned(),
-                        arguments: json!({
-                            "kind": "agent",
-                            "prompt": "child one"
-                        }),
+                        id: "delegate-one".to_owned(),
+                        name: "delegate".to_owned(),
+                        arguments: json!({"prompt": "child one"}),
                     },
                     ToolCall {
-                        id: "spawn-two".to_owned(),
-                        name: "spawn".to_owned(),
-                        arguments: json!({
-                            "kind": "agent",
-                            "prompt": "child two"
-                        }),
+                        id: "delegate-two".to_owned(),
+                        name: "delegate".to_owned(),
+                        arguments: json!({"prompt": "child two"}),
                     },
                 ],
                 ModelUsage::default(),
@@ -763,8 +810,8 @@ async fn subagents_reuse_the_runner_and_report_failed_children() {
         options: RunnerOptions::default(),
     });
 
-    let parent = runner.run(RunRequest::root("spawn work")).await.unwrap();
-    assert_eq!(parent.final_output, "done: spawn work");
+    let parent = runner.run(RunRequest::root("delegate work")).await.unwrap();
+    assert_eq!(parent.final_output, "done: delegate work");
 
     let run_root = workspace.path().join(".pico/runs");
     let mut children = Vec::new();
@@ -829,9 +876,9 @@ impl ModelProvider for LastStepBackgroundProvider {
             tokio::time::sleep(Duration::from_millis(50)).await;
             return Ok(text_response("child result", ModelUsage::default()));
         }
-        let has_spawn_result = request.messages.iter().any(|message| {
+        let has_delegate_result = request.messages.iter().any(|message| {
             message.content.iter().any(|content| {
-                matches!(content, MessageContent::ToolResult { call_id, .. } if call_id == "spawn-edge")
+                matches!(content, MessageContent::ToolResult { call_id, .. } if call_id == "delegate-edge")
             })
         });
         let has_background_result = request.messages.iter().any(|message| {
@@ -840,15 +887,12 @@ impl ModelProvider for LastStepBackgroundProvider {
                 .iter()
                 .any(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
         });
-        if !has_spawn_result {
+        if !has_delegate_result {
             return Ok(tool_response(
                 vec![ToolCall {
-                    id: "spawn-edge".to_owned(),
-                    name: "spawn".to_owned(),
-                    arguments: json!({
-                        "kind": "agent",
-                        "prompt": "slow child"
-                    }),
+                    id: "delegate-edge".to_owned(),
+                    name: "delegate".to_owned(),
+                    arguments: json!({"prompt": "slow child"}),
                 }],
                 ModelUsage::default(),
             ));
@@ -910,7 +954,7 @@ impl Tool for SlowOutputTool {
     }
 
     async fn execute(&self, _context: ToolContext, _arguments: Value) -> Result<RawToolOutput> {
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
         Ok(RawToolOutput::text("x".repeat(512)))
     }
 }
@@ -947,7 +991,7 @@ impl ModelProvider for WaitingProvider {
         }
         if let Some((_, content)) = tool_results
             .iter()
-            .find(|(call_id, _)| *call_id == "spawn-call")
+            .find(|(call_id, _)| *call_id == "slow-call")
         {
             let task_id = serde_json::from_str::<Value>(content)?["task_id"]
                 .as_str()
@@ -956,21 +1000,17 @@ impl ModelProvider for WaitingProvider {
             return Ok(tool_response(
                 vec![ToolCall {
                     id: "wait-call".to_owned(),
-                    name: "task".to_owned(),
-                    arguments: json!({"action": "wait", "task_ids": [task_id]}),
+                    name: "task_wait".to_owned(),
+                    arguments: json!({"task_ids": [task_id]}),
                 }],
                 ModelUsage::default(),
             ));
         }
         Ok(tool_response(
             vec![ToolCall {
-                id: "spawn-call".to_owned(),
-                name: "spawn".to_owned(),
-                arguments: json!({
-                    "kind": "tool",
-                    "tool": "slow_output",
-                    "arguments": {}
-                }),
+                id: "slow-call".to_owned(),
+                name: "slow_output".to_owned(),
+                arguments: json!({}),
             }],
             ModelUsage::default(),
         ))
@@ -982,9 +1022,7 @@ async fn task_wait_joins_a_background_tool_without_duplicate_result_injection() 
     let workspace = TempDir::new().unwrap();
     let store = RunDirStore::new(workspace.path());
     let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(SlowOutputTool), ExplicitSpawn::Allowed)
-        .unwrap();
+    tools.register(Arc::new(SlowOutputTool)).unwrap();
     let mut hooks = HookPipeline::new();
     hooks.register(CommandHook::new(
         "record-before",
@@ -1006,7 +1044,6 @@ async fn task_wait_joins_a_background_tool_without_duplicate_result_injection() 
         tools,
         artifacts: ArtifactStore::new(ArtifactPolicy {
             inline_limit_bytes: 256,
-            max_inline_bytes_per_run: 300,
             preview_head_bytes: 32,
             preview_tail_bytes: 32,
         }),
@@ -1014,17 +1051,46 @@ async fn task_wait_joins_a_background_tool_without_duplicate_result_injection() 
         hooks,
         memory: None,
         extra_events: Arc::new(NoopEventSink),
-        options: RunnerOptions::default(),
+        options: RunnerOptions {
+            foreground_tool_timeout_seconds: 1,
+            ..RunnerOptions::default()
+        },
     });
 
     let result = runner.run(RunRequest::root("wait for tool")).await.unwrap();
     assert_eq!(result.final_output, "joined");
     let messages = store.load_messages(&result.run_id).await.unwrap();
-    assert!(
-        messages
-            .iter()
-            .flat_map(|message| &message.content)
-            .any(|content| matches!(content, MessageContent::BackgroundTaskResult { .. }))
+    let acknowledgement_task_id = messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|content| match content {
+            MessageContent::ToolResult {
+                call_id, content, ..
+            } if call_id == "slow-call" => serde_json::from_str::<Value>(content).ok()?["task_id"]
+                .as_str()
+                .map(str::to_owned),
+            _ => None,
+        })
+        .unwrap();
+    let (terminal_task_id, artifact_call_id) = messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|content| match content {
+            MessageContent::BackgroundTaskResult {
+                task_id, metadata, ..
+            } => Some((task_id.clone(), metadata.artifact.as_ref()?.call_id.clone())),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(terminal_task_id, acknowledgement_task_id);
+    assert_eq!(artifact_call_id, "slow-call");
+    let reloaded = RunDirStore::new(workspace.path())
+        .load_messages(&result.run_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_vec(&reloaded).unwrap(),
+        serde_json::to_vec(&messages).unwrap()
     );
     let task_dir = store.paths(&result.run_id).directory.join("tasks");
     let task_path = std::fs::read_dir(task_dir)
@@ -1042,12 +1108,11 @@ async fn task_wait_joins_a_background_tool_without_duplicate_result_injection() 
     assert!(events.contains("\"type\":\"tool_started\""));
     assert!(events.contains("\"name\":\"slow_output\""));
     assert!(events.contains("\"type\":\"artifact_created\""));
-    assert!(events.contains("background-"));
     let hooks = tokio::fs::read_to_string(workspace.path().join("hooks.log"))
         .await
         .unwrap();
     assert!(hooks.contains("\"name\":\"slow_output\""));
-    assert!(hooks.contains("\"background\":true"));
+    assert!(hooks.contains("\"call_id\":\"slow-call\""));
 }
 
 struct LongLoopProvider(Arc<AtomicUsize>);
@@ -1088,10 +1153,7 @@ async fn agent_loop_has_no_model_step_cap() {
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::default();
     tools
-        .register(
-            Arc::new(CountingTool(tool_calls.clone())),
-            ExplicitSpawn::Allowed,
-        )
+        .register(Arc::new(CountingTool(tool_calls.clone())))
         .unwrap();
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: Arc::new(LongLoopProvider(model_calls.clone())),
@@ -1217,34 +1279,33 @@ impl ModelProvider for SteeringProvider {
         {
             let task_id = tool_results
                 .iter()
-                .find(|(call_id, _)| *call_id == "spawn-steered-child")
+                .find(|(call_id, _)| *call_id == "delegate-steered-child")
                 .and_then(|(_, content)| serde_json::from_str::<Value>(content).ok())
                 .and_then(|value| value["task_id"].as_str().map(str::to_owned))
-                .context("spawn result omitted task_id")?;
+                .context("delegate result omitted task_id")?;
             return Ok(tool_response(
                 vec![ToolCall {
                     id: "wait-steered-child".to_owned(),
-                    name: "task".to_owned(),
-                    arguments: json!({"action": "wait", "task_ids": [task_id]}),
+                    name: "task_wait".to_owned(),
+                    arguments: json!({"task_ids": [task_id]}),
                 }],
                 ModelUsage::default(),
             ));
         }
         if let Some((_, content)) = tool_results
             .iter()
-            .find(|(call_id, _)| *call_id == "spawn-steered-child")
+            .find(|(call_id, _)| *call_id == "delegate-steered-child")
         {
             self.child_started.notified().await;
             let task_id = serde_json::from_str::<Value>(content)?["task_id"]
                 .as_str()
-                .context("spawn result omitted task_id")?
+                .context("delegate result omitted task_id")?
                 .to_owned();
             return Ok(tool_response(
                 vec![ToolCall {
                     id: "steer-call".to_owned(),
-                    name: "task".to_owned(),
+                    name: "task_steer".to_owned(),
                     arguments: json!({
-                        "action": "steer",
                         "task_id": task_id,
                         "message": "take the steered path"
                     }),
@@ -1254,12 +1315,9 @@ impl ModelProvider for SteeringProvider {
         }
         Ok(tool_response(
             vec![ToolCall {
-                id: "spawn-steered-child".to_owned(),
-                name: "spawn".to_owned(),
-                arguments: json!({
-                    "kind": "agent",
-                    "prompt": "child steer target"
-                }),
+                id: "delegate-steered-child".to_owned(),
+                name: "delegate".to_owned(),
+                arguments: json!({"prompt": "child steer target"}),
             }],
             ModelUsage::default(),
         ))
@@ -1273,9 +1331,7 @@ async fn steer_is_delivered_after_the_childs_current_tool_batch_before_its_next_
     let child_started = Arc::new(tokio::sync::Notify::new());
     let verified = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(SteeringGateTool), ExplicitSpawn::Allowed)
-        .unwrap();
+    tools.register(Arc::new(SteeringGateTool)).unwrap();
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: Arc::new(SteeringProvider {
             child_started,
@@ -1306,6 +1362,27 @@ async fn steer_is_delivered_after_the_childs_current_tool_batch_before_its_next_
 }
 
 struct HangingTool;
+
+#[derive(Default)]
+struct YieldingSerializedEventSink {
+    lock: tokio::sync::Mutex<()>,
+    tool_starts: AtomicUsize,
+}
+
+#[async_trait]
+impl picoagent::events::EventSink for YieldingSerializedEventSink {
+    async fn emit(&self, event: &picoagent::events::RuntimeEvent) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        if matches!(
+            event.kind,
+            picoagent::events::RuntimeEventKind::ToolStarted { .. }
+        ) && self.tool_starts.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            tokio::task::yield_now().await;
+        }
+        Ok(())
+    }
+}
 
 #[async_trait]
 impl Tool for HangingTool {
@@ -1344,11 +1421,18 @@ impl ModelProvider for FailingParentProvider {
             bail!("scripted parent failure");
         }
         Ok(tool_response(
-            vec![ToolCall {
-                id: "spawn-hanging".to_owned(),
-                name: "spawn".to_owned(),
-                arguments: json!({"kind": "tool", "tool": "hanging", "arguments": {}}),
-            }],
+            vec![
+                ToolCall {
+                    id: "hanging-call-1".to_owned(),
+                    name: "hanging".to_owned(),
+                    arguments: json!({}),
+                },
+                ToolCall {
+                    id: "hanging-call-2".to_owned(),
+                    name: "hanging".to_owned(),
+                    arguments: json!({}),
+                },
+            ],
             ModelUsage::default(),
         ))
     }
@@ -1359,9 +1443,7 @@ async fn parent_failure_aborts_and_settles_background_tasks() {
     let workspace = TempDir::new().unwrap();
     let store = RunDirStore::new(workspace.path());
     let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(HangingTool), ExplicitSpawn::Allowed)
-        .unwrap();
+    tools.register(Arc::new(HangingTool)).unwrap();
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: Arc::new(FailingParentProvider),
         model: "scripted".to_owned(),
@@ -1372,14 +1454,23 @@ async fn parent_failure_aborts_and_settles_background_tasks() {
         store: store.clone(),
         hooks: HookPipeline::new(),
         memory: None,
-        extra_events: Arc::new(NoopEventSink),
-        options: RunnerOptions::default(),
+        // The second direct future yields while holding an event-sink lock.
+        // Promotion must resume every pending future before any promotion
+        // awaits task events from the same sink.
+        extra_events: Arc::new(YieldingSerializedEventSink::default()),
+        options: RunnerOptions {
+            foreground_tool_timeout_seconds: 0,
+            ..RunnerOptions::default()
+        },
     });
 
-    let error = runner
-        .run(RunRequest::root("fail after spawn"))
-        .await
-        .unwrap_err();
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        runner.run(RunRequest::root("fail after promotion")),
+    )
+    .await
+    .expect("multi-call promotion deadlocked on an in-flight tool event")
+    .unwrap_err();
     assert!(format!("{error:#}").contains("scripted parent failure"));
     let run_root = workspace.path().join(".pico/runs");
     let parent_dir = std::fs::read_dir(&run_root)
@@ -1388,15 +1479,16 @@ async fn parent_failure_aborts_and_settles_background_tasks() {
         .unwrap()
         .unwrap()
         .path();
-    let task_path = std::fs::read_dir(parent_dir.join("tasks"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let task: Value = serde_json::from_slice(&tokio::fs::read(task_path).await.unwrap()).unwrap();
-    assert_eq!(task["state"], "cancelled");
-    assert!(task["error"].as_str().unwrap().contains("parent run ended"));
+    let mut tasks = Vec::new();
+    for entry in std::fs::read_dir(parent_dir.join("tasks")).unwrap() {
+        let bytes = tokio::fs::read(entry.unwrap().path()).await.unwrap();
+        tasks.push(serde_json::from_slice::<Value>(&bytes).unwrap());
+    }
+    assert_eq!(tasks.len(), 2);
+    for task in tasks {
+        assert_eq!(task["state"], "cancelled");
+        assert!(task["error"].as_str().unwrap().contains("parent run ended"));
+    }
 }
 
 struct SlowModelProvider;

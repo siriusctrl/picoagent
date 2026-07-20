@@ -180,7 +180,6 @@ async fn run_action(
         tools,
         artifacts: ArtifactStore::new(ArtifactPolicy {
             inline_limit_bytes: config.artifacts.inline_bytes,
-            max_inline_bytes_per_run: config.artifacts.max_inline_bytes_per_run,
             preview_head_bytes: config.artifacts.preview_head_bytes,
             preview_tail_bytes: config.artifacts.preview_tail_bytes,
         }),
@@ -190,7 +189,7 @@ async fn run_action(
         extra_events,
         options: RunnerOptions {
             max_subagent_depth: config.runtime.max_subagent_depth,
-            max_parallel_tasks: config.runtime.max_parallel_tasks,
+            max_parallel_subagents: config.runtime.max_parallel_subagents,
             max_parallel_model_calls: config.runtime.max_parallel_model_calls,
             model_stream_idle_timeout_seconds: config.runtime.model_stream_idle_timeout_seconds,
             model_request_deadline_seconds: config.runtime.model_request_deadline_seconds,

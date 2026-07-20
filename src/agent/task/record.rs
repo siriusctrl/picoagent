@@ -7,7 +7,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::artifact::ResultMetadata;
 
-const TASK_RECORD_VERSION: u32 = 4;
+const TASK_RECORD_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +43,9 @@ pub struct BackgroundTaskRecord {
     pub kind: String,
     /// Agent profile or tool name.
     pub name: String,
+    /// Original provider tool-call id for a promoted ordinary tool. This is
+    /// absent for delegated agent tasks.
+    pub origin_call_id: Option<String>,
     pub state: BackgroundTaskState,
     pub result: Option<BackgroundTaskOutput>,
     pub error: Option<String>,
@@ -64,12 +67,13 @@ pub struct BackgroundTaskOutput {
 }
 
 impl BackgroundTaskRecord {
-    pub(crate) fn queued_tool(id: String, name: String) -> Self {
+    pub(crate) fn queued_tool(id: String, name: String, origin_call_id: String) -> Self {
         Self {
             version: TASK_RECORD_VERSION,
             id,
             kind: "tool".to_owned(),
             name,
+            origin_call_id: Some(origin_call_id),
             state: BackgroundTaskState::Queued,
             result: None,
             error: None,
@@ -92,6 +96,7 @@ impl BackgroundTaskRecord {
             id,
             kind: "agent".to_owned(),
             name: profile,
+            origin_call_id: None,
             state: BackgroundTaskState::Queued,
             result: None,
             error: None,
@@ -156,20 +161,36 @@ impl BackgroundTaskRecord {
         );
         ensure!(!self.id.is_empty(), "task id must not be empty");
         match self.kind.as_str() {
-            "tool" => ensure!(
-                self.child_run_id.is_none()
-                    && self.child_can_delegate.is_none()
-                    && self.prompt.is_none(),
-                "tool task {} cannot reference child state",
-                self.id
-            ),
-            "agent" => ensure!(
-                self.child_run_id.is_some()
-                    && self.child_can_delegate.is_some()
-                    && self.prompt.is_some(),
-                "agent task {} must reference a child run, capability, and prompt",
-                self.id
-            ),
+            "tool" => {
+                ensure!(
+                    self.origin_call_id
+                        .as_deref()
+                        .is_some_and(|call_id| !call_id.is_empty()),
+                    "tool task {} must reference its original tool-call id",
+                    self.id
+                );
+                ensure!(
+                    self.child_run_id.is_none()
+                        && self.child_can_delegate.is_none()
+                        && self.prompt.is_none(),
+                    "tool task {} cannot reference child state",
+                    self.id
+                );
+            }
+            "agent" => {
+                ensure!(
+                    self.origin_call_id.is_none(),
+                    "agent task {} cannot reference a tool-call id",
+                    self.id
+                );
+                ensure!(
+                    self.child_run_id.is_some()
+                        && self.child_can_delegate.is_some()
+                        && self.prompt.is_some(),
+                    "agent task {} must reference a child run, capability, and prompt",
+                    self.id
+                );
+            }
             kind => bail!("unknown task kind `{kind}` in task {}", self.id),
         }
         Ok(())
@@ -289,10 +310,7 @@ mod tests {
         record.state = BackgroundTaskState::Completed;
         record.result = Some(BackgroundTaskOutput {
             content: "child result".to_owned(),
-            metadata: ResultMetadata {
-                artifact: None,
-                preview_bytes: 12,
-            },
+            metadata: ResultMetadata::empty(),
         });
         store.write(&record).await.unwrap();
         tokio::fs::write(workspace.path().join("tasks/orphan.json.tmp"), b"{")
@@ -304,14 +322,18 @@ mod tests {
         let loaded = &loaded["task-1"];
         assert_eq!(loaded.child_run_id.as_deref(), Some("child-1"));
         assert_eq!(loaded.prompt.as_deref(), Some("inspect the workspace"));
-        assert_eq!(loaded.result_metadata().preview_bytes, 12);
+        assert_eq!(loaded.result_metadata(), ResultMetadata::empty());
     }
 
     #[tokio::test]
     async fn task_record_filename_must_match_its_id() {
         let workspace = tempfile::tempdir().unwrap();
         let store = TaskRecordStore::new(workspace.path().join("tasks"));
-        let record = BackgroundTaskRecord::queued_tool("task-1".to_owned(), "read".to_owned());
+        let record = BackgroundTaskRecord::queued_tool(
+            "task-1".to_owned(),
+            "read".to_owned(),
+            "call-1".to_owned(),
+        );
         tokio::fs::create_dir_all(workspace.path().join("tasks"))
             .await
             .unwrap();
@@ -329,6 +351,57 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("does not match")
+        );
+    }
+
+    #[tokio::test]
+    async fn promoted_tool_record_round_trips_its_original_call_id() {
+        let workspace = tempfile::tempdir().unwrap();
+        let store = TaskRecordStore::new(workspace.path().join("tasks"));
+        let record = BackgroundTaskRecord::queued_tool(
+            "task-1".to_owned(),
+            "read".to_owned(),
+            "provider-call-7".to_owned(),
+        );
+
+        store.write(&record).await.unwrap();
+        let loaded = store.load().await.unwrap();
+
+        assert_eq!(
+            loaded["task-1"].origin_call_id.as_deref(),
+            Some("provider-call-7")
+        );
+    }
+
+    #[test]
+    fn task_kind_validates_original_call_id_ownership() {
+        let mut tool = BackgroundTaskRecord::queued_tool(
+            "task-1".to_owned(),
+            "read".to_owned(),
+            "provider-call-7".to_owned(),
+        );
+        tool.origin_call_id = None;
+        assert!(
+            tool.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("original tool-call id")
+        );
+
+        let mut agent = BackgroundTaskRecord::queued_agent(
+            "task-2".to_owned(),
+            "general-task".to_owned(),
+            "child-1".to_owned(),
+            "inspect".to_owned(),
+            false,
+        );
+        agent.origin_call_id = Some("provider-call-8".to_owned());
+        assert!(
+            agent
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("cannot reference a tool-call id")
         );
     }
 }

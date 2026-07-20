@@ -4,6 +4,13 @@
 - Date: 2026-07-17
 - Refines: ADR 0006 (child control, cancellation, and message delivery)
 
+ADR 0017 later refines how work enters this lifecycle and how controls are
+exposed: one assistant batch now runs concurrently under a shared foreground
+window, only unfinished direct futures are promoted, `delegate` starts child
+agents, and five static task-control tools replace the action union. The
+no-step-cap, exact-future, durable-control, and recovery decisions here remain
+accepted.
+
 ## Context
 
 The original runtime bounded Root and GeneralTask runs with model-step counts and

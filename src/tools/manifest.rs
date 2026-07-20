@@ -113,12 +113,16 @@ mod tests {
     fn every_local_manifest_parses_and_has_a_unique_name() {
         let definitions = [
             include_str!("bash/tool.yaml"),
+            include_str!("delegate/tool.yaml"),
             include_str!("history_read/tool.yaml"),
             include_str!("history_search/tool.yaml"),
             include_str!("load_skill/tool.yaml"),
             include_str!("read/tool.yaml"),
-            include_str!("spawn/tool.yaml"),
-            include_str!("task/tool.yaml"),
+            include_str!("task_inspect/tool.yaml"),
+            include_str!("task_status/tool.yaml"),
+            include_str!("task_steer/tool.yaml"),
+            include_str!("task_stop/tool.yaml"),
+            include_str!("task_wait/tool.yaml"),
             include_str!("web_search/tool.yaml"),
             include_str!("write/tool.yaml"),
         ];
@@ -140,12 +144,16 @@ mod tests {
             names,
             BTreeSet::from([
                 "bash",
+                "delegate",
                 "history_read",
                 "history_search",
                 "load_skill",
                 "read",
-                "spawn",
-                "task",
+                "task_inspect",
+                "task_status",
+                "task_steer",
+                "task_stop",
+                "task_wait",
                 "web_search",
                 "write",
             ])

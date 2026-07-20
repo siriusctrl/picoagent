@@ -5,8 +5,9 @@ use anyhow::{Result, bail};
 use crate::{agent::task::TaskManager, skills::SkillRegistry, trajectory::TrajectoryReader};
 
 use super::{
-    BashTool, ExplicitSpawn, HistoryReadTool, HistorySearchTool, LoadSkillTool, ReadTool,
-    SpawnTool, TaskTool, ToolRegistry, WebSearchTool, WriteTool,
+    BashTool, DelegateTool, HistoryReadTool, HistorySearchTool, LoadSkillTool, ReadTool,
+    TaskInspectTool, TaskStatusTool, TaskSteerTool, TaskStopTool, TaskWaitTool, ToolRegistry,
+    WebSearchTool, WriteTool,
 };
 
 /// Assemble the process-wide tools. Run-scoped history and task controls are
@@ -16,12 +17,12 @@ pub fn build_app_tools(
     web_search: Option<WebSearchTool>,
 ) -> Result<ToolRegistry> {
     let mut registry = ToolRegistry::default();
-    registry.register(Arc::new(ReadTool), ExplicitSpawn::Allowed)?;
-    registry.register(Arc::new(WriteTool::default()), ExplicitSpawn::Allowed)?;
-    registry.register(Arc::new(BashTool), ExplicitSpawn::Allowed)?;
-    registry.register(Arc::new(LoadSkillTool::new(skills)), ExplicitSpawn::Denied)?;
+    registry.register(Arc::new(ReadTool))?;
+    registry.register(Arc::new(WriteTool::default()))?;
+    registry.register(Arc::new(BashTool))?;
+    registry.register(Arc::new(LoadSkillTool::new(skills)))?;
     if let Some(web_search) = web_search {
-        registry.register(Arc::new(web_search), ExplicitSpawn::Allowed)?;
+        registry.register(Arc::new(web_search))?;
     }
     Ok(registry)
 }
@@ -41,11 +42,8 @@ impl RunToolAssembly {
             bail!("history tools are already registered");
         }
         let search = HistorySearchTool::new(reader.clone(), history_search_max_matches)?;
-        registry.register(Arc::new(search), ExplicitSpawn::Denied)?;
-        registry.register(
-            Arc::new(HistoryReadTool::new(reader)),
-            ExplicitSpawn::Denied,
-        )?;
+        registry.register(Arc::new(search))?;
+        registry.register(Arc::new(HistoryReadTool::new(reader)))?;
         Ok(Self { registry })
     }
 
@@ -53,19 +51,21 @@ impl RunToolAssembly {
         self.registry.contains(name)
     }
 
-    pub fn task_candidates(&self) -> ToolRegistry {
-        self.registry.clone()
-    }
-
     pub fn finish(mut self, manager: Arc<TaskManager>, may_delegate: bool) -> Result<ToolRegistry> {
         if may_delegate {
-            self.registry.register(
-                Arc::new(SpawnTool::new(manager.clone())),
-                ExplicitSpawn::Denied,
-            )?;
+            self.registry
+                .register(Arc::new(DelegateTool::new(manager.clone())))?;
         }
         self.registry
-            .register(Arc::new(TaskTool::new(manager)), ExplicitSpawn::Denied)?;
+            .register(Arc::new(TaskInspectTool::new(manager.clone())))?;
+        self.registry
+            .register(Arc::new(TaskStatusTool::new(manager.clone())))?;
+        self.registry
+            .register(Arc::new(TaskSteerTool::new(manager.clone())))?;
+        self.registry
+            .register(Arc::new(TaskStopTool::new(manager.clone())))?;
+        self.registry
+            .register(Arc::new(TaskWaitTool::new(manager)))?;
         Ok(self.registry)
     }
 }

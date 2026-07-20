@@ -14,7 +14,7 @@ pub struct GeneralTaskProfile {
 #[derive(Debug, Clone)]
 pub struct RunnerOptions {
     pub max_subagent_depth: usize,
-    pub max_parallel_tasks: usize,
+    pub max_parallel_subagents: usize,
     pub max_parallel_model_calls: usize,
     pub model_stream_idle_timeout_seconds: u64,
     pub model_request_deadline_seconds: u64,
@@ -50,13 +50,13 @@ impl Default for RunnerOptions {
     fn default() -> Self {
         Self {
             max_subagent_depth: 1,
-            max_parallel_tasks: 4,
+            max_parallel_subagents: 4,
             max_parallel_model_calls: 1,
             model_stream_idle_timeout_seconds: 300,
             model_request_deadline_seconds: 3_600,
             max_output_tokens: None,
-            foreground_tool_timeout_seconds: 300,
-            task_wait_timeout_seconds: 30,
+            foreground_tool_timeout_seconds: 30,
+            task_wait_timeout_seconds: 10,
             compaction: CompactionOptions::default(),
             general_task: GeneralTaskProfile {
                 model: None,

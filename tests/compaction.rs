@@ -18,7 +18,7 @@ use picoagent::{
         ToolSpec,
     },
     storage::{RunDirStore, RunState},
-    tools::{ExplicitSpawn, RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
+    tools::{RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
     trajectory::CompactionMessage,
 };
 use serde_json::{Value, json};
@@ -57,7 +57,7 @@ struct ScriptedCompactionProvider {
     normal_calls: AtomicUsize,
     requests: Mutex<Vec<ModelRequest>>,
     fail_summary: bool,
-    summary_returns_tool_call: bool,
+    summary_tool_calls_remaining: AtomicUsize,
     fail_post_compaction_once: AtomicBool,
 }
 
@@ -67,7 +67,7 @@ impl ScriptedCompactionProvider {
             normal_calls: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
             fail_summary,
-            summary_returns_tool_call: false,
+            summary_tool_calls_remaining: AtomicUsize::new(0),
             fail_post_compaction_once: AtomicBool::new(false),
         })
     }
@@ -80,12 +80,12 @@ impl ScriptedCompactionProvider {
         provider
     }
 
-    fn with_summary_tool_call() -> Arc<Self> {
+    fn with_summary_tool_calls(count: usize) -> Arc<Self> {
         Arc::new(Self {
             normal_calls: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
             fail_summary: false,
-            summary_returns_tool_call: true,
+            summary_tool_calls_remaining: AtomicUsize::new(count),
             fail_post_compaction_once: AtomicBool::new(false),
         })
     }
@@ -114,7 +114,13 @@ impl ModelProvider for ScriptedCompactionProvider {
             if self.fail_summary {
                 bail!("intentional summary failure");
             }
-            if self.summary_returns_tool_call {
+            if self
+                .summary_tool_calls_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
                 return Ok(tool_call_response_with_usage(
                     "compaction-tool",
                     "must-not-run",
@@ -197,13 +203,9 @@ fn runner_with_compaction(
 ) -> (Arc<AgentRunner>, RunDirStore) {
     let store = RunDirStore::new(workspace.path());
     let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(MarkerTool), ExplicitSpawn::Allowed)
-        .unwrap();
+    tools.register(Arc::new(MarkerTool)).unwrap();
     if exact_recovery_available {
-        tools
-            .register(Arc::new(ReadTool), ExplicitSpawn::Allowed)
-            .unwrap();
+        tools.register(Arc::new(ReadTool)).unwrap();
     }
     let options = RunnerOptions {
         max_output_tokens: Some(64),
@@ -556,7 +558,7 @@ async fn summary_failure_is_recorded_and_does_not_abort_the_run() {
 #[tokio::test]
 async fn compaction_tool_call_is_rejected_without_execution() {
     let workspace = TempDir::new().unwrap();
-    let provider = ScriptedCompactionProvider::with_summary_tool_call();
+    let provider = ScriptedCompactionProvider::with_summary_tool_calls(2);
     let (runner, store) = runner(&workspace, provider, true);
 
     let result = runner
@@ -573,12 +575,45 @@ async fn compaction_tool_call_is_rejected_without_execution() {
     let events = load_events(&store, &result.run_id).await;
     assert_eq!(count_events(&events, EventClass::Started), 1);
     assert_eq!(count_events(&events, EventClass::Completed), 0);
-    assert_eq!(count_events(&events, EventClass::Failed), 1);
+    assert_eq!(count_events(&events, EventClass::Failed), 2);
     assert!(events.iter().any(|event| matches!(
         &event.kind,
         RuntimeEventKind::CompactionFailed { error, .. }
             if error.contains("returned tool calls")
     )));
+}
+
+#[tokio::test]
+async fn compaction_retries_one_invalid_tool_call_response() {
+    let workspace = TempDir::new().unwrap();
+    let provider = ScriptedCompactionProvider::with_summary_tool_calls(1);
+    let (runner, store) = runner(&workspace, provider.clone(), true);
+
+    let result = runner
+        .run(RunRequest::root("retry invalid compaction response"))
+        .await
+        .unwrap();
+    assert_eq!(result.final_output, "finished after compaction");
+    let trajectory = store.load_trajectory(&result.run_id).await.unwrap();
+    assert!(trajectory.iter().any(|record| record.compaction.is_some()));
+    assert!(!trajectory.iter().any(|record| {
+        has_tool_result(&record.message, "compaction-tool", "result-must-not-run")
+    }));
+    assert_eq!(
+        provider
+            .requests()
+            .iter()
+            .filter(|request| request.messages.last().is_some_and(|message| {
+                text_content(message).contains("Compact the conversation state before this message")
+            }))
+            .count(),
+        2
+    );
+
+    let events = load_events(&store, &result.run_id).await;
+    assert_eq!(count_events(&events, EventClass::Started), 1);
+    assert_eq!(count_events(&events, EventClass::Failed), 1);
+    assert_eq!(count_events(&events, EventClass::Completed), 1);
 }
 
 #[tokio::test]

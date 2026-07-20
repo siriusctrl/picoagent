@@ -73,3 +73,6 @@ Use these sections:
   manifests](0015-local-tool-yaml-manifests.md)
 - [ADR 0016: Separate tool purpose from return
   guidance](0016-separate-tool-purpose-and-return-guidance.md)
+- [ADR 0017: Concurrent tool batches and explicit task
+  controls](0017-concurrent-tool-batches-and-explicit-task-controls.md)
+- [ADR 0018: Limit tool output per result](0018-limit-tool-output-per-result.md)

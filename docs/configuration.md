@@ -81,7 +81,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 ```toml
 [runtime]
 max_subagent_depth = 1
-max_parallel_tasks = 4
+max_parallel_subagents = 4
 max_parallel_model_calls = 1
 model_stream_idle_timeout_seconds = 300
 model_request_deadline_seconds = 3600
@@ -138,8 +138,9 @@ provider-reported input usage replaces that estimate whenever available. When
 the tracked context reaches the threshold, picoagent uses the
 same provider, model, system prompt, and frozen tool schemas for an additional
 request ending in the `compaction_request` user instruction. A tool-call or
-failed response leaves the existing context or compacted state in use and is
-recorded as a compaction failure event. Before each model call, picoagent adds
+empty state is rejected and retried once, with each invalid attempt recorded as
+a compaction failure event. A request error leaves the existing context or
+compacted state in use. Before each model call, picoagent adds
 the configured output allowance and fails if the estimate is at or above
 `context_window_tokens`. This provider-neutral estimate is a safety check, not
 a tokenizer-exact guarantee.
@@ -177,41 +178,43 @@ provider's server-side compaction API.
 
 ```toml
 [tasks]
-foreground_tool_timeout_seconds = 300
-wait_timeout_seconds = 30
+foreground_tool_timeout_seconds = 30
+wait_timeout_seconds = 10
 
 [agents.general_task]
 # model = "smaller-compatible-model" # defaults to the primary provider model
 max_output_tokens = 4096
 ```
 
-`foreground_tool_timeout_seconds` is a promotion window, not an execution
-deadline. When it expires, the already-running direct tool continues as a
-background task and the model receives its task id. Explicitly spawned tools
-and subagents have no harness execution deadline. Each `task wait` call returns
-after at most `wait_timeout_seconds` without cancelling work; this value must be
-strictly lower than the foreground window. `task stop` performs cancellation.
-The runtime enforces `max_parallel_tasks` across explicitly spawned tools and
-child agents in one parent run. On Unix, cancelling `bash` terminates its process
-group descendants too.
+`foreground_tool_timeout_seconds` is one shared promotion window for all
+direct calls in an assistant message, not an execution deadline per call. The
+batch returns early when all calls settle. When the window expires, each
+already-running unfinished direct tool continues as a background task and the
+model receives its task id. Delegated subagents have no harness execution
+deadline. Each `task_wait` call returns after at most
+`wait_timeout_seconds` without cancelling work; this value must be strictly
+lower than the foreground window. `task_stop` performs cancellation.
+`max_parallel_subagents` limits delegated child execution in one parent run;
+already-running direct calls are not paused when they are promoted. On Unix,
+cancelling `bash` terminates its process-group descendants too.
 
 Failed background tool and child results use the same artifact threshold and
-preview budget as successful results, so a large error is preserved without
-being injected into the parent context in full.
+per-result preview limits as successful results, so a large error is preserved
+without being injected into the parent context in full.
 
 ## Artifacts
 
 ```toml
 [artifacts]
 inline_bytes = 32768
-max_inline_bytes_per_run = 131072
 preview_head_bytes = 8192
 preview_tail_bytes = 8192
 ```
 
-`max_inline_bytes_per_run` is a cumulative model-facing preview budget. Once it
-is exhausted, even small results are stored as artifacts and only compact
-references enter later model requests.
+Each result is considered independently. Small UTF-8 results up to
+`inline_bytes` stay inline. Larger results are stored as artifacts and expose
+at most `preview_head_bytes` from the beginning and `preview_tail_bytes` from
+the end to the model.
 
 ## Memory
 

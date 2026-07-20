@@ -52,8 +52,6 @@ fn app_registry_uses_the_embedded_tool_manifests() {
         registry.names().collect::<Vec<_>>(),
         ["bash", "load_skill", "read", "write"]
     );
-    assert_eq!(registry.explicit_spawn_names(), ["bash", "read", "write"]);
-
     let specs = registry
         .specs()
         .into_iter()
@@ -108,7 +106,7 @@ async fn read_bounds_a_single_long_utf8_line_by_bytes() {
         .unwrap();
     let text = String::from_utf8(output.content).unwrap();
     assert!(text.len() < 256);
-    assert!(text.contains("byte limit reached"));
+    assert!(text.contains("read max_bytes reached"));
     assert!(!text.contains('\u{fffd}'));
 }
 
@@ -116,24 +114,37 @@ async fn read_bounds_a_single_long_utf8_line_by_bytes() {
 async fn write_creates_a_file_and_applies_multiple_atomic_edits() {
     let workspace = tempdir().unwrap();
     let tool = WriteTool::default();
-    tool.execute(
-        context(workspace.path(), "write"),
-        json!({ "path": "nested/sample.txt", "content": "alpha\nbeta\ngamma\n" }),
-    )
-    .await
-    .unwrap();
-    tool.execute(
-        context(workspace.path(), "edit"),
-        json!({
-            "path": "nested/sample.txt",
-            "edits": [
-                { "old_text": "alpha", "new_text": "one" },
-                { "old_text": "gamma", "new_text": "three" }
-            ]
-        }),
-    )
-    .await
-    .unwrap();
+    let created = tool
+        .execute(
+            context(workspace.path(), "write"),
+            json!({ "path": "nested/sample.txt", "content": "alpha\nbeta\ngamma\n" }),
+        )
+        .await
+        .unwrap();
+    let edited = tool
+        .execute(
+            context(workspace.path(), "edit"),
+            json!({
+                "path": "nested/sample.txt",
+                "edits": [
+                    { "old_text": "alpha", "new_text": "one" },
+                    { "old_text": "gamma", "new_text": "three" }
+                ]
+            }),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        String::from_utf8(created.content)
+            .unwrap()
+            .starts_with("Wrote ")
+    );
+    assert!(
+        String::from_utf8(edited.content)
+            .unwrap()
+            .starts_with("Applied 2 atomic replacement")
+    );
 
     assert_eq!(
         tokio::fs::read_to_string(workspace.path().join("nested/sample.txt"))
@@ -307,6 +318,19 @@ async fn bash_returns_success_output_without_a_status_line() {
     assert!(!is_error);
     assert!(text.ends_with("done"), "unexpected bash output: {text}");
     assert!(!text.contains("Command exited with code"));
+}
+
+#[tokio::test]
+async fn bash_is_non_login_and_inherits_the_process_path() {
+    let workspace = tempdir().unwrap();
+    let command =
+        "if shopt -q login_shell; then printf login; else printf 'non-login\\n%s' \"$PATH\"; fi";
+    let (is_error, text) = bash_text(workspace.path(), "bash-environment", command).await;
+
+    assert!(!is_error);
+    let (kind, path) = text.split_once('\n').unwrap();
+    assert_eq!(kind, "non-login");
+    assert_eq!(path, std::env::var("PATH").unwrap());
 }
 
 #[tokio::test]

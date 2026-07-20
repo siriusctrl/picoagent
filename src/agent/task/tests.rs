@@ -3,9 +3,10 @@ use crate::{
     agent::types::{AgentRunnerConfig, RunnerOptions},
     artifact::{ArtifactPolicy, ToolOutput},
     events::{EventSink, NoopEventSink, RuntimeEvent, RuntimeEventKind},
+    hooks::HookPipeline,
     model::{Message, MessageContent, ModelProvider, Role, echo::EchoProvider},
     storage::{RunRecord, RunState},
-    tools::ExplicitSpawn,
+    tools::ToolRegistry,
 };
 
 async fn create_run(store: &RunDirStore, id: &str, parent: Option<String>) {
@@ -71,17 +72,14 @@ fn config(
     });
     TaskManagerConfig {
         runner,
-        candidate_tools: ToolRegistry::default(),
         artifacts,
-        preview_budget: Arc::new(Mutex::new(128 * 1024)),
         store: store.clone(),
         workspace: workspace.to_path_buf(),
         parent_run_id: parent_run_id.to_owned(),
         parent_depth: 0,
         child_can_delegate: false,
         events: Arc::new(NoopEventSink),
-        hooks: HookPipeline::new(),
-        max_parallel_tasks: 2,
+        max_parallel_subagents: 2,
         wait_timeout_seconds: 30,
     }
 }
@@ -94,13 +92,126 @@ async fn task_ids_are_short_and_sequential_within_the_parent_run() {
     let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
 
     let (first, second) = tokio::join!(
-        manager.create_tool_task("first".to_owned()),
-        manager.create_tool_task("second".to_owned())
+        manager.create_tool_task("first".to_owned(), "first-call".to_owned()),
+        manager.create_tool_task("second".to_owned(), "second-call".to_owned())
     );
     let mut ids = vec![first.unwrap(), second.unwrap()];
     ids.sort();
 
     assert_eq!(ids, ["t1", "t2"]);
+}
+
+#[tokio::test]
+async fn promotion_recovery_does_not_reuse_an_older_task_with_the_same_call_id() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
+    let old_id = manager
+        .create_tool_task("read".to_owned(), "provider-reused-call-id".to_owned())
+        .await
+        .unwrap();
+    let boundary = chrono::Utc::now();
+    manager
+        .records
+        .lock()
+        .await
+        .get_mut(&old_id)
+        .unwrap()
+        .created_at = boundary - chrono::Duration::seconds(1);
+
+    assert!(
+        manager
+            .find_undelivered_promotion("provider-reused-call-id", "read", boundary)
+            .await
+            .is_none()
+    );
+
+    let current_id = manager
+        .create_tool_task("read".to_owned(), "provider-reused-call-id".to_owned())
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .find_undelivered_promotion("provider-reused-call-id", "read", boundary)
+            .await
+            .unwrap()
+            .id,
+        current_id
+    );
+    assert!(
+        manager
+            .find_undelivered_promotion("provider-reused-call-id", "bash", boundary)
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn task_activity_broadcast_wakes_every_waiter_for_its_completed_task() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let mut task_config = config(workspace.path(), &store, "parent");
+    task_config.wait_timeout_seconds = 5;
+    let manager = TaskManager::new(task_config);
+    let first = manager
+        .create_tool_task("first".to_owned(), "first-call".to_owned())
+        .await
+        .unwrap();
+    let second = manager
+        .create_tool_task("second".to_owned(), "second-call".to_owned())
+        .await
+        .unwrap();
+    manager.set_running(&first).await.unwrap();
+    manager.set_running(&second).await.unwrap();
+
+    let wait_for = |task_id: String| {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.wait(&[task_id]).await })
+    };
+    let first_waiters = [wait_for(first.clone()), wait_for(first.clone())];
+    let second_waiters = [wait_for(second.clone()), wait_for(second.clone())];
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while manager.activity.receiver_count() < 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("waiters did not subscribe to task activity");
+
+    let output = || ToolOutput {
+        preview: "done".to_owned(),
+        artifact: None,
+        truncated: false,
+        is_error: false,
+        preview_info: None,
+    };
+    manager.complete(&first, output()).await.unwrap();
+    for waiter in first_waiters {
+        let records = tokio::time::timeout(Duration::from_millis(500), waiter)
+            .await
+            .expect("a waiter slept after its selected task completed")
+            .unwrap()
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, first);
+        assert_eq!(records[0].state, BackgroundTaskState::Completed);
+    }
+    assert!(second_waiters.iter().all(|waiter| !waiter.is_finished()));
+
+    manager.complete(&second, output()).await.unwrap();
+    for waiter in second_waiters {
+        let records = tokio::time::timeout(Duration::from_millis(500), waiter)
+            .await
+            .expect("a waiter slept after its selected task completed")
+            .unwrap()
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, second);
+        assert_eq!(records[0].state, BackgroundTaskState::Completed);
+    }
 }
 
 #[tokio::test]
@@ -113,6 +224,7 @@ async fn restored_parent_continues_its_local_task_sequence() {
         .write(&BackgroundTaskRecord::queued_tool(
             "t1".to_owned(),
             "earlier".to_owned(),
+            "earlier-call".to_owned(),
         ))
         .await
         .unwrap();
@@ -122,7 +234,10 @@ async fn restored_parent_continues_its_local_task_sequence() {
         .unwrap();
 
     assert_eq!(
-        manager.create_tool_task("later".to_owned()).await.unwrap(),
+        manager
+            .create_tool_task("later".to_owned(), "later-call".to_owned())
+            .await
+            .unwrap(),
         "t2"
     );
 }
@@ -136,7 +251,11 @@ async fn restore_reconciles_tools_and_completed_children() {
     store.write_final("child", "child result").await.unwrap();
 
     let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
-    let mut tool = BackgroundTaskRecord::queued_tool("tool-task".to_owned(), "bash".to_owned());
+    let mut tool = BackgroundTaskRecord::queued_tool(
+        "tool-task".to_owned(),
+        "bash".to_owned(),
+        "bash-call".to_owned(),
+    );
     tool.state = BackgroundTaskState::Running;
     task_store.write(&tool).await.unwrap();
     let mut agent = BackgroundTaskRecord::queued_agent(
@@ -340,7 +459,11 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
             content: "already delivered".to_owned(),
             metadata: crate::artifact::ResultMetadata::empty(),
         }),
-        ..BackgroundTaskRecord::queued_tool("done-task".to_owned(), "read".to_owned())
+        ..BackgroundTaskRecord::queued_tool(
+            "done-task".to_owned(),
+            "read".to_owned(),
+            "read-call".to_owned(),
+        )
     };
     task_store.write(&delivered).await.unwrap();
     store
@@ -400,30 +523,6 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
             .as_ref()
             .is_some_and(|result| result.content.contains("received:"))
     );
-}
-
-#[tokio::test]
-async fn restore_reserves_preview_bytes_for_an_undelivered_completed_task() {
-    let workspace = tempfile::tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    create_run(&store, "parent", None).await;
-    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
-    let mut task = BackgroundTaskRecord::queued_tool("done-task".to_owned(), "read".to_owned());
-    task.state = BackgroundTaskState::Completed;
-    task.result = Some(record::BackgroundTaskOutput {
-        content: "bounded result".to_owned(),
-        metadata: crate::artifact::ResultMetadata {
-            artifact: None,
-            preview_bytes: 11,
-        },
-    });
-    task_store.write(&task).await.unwrap();
-
-    let config = config(workspace.path(), &store, "parent");
-    let preview_budget = config.preview_budget.clone();
-    TaskManager::restore(config).await.unwrap();
-
-    assert_eq!(*preview_budget.lock().await, 128 * 1024 - 11);
 }
 
 #[tokio::test]
@@ -588,6 +687,7 @@ async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current
     assert_eq!(latest["messages"][5]["message"]["content"], "message-8");
     assert_eq!(latest["has_earlier"], true);
     assert_eq!(latest["next_before_seq"], 3);
+    assert!(latest.get("child_run_id").is_none());
 
     let earlier = manager.inspect("agent-task", Some(3), 6).await.unwrap();
     assert_eq!(earlier["messages"].as_array().unwrap().len(), 2);
@@ -596,10 +696,14 @@ async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current
     assert_eq!(earlier["has_earlier"], false);
     assert!(earlier["next_before_seq"].is_null());
 
-    manager
+    let steering = manager
         .steer("agent-task", "change direction".to_owned())
         .await
         .unwrap();
+    assert_eq!(
+        steering,
+        serde_json::json!({"task_id": "agent-task", "status": "running"})
+    );
     let mut trajectory = store.load_trajectory("child").await.unwrap();
     let appended = store
         .append_pending_inputs("child", &mut trajectory)
@@ -627,7 +731,11 @@ async fn in_flight_tool_recovers_as_interrupted_regardless_of_task_age() {
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
     let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
-    let mut task = BackgroundTaskRecord::queued_tool("tool-task".to_owned(), "bash".to_owned());
+    let mut task = BackgroundTaskRecord::queued_tool(
+        "tool-task".to_owned(),
+        "bash".to_owned(),
+        "bash-call".to_owned(),
+    );
     task.state = BackgroundTaskState::Running;
     task.created_at = chrono::Utc::now() - chrono::Duration::minutes(10);
     task_store.write(&task).await.unwrap();
@@ -638,6 +746,7 @@ async fn in_flight_tool_recovers_as_interrupted_regardless_of_task_age() {
     assert!(recoverable.is_empty());
     let recovered = manager.get("tool-task").await.unwrap();
     assert_eq!(recovered.state, BackgroundTaskState::Interrupted);
+    assert_eq!(recovered.origin_call_id.as_deref(), Some("bash-call"));
     assert!(
         recovered
             .model_content()
@@ -651,7 +760,11 @@ async fn resume_load_does_not_reconcile_tasks_before_capability_validation() {
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
     let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
-    let mut task = BackgroundTaskRecord::queued_tool("tool-task".to_owned(), "bash".to_owned());
+    let mut task = BackgroundTaskRecord::queued_tool(
+        "tool-task".to_owned(),
+        "bash".to_owned(),
+        "bash-call".to_owned(),
+    );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
 
@@ -668,78 +781,6 @@ async fn resume_load_does_not_reconcile_tasks_before_capability_validation() {
         manager.get("tool-task").await.unwrap().state,
         BackgroundTaskState::Interrupted
     );
-}
-
-struct FastTool;
-
-#[async_trait::async_trait]
-impl crate::tools::Tool for FastTool {
-    fn spec(&self) -> crate::model::ToolSpec {
-        crate::model::ToolSpec {
-            name: "fast".to_owned(),
-            description: "Return immediately".to_owned(),
-            input_schema: serde_json::json!({"type": "object"}),
-        }
-    }
-
-    async fn execute(
-        &self,
-        _context: crate::tools::ToolContext,
-        _arguments: serde_json::Value,
-    ) -> anyhow::Result<crate::tools::RawToolOutput> {
-        Ok(crate::tools::RawToolOutput::text("done"))
-    }
-}
-
-#[tokio::test]
-async fn task_manager_rejects_a_tool_denied_for_explicit_spawn() {
-    let workspace = tempfile::tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let mut task_config = config(workspace.path(), &store, "parent");
-    task_config
-        .candidate_tools
-        .register(Arc::new(FastTool), ExplicitSpawn::Denied)
-        .unwrap();
-    let manager = TaskManager::new(task_config);
-
-    assert!(manager.spawnable_tool_names().is_empty());
-    let error = manager
-        .spawn_tool("fast".to_owned(), serde_json::json!({}))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("unknown or non-spawnable tool"));
-}
-
-#[tokio::test]
-async fn background_tool_has_no_execution_deadline() {
-    let workspace = tempfile::tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    create_run(&store, "parent", None).await;
-    let mut task_config = config(workspace.path(), &store, "parent");
-    task_config
-        .candidate_tools
-        .register(Arc::new(FastTool), ExplicitSpawn::Allowed)
-        .unwrap();
-    task_config.hooks.register(crate::hooks::CommandHook::new(
-        "slow-before",
-        crate::hooks::HookEvent::ToolBefore,
-        "sh",
-        vec!["-c".into(), "sleep 0.05".into()],
-    ));
-    let manager = TaskManager::new(task_config);
-
-    let task = manager
-        .spawn_tool("fast".to_owned(), serde_json::json!({}))
-        .await
-        .unwrap();
-    let completed = tokio::time::timeout(Duration::from_secs(2), manager.wait_all())
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(completed.len(), 1);
-    assert_eq!(completed[0].id, task.id);
-    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
 }
 
 struct FailingTool;
@@ -759,6 +800,7 @@ impl crate::tools::Tool for FailingTool {
         _context: crate::tools::ToolContext,
         _arguments: serde_json::Value,
     ) -> anyhow::Result<crate::tools::RawToolOutput> {
+        tokio::time::sleep(Duration::from_millis(20)).await;
         anyhow::bail!("{}", "error-detail-".repeat(80))
     }
 }
@@ -768,29 +810,42 @@ async fn background_tool_errors_use_the_artifact_and_preview_contract() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
-    let mut task_config = config(workspace.path(), &store, "parent");
-    task_config
-        .candidate_tools
-        .register(Arc::new(FailingTool), ExplicitSpawn::Allowed)
-        .unwrap();
-    task_config.artifacts = ArtifactStore::new(ArtifactPolicy {
+    let mut tools = ToolRegistry::default();
+    tools.register(Arc::new(FailingTool)).unwrap();
+    let artifacts = ArtifactStore::new(ArtifactPolicy {
         inline_limit_bytes: 64,
-        max_inline_bytes_per_run: 128,
         preview_head_bytes: 16,
         preview_tail_bytes: 16,
     });
-    task_config.preview_budget = Arc::new(Mutex::new(128));
+    let hooks = HookPipeline::new();
+    let events: crate::events::SharedEventSink = Arc::new(NoopEventSink);
+    let mut task_config = config(workspace.path(), &store, "parent");
+    task_config.artifacts = artifacts.clone();
     let manager = TaskManager::new(task_config);
-
-    manager
-        .spawn_tool("failing".to_owned(), serde_json::json!({}))
+    let runtime = crate::agent::tool_execution::DirectToolRuntime {
+        registry: &tools,
+        hooks: &hooks,
+        artifacts: &artifacts,
+        events: &events,
+        workspace: workspace.path(),
+        run_id: "parent",
+        manager: manager.clone(),
+        foreground_timeout_seconds: 0,
+    };
+    runtime
+        .execute(crate::model::ToolCall {
+            id: "failing-call".to_owned(),
+            name: "failing".to_owned(),
+            arguments: serde_json::json!({}),
+        })
         .await
         .unwrap();
     let completed = manager.wait_all().await.unwrap();
 
     assert_eq!(completed.len(), 1);
     assert_eq!(completed[0].state, BackgroundTaskState::Failed);
-    assert!(completed[0].result_metadata().artifact.is_some());
+    let artifact = completed[0].result_metadata().artifact.unwrap();
+    assert_eq!(artifact.call_id, "failing-call");
     assert!(completed[0].model_content().contains("[Tool output]"));
     assert!(completed[0].model_content().contains("truncated: true"));
 }
@@ -916,7 +971,10 @@ async fn cancellation_cleanup_holds_the_parent_lease_until_tasks_are_settled() {
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
     let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
-    let task_id = manager.create_tool_task("never".to_owned()).await.unwrap();
+    let task_id = manager
+        .create_tool_task("never".to_owned(), "never-call".to_owned())
+        .await
+        .unwrap();
     manager.set_running(&task_id).await.unwrap();
     let started = Arc::new(AtomicBool::new(false));
     let release = Arc::new(AtomicBool::new(false));
@@ -1006,27 +1064,19 @@ async fn foreground_timeout_promotes_the_same_tool_future_instead_of_stopping_or
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut tools = ToolRegistry::default();
     tools
-        .register(
-            Arc::new(SlowContinuationTool(calls.clone())),
-            ExplicitSpawn::Allowed,
-        )
+        .register(Arc::new(SlowContinuationTool(calls.clone())))
         .unwrap();
     let artifacts = ArtifactStore::new(ArtifactPolicy::default());
-    let preview_budget = Arc::new(Mutex::new(128 * 1024));
     let hooks = HookPipeline::new();
     let events: crate::events::SharedEventSink = Arc::new(NoopEventSink);
     let mut task_config = config(workspace.path(), &store, "parent");
-    task_config.candidate_tools = tools.clone();
     task_config.artifacts = artifacts.clone();
-    task_config.preview_budget = preview_budget.clone();
-    task_config.hooks = hooks.clone();
     task_config.events = events.clone();
     let manager = TaskManager::new(task_config);
     let runtime = crate::agent::tool_execution::DirectToolRuntime {
         registry: &tools,
         hooks: &hooks,
         artifacts: &artifacts,
-        preview_budget: &preview_budget,
         events: &events,
         workspace: workspace.path(),
         run_id: "parent",
@@ -1101,36 +1151,59 @@ async fn stop_aborts_only_the_selected_background_task_and_commits_cancelled_sta
     create_run(&store, "parent", None).await;
     let started = Arc::new(tokio::sync::Notify::new());
     let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let mut task_config = config(workspace.path(), &store, "parent");
-    task_config
-        .candidate_tools
-        .register(
-            Arc::new(BlockingDropTool {
-                started: started.clone(),
-                dropped: dropped.clone(),
-            }),
-            ExplicitSpawn::Allowed,
-        )
+    let mut tools = ToolRegistry::default();
+    tools
+        .register(Arc::new(BlockingDropTool {
+            started: started.clone(),
+            dropped: dropped.clone(),
+        }))
         .unwrap();
+    let artifacts = ArtifactStore::new(ArtifactPolicy::default());
+    let hooks = HookPipeline::new();
+    let events: crate::events::SharedEventSink = Arc::new(NoopEventSink);
+    let task_config = config(workspace.path(), &store, "parent");
     let manager = TaskManager::new(task_config);
-    let task = manager
-        .spawn_tool("blocking_drop".to_owned(), serde_json::json!({}))
+    let runtime = crate::agent::tool_execution::DirectToolRuntime {
+        registry: &tools,
+        hooks: &hooks,
+        artifacts: &artifacts,
+        events: &events,
+        workspace: workspace.path(),
+        run_id: "parent",
+        manager: manager.clone(),
+        foreground_timeout_seconds: 0,
+    };
+    let message = runtime
+        .execute(crate::model::ToolCall {
+            id: "blocking-call".to_owned(),
+            name: "blocking_drop".to_owned(),
+            arguments: serde_json::json!({}),
+        })
         .await
         .unwrap();
+    let task_id = match &message.content[0] {
+        MessageContent::ToolResult { content, .. } => {
+            serde_json::from_str::<serde_json::Value>(content).unwrap()["task_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+        other => panic!("unexpected foreground acknowledgement: {other:?}"),
+    };
     started.notified().await;
 
-    let stopped = manager.stop(&task.id).await.unwrap();
+    let stopped = manager.stop(&task_id).await.unwrap();
     assert_eq!(stopped.state, BackgroundTaskState::Cancelled);
     assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
     assert_eq!(
-        manager.get(&task.id).await.unwrap().state,
+        manager.get(&task_id).await.unwrap().state,
         BackgroundTaskState::Cancelled
     );
     assert_eq!(
         TaskRecordStore::new(store.paths("parent").directory.join("tasks"))
             .load()
             .await
-            .unwrap()[&task.id]
+            .unwrap()[&task_id]
             .state,
         BackgroundTaskState::Cancelled
     );

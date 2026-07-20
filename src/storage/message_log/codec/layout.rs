@@ -92,7 +92,6 @@ fn encode_user(message: &Message, expected: &str) -> Result<Vec<ContentLayout>> 
                 content,
                 metadata,
             } => {
-                validate_result_metadata(metadata, &format!("background-{task_id}"))?;
                 let prefix = format!(
                     "<background_task_result task_id=\"{task_id}\" name=\"{name}\" status=\"{status}\">\n"
                 );
@@ -256,7 +255,6 @@ fn decode_user(content: &str, layout: Vec<ContentLayout>) -> Result<Vec<MessageC
                     span(content, start, end)? == expected,
                     "background result envelope disagrees with its metadata"
                 );
-                validate_result_metadata(&metadata, &format!("background-{task_id}"))?;
                 Ok(MessageContent::BackgroundTaskResult {
                     task_id,
                     name,

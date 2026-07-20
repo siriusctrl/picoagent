@@ -18,7 +18,6 @@ const MODEL_INSPECTION_INSTRUCTION: &str = include_str!("artifact/model-instruct
 #[derive(Debug, Clone)]
 pub struct ArtifactPolicy {
     pub inline_limit_bytes: usize,
-    pub max_inline_bytes_per_run: usize,
     pub preview_head_bytes: usize,
     pub preview_tail_bytes: usize,
 }
@@ -27,8 +26,7 @@ impl Default for ArtifactPolicy {
     fn default() -> Self {
         Self {
             inline_limit_bytes: 32 * 1024,
-            max_inline_bytes_per_run: 128 * 1024,
-            preview_head_bytes: 16 * 1024,
+            preview_head_bytes: 8 * 1024,
             preview_tail_bytes: 8 * 1024,
         }
     }
@@ -56,15 +54,11 @@ pub struct ArtifactRef {
 #[serde(deny_unknown_fields)]
 pub struct ResultMetadata {
     pub artifact: Option<ArtifactRef>,
-    pub preview_bytes: usize,
 }
 
 impl ResultMetadata {
     pub fn empty() -> Self {
-        Self {
-            artifact: None,
-            preview_bytes: 0,
-        }
+        Self { artifact: None }
     }
 }
 
@@ -82,7 +76,6 @@ impl ToolOutput {
     pub fn result_metadata(&self) -> ResultMetadata {
         ResultMetadata {
             artifact: self.artifact.clone(),
-            preview_bytes: self.preview.len(),
         }
     }
 
@@ -132,40 +125,23 @@ impl ArtifactStore {
         Self { policy }
     }
 
-    pub fn policy(&self) -> &ArtifactPolicy {
-        &self.policy
-    }
-
     pub async fn persist_output(
         &self,
         context: &ToolContext,
-        output: RawToolOutput,
-    ) -> Result<ToolOutput> {
-        self.persist_output_with_budget(context, output, usize::MAX)
-            .await
-    }
-
-    pub async fn persist_output_with_budget(
-        &self,
-        context: &ToolContext,
         mut output: RawToolOutput,
-        preview_budget: usize,
     ) -> Result<ToolOutput> {
-        let effective_inline_limit = self.policy.inline_limit_bytes.min(preview_budget);
         if let Some(source_path) = output.source_path.take() {
             let bytes = tokio::fs::metadata(&source_path).await?.len();
-            if bytes <= effective_inline_limit as u64 {
+            if bytes <= self.policy.inline_limit_bytes as u64 {
                 output.content = tokio::fs::read(&source_path).await?;
                 tokio::fs::remove_file(source_path).await?;
             } else {
-                return self
-                    .persist_file(context, output, source_path, bytes, preview_budget)
-                    .await;
+                return self.persist_file(context, output, source_path, bytes).await;
             }
         }
         let textual =
             is_textual(&output.media_type) && std::str::from_utf8(&output.content).is_ok();
-        if output.content.len() <= effective_inline_limit && textual {
+        if output.content.len() <= self.policy.inline_limit_bytes && textual {
             return Ok(ToolOutput {
                 preview: String::from_utf8_lossy(&output.content).into_owned(),
                 artifact: None,
@@ -216,21 +192,15 @@ impl ArtifactStore {
             .await
             .with_context(|| format!("write artifact sidecar {}", sidecar_path.display()))?;
 
-        let budget_forced_spill = output.content.len() <= self.policy.inline_limit_bytes
-            && output.content.len() > preview_budget;
-        let (preview, mut preview_info) = if textual {
+        let (preview, preview_info) = if textual {
             textual_preview(
                 &output.content,
                 self.policy.preview_head_bytes,
                 self.policy.preview_tail_bytes,
-                preview_budget,
             )
         } else {
-            unavailable_preview(output.content.len() as u64, preview_budget)
+            unavailable_preview(output.content.len() as u64)
         };
-        if budget_forced_spill && preview_info.limitation.is_none() {
-            preview_info.limitation = Some(PreviewLimitation::RunPreviewBudgetLimited);
-        }
         let truncated = preview_info.omitted_bytes > 0;
         Ok(ToolOutput {
             preview,
@@ -247,7 +217,6 @@ impl ArtifactStore {
         output: RawToolOutput,
         source_path: PathBuf,
         bytes: u64,
-        preview_budget: usize,
     ) -> Result<ToolOutput> {
         let sha256 = hash_file(&source_path).await?;
         let stable_name = format!("{}-{}", safe_component(&context.call_id), &sha256[..12]);
@@ -271,23 +240,17 @@ impl ArtifactStore {
         }
         let artifact = artifact_ref(context, &output.media_type, bytes, sha256, &absolute_path);
         write_sidecar(&directory, &stable_name, &artifact).await?;
-        let budget_forced_spill =
-            bytes <= self.policy.inline_limit_bytes as u64 && bytes > preview_budget as u64;
-        let (preview, mut preview_info) = if is_textual(&output.media_type) {
+        let (preview, preview_info) = if is_textual(&output.media_type) {
             file_preview(
                 &absolute_path,
                 bytes,
                 self.policy.preview_head_bytes,
                 self.policy.preview_tail_bytes,
-                preview_budget,
             )
             .await?
         } else {
-            unavailable_preview(bytes, preview_budget)
+            unavailable_preview(bytes)
         };
-        if budget_forced_spill && preview_info.limitation.is_none() {
-            preview_info.limitation = Some(PreviewLimitation::RunPreviewBudgetLimited);
-        }
         let truncated = preview_info.omitted_bytes > 0;
         Ok(ToolOutput {
             preview,

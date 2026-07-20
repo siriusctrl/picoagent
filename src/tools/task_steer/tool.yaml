@@ -1,0 +1,18 @@
+name: task_steer
+description: >-
+  Queue an instruction for a running delegated subagent. It is delivered after
+  the child's current assistant/tool batch and before its next model request.
+  This operation is valid only for a nonterminal agent task.
+returns: >-
+  JSON `{task_id,status}` confirming that the instruction was queued.
+input_schema:
+  type: object
+  properties:
+    task_id:
+      type: string
+      description: Running delegated agent task id
+    message:
+      type: string
+      description: Instruction to queue for the subagent
+  required: [task_id, message]
+  additionalProperties: false

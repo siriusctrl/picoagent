@@ -26,12 +26,11 @@
 - `src/model/openai_oauth_credentials.rs`: auth-file, Codex import, and JWT helpers.
 - `src/model/openai_oauth_device.rs`: device-code request and polling.
 - `src/model/anthropic_compatible.rs`: Messages adapter.
-- `src/tools/mod.rs`: tool contract and sorted registry with explicit
-  `spawn(kind=tool)` policy.
+- `src/tools/mod.rs`: tool contract and deterministic sorted registry.
 - `src/tools/manifest.rs`: strict parser for embedded local `tool.yaml`
   contracts.
 - `src/tools/assembly.rs`: the single process/run tool-assembly path.
-- `src/tools/{bash,history_read,history_search,load_skill,read,spawn,task,web_search,write}/`:
+- `src/tools/{bash,delegate,history_read,history_search,load_skill,read,task_inspect,task_status,task_steer,task_stop,task_wait,web_search,write}/`:
   flat local adapters with a typed compile-time `tool.yaml` containing purpose,
   return guidance, and input schema beside their Rust arguments, validation,
   and execution.

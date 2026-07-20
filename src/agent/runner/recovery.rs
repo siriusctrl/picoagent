@@ -10,7 +10,10 @@ use crate::{
 };
 
 use super::{AgentRunner, RunRequest, RunResult, lifecycle::RunMode};
-use crate::agent::{compaction::estimate_message_tokens, task::BackgroundTaskRecord};
+use crate::agent::{
+    compaction::estimate_message_tokens,
+    task::{BackgroundTaskRecord, TaskManager},
+};
 
 impl AgentRunner {
     pub async fn resume(self: &Arc<Self>, run_id: impl Into<String>) -> Result<RunResult> {
@@ -99,7 +102,18 @@ pub(super) async fn append_background_results(
     let mut estimated_tokens = 0_u64;
     for record in records {
         let status = record.status().to_owned();
-        let content = record.model_content();
+        let content = if record.kind == "tool" && record.state.is_terminal() {
+            format!(
+                "original_tool_call_id: {}\n{}",
+                record
+                    .origin_call_id
+                    .as_deref()
+                    .context("terminal tool task is missing its original tool-call id")?,
+                record.model_content()
+            )
+        } else {
+            record.model_content()
+        };
         let metadata = record.result_metadata();
         let message = Message {
             role: Role::User,
@@ -118,33 +132,22 @@ pub(super) async fn append_background_results(
     Ok(estimated_tokens)
 }
 
-pub(super) fn remaining_preview_budget(limit: usize, trajectory: &[TrajectoryMessage]) -> usize {
-    let used = trajectory
-        .iter()
-        .flat_map(|record| &record.message.content)
-        .map(|content| match content {
-            MessageContent::ToolResult { metadata, .. }
-            | MessageContent::BackgroundTaskResult { metadata, .. } => metadata.preview_bytes,
-            _ => 0,
-        })
-        .fold(0_usize, usize::saturating_add);
-    limit.saturating_sub(used)
-}
-
 pub(super) async fn append_interrupted_tool_results(
     store: &RunDirStore,
     run_id: &str,
     trajectory: &mut Vec<TrajectoryMessage>,
-) -> Result<usize> {
+    tasks: &TaskManager,
+) -> Result<()> {
     let Some(assistant_index) = trajectory
         .iter()
         .rposition(|record| record.compaction.is_none() && record.message.role == Role::Assistant)
     else {
-        return Ok(0);
+        return Ok(());
     };
     let calls = trajectory[assistant_index].message.tool_calls();
+    let assistant_created_at = trajectory[assistant_index].created_at;
     if calls.is_empty() {
-        return Ok(0);
+        return Ok(());
     }
     let completed = trajectory[assistant_index + 1..]
         .iter()
@@ -158,29 +161,39 @@ pub(super) async fn append_interrupted_tool_results(
         .into_iter()
         .filter(|call| !completed.contains(call.id.as_str()))
         .collect::<Vec<_>>();
-    let mut charged_preview_bytes = 0_usize;
     for call in missing {
-        let content = format!(
-            "tool `{}` was interrupted before a durable result was recorded; its side effects are unknown. Inspect task state or the workspace before deciding whether to retry.",
-            call.name
-        );
-        let preview_bytes = content.len();
-        charged_preview_bytes = charged_preview_bytes.saturating_add(preview_bytes);
+        let task = tasks
+            .find_undelivered_promotion(&call.id, &call.name, assistant_created_at)
+            .await;
+        let (content, is_error) = if let Some(task) = task {
+            (
+                serde_json::to_string(&serde_json::json!({
+                    "task_id": task.id,
+                    "status": task.status(),
+                }))?,
+                false,
+            )
+        } else {
+            (
+                format!(
+                    "tool `{}` was interrupted before a durable result was recorded; its side effects are unknown. Inspect task state or the workspace before deciding whether to retry.",
+                    call.name
+                ),
+                true,
+            )
+        };
         let message = Message {
             role: Role::Tool,
             content: vec![MessageContent::ToolResult {
                 call_id: call.id,
                 content,
-                is_error: true,
-                metadata: ResultMetadata {
-                    artifact: None,
-                    preview_bytes,
-                },
+                is_error,
+                metadata: ResultMetadata::empty(),
             }],
         };
         trajectory.push(store.append_message(run_id, &message).await?);
     }
-    Ok(charged_preview_bytes)
+    Ok(())
 }
 
 pub(super) fn resumable_final_text(trajectory: &[TrajectoryMessage]) -> Option<String> {
@@ -191,36 +204,4 @@ pub(super) fn resumable_final_text(trajectory: &[TrajectoryMessage]) -> Option<S
     let message = &record.message;
     (message.role == Role::Assistant && message.tool_calls().is_empty())
         .then(|| message.visible_text())
-}
-
-#[cfg(test)]
-mod tests {
-    use chrono::Utc;
-
-    use super::*;
-
-    #[test]
-    fn preview_budget_restoration_uses_persisted_preview_bytes() {
-        let trajectory = vec![TrajectoryMessage {
-            message_ref: "m1".to_owned(),
-            seq: 1,
-            created_at: Utc::now(),
-            message: Message {
-                role: Role::Tool,
-                content: vec![MessageContent::ToolResult {
-                    call_id: "call-1".to_owned(),
-                    content: "a long artifact envelope that is not itself preview bytes".to_owned(),
-                    is_error: false,
-                    metadata: ResultMetadata {
-                        artifact: None,
-                        preview_bytes: 7,
-                    },
-                }],
-            },
-            pending_input_id: None,
-            compaction: None,
-        }];
-
-        assert_eq!(remaining_preview_budget(100, &trajectory), 93);
-    }
 }

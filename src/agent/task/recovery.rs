@@ -80,7 +80,6 @@ impl TaskManager {
             })
             .collect();
         let manager = Self::from_config(config, records, delivered);
-        manager.restore_undelivered_preview_budget().await;
         Ok(manager)
     }
 
@@ -91,20 +90,6 @@ impl TaskManager {
         let manager = Self::load_for_resume(config).await?;
         let recoverable = manager.reconcile_after_restart().await?;
         Ok((manager, recoverable))
-    }
-
-    async fn restore_undelivered_preview_budget(&self) {
-        let delivered = self.delivered.lock().await.clone();
-        let used = self
-            .records
-            .lock()
-            .await
-            .values()
-            .filter(|record| !delivered.contains(&record.id))
-            .map(|record| record.result_metadata().preview_bytes)
-            .fold(0_usize, usize::saturating_add);
-        let mut remaining = self.preview_budget.lock().await;
-        *remaining = remaining.saturating_sub(used);
     }
 
     pub(crate) fn cancellation_guard(self: &Arc<Self>, lease: RunLease) -> TaskCancellationGuard {

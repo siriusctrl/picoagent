@@ -16,10 +16,7 @@ use picoagent::{
         ToolSpec,
     },
     storage::RunDirStore,
-    tools::{
-        BashTool, ExplicitSpawn, RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry,
-        WriteTool,
-    },
+    tools::{BashTool, RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry, WriteTool},
     trajectory::TrajectoryMessage,
 };
 use serde::Serialize;
@@ -119,18 +116,19 @@ impl ModelProvider for ProfileContractProvider {
         _events: SharedEventSink,
     ) -> Result<ModelResponse> {
         let prompt = user_prompt(&request).unwrap_or_default().to_owned();
-        let already_spawned = request.messages.iter().any(|message| {
-            has_tool_result(message, "spawn-delegating") || has_tool_result(message, "spawn-leaf")
+        let already_delegated = request.messages.iter().any(|message| {
+            has_tool_result(message, "delegate-delegating")
+                || has_tool_result(message, "delegate-leaf")
         });
         self.requests.lock().unwrap().push(request);
 
         match prompt.as_str() {
-            "root profile contract" if !already_spawned => Ok(spawn_response(
-                "spawn-delegating",
+            "root profile contract" if !already_delegated => Ok(delegate_response(
+                "delegate-delegating",
                 "delegating profile contract",
             )),
-            "delegating profile contract" if !already_spawned => {
-                Ok(spawn_response("spawn-leaf", "leaf profile contract"))
+            "delegating profile contract" if !already_delegated => {
+                Ok(delegate_response("delegate-leaf", "leaf profile contract"))
             }
             "root profile contract" | "delegating profile contract" | "leaf profile contract" => {
                 Ok(final_response(&format!("finished {prompt}")))
@@ -144,15 +142,12 @@ fn final_response(text: &str) -> ModelResponse {
     ModelResponse::new(Message::text(Role::Assistant, text), ModelUsage::default())
 }
 
-fn spawn_response(id: &str, prompt: &str) -> ModelResponse {
+fn delegate_response(id: &str, prompt: &str) -> ModelResponse {
     ModelResponse::new(
         Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
-            name: "spawn".to_owned(),
-            arguments: json!({
-                "kind": "agent",
-                "prompt": prompt,
-            }),
+            name: "delegate".to_owned(),
+            arguments: json!({"prompt": prompt}),
         }]),
         ModelUsage::default(),
     )
@@ -197,36 +192,34 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
         names,
         [
             "bash",
+            "delegate",
             "history_read",
             "history_search",
             "marker",
             "read",
-            "spawn",
-            "task",
+            "task_inspect",
+            "task_status",
+            "task_steer",
+            "task_stop",
+            "task_wait",
             "write"
         ]
     );
     assert!(!requests[0].system.contains("history_search"));
-    for tool_name in ["`bash`", "`load_skill`", "`spawn`", "`write`"] {
+    for tool_name in ["`bash`", "`delegate`", "`load_skill`", "`write`"] {
         assert!(!requests[0].system.contains(tool_name));
     }
-    assert_eq!(
-        spawn_tool_enum(&requests[0]),
-        ["bash", "marker", "read", "write"]
-    );
     let reminder = text_content(&requests[0].messages[0]);
     assert!(!reminder.contains("<context-management>"));
     assert!(!reminder.contains("history_search"));
 }
 
 #[tokio::test]
-async fn denied_only_registry_exposes_an_agent_only_spawn_schema() {
+async fn delegate_schema_is_independent_of_the_base_tool_registry() {
     let workspace = TempDir::new().unwrap();
     let provider = Arc::new(CapturingFinalProvider::default());
     let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(MarkerTool), ExplicitSpawn::Denied)
-        .unwrap();
+    tools.register(Arc::new(MarkerTool)).unwrap();
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: provider.clone(),
         model: "test-model".to_owned(),
@@ -242,27 +235,21 @@ async fn denied_only_registry_exposes_an_agent_only_spawn_schema() {
     });
 
     runner
-        .run(RunRequest::root("agent-only spawn schema"))
+        .run(RunRequest::root("static delegate schema"))
         .await
         .unwrap();
 
     let requests = provider.requests.lock().unwrap();
-    let spawn = requests[0]
+    let delegate = requests[0]
         .tools
         .iter()
-        .find(|tool| tool.name == "spawn")
+        .find(|tool| tool.name == "delegate")
         .unwrap();
     assert_eq!(
-        spawn.input_schema.pointer("/properties/kind/enum"),
-        Some(&json!(["agent"]))
+        delegate.input_schema.pointer("/required"),
+        Some(&json!(["prompt"]))
     );
-    assert!(spawn.input_schema.pointer("/properties/tool").is_none());
-    assert!(
-        spawn
-            .input_schema
-            .pointer("/properties/arguments")
-            .is_none()
-    );
+    assert_eq!(delegate.input_schema["additionalProperties"], false);
 }
 
 #[tokio::test]
@@ -297,12 +284,16 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
         &root,
         &[
             "bash",
+            "delegate",
             "history_read",
             "history_search",
             "marker",
             "read",
-            "spawn",
-            "task",
+            "task_inspect",
+            "task_status",
+            "task_steer",
+            "task_stop",
+            "task_wait",
             "write",
         ],
     );
@@ -310,12 +301,16 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
         &delegating,
         &[
             "bash",
+            "delegate",
             "history_read",
             "history_search",
             "marker",
             "read",
-            "spawn",
-            "task",
+            "task_inspect",
+            "task_status",
+            "task_steer",
+            "task_stop",
+            "task_wait",
             "write",
         ],
     );
@@ -327,20 +322,15 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
             "history_search",
             "marker",
             "read",
-            "task",
+            "task_inspect",
+            "task_status",
+            "task_steer",
+            "task_stop",
+            "task_wait",
             "write",
         ],
     );
     assert_eq!(serialized(&root[0].tools), serialized(&delegating[0].tools));
-    assert_eq!(
-        spawn_tool_enum(root[0]),
-        ["bash", "marker", "read", "write"]
-    );
-    assert_eq!(
-        spawn_tool_enum(delegating[0]),
-        ["bash", "marker", "read", "write"]
-    );
-
     let root_reminder = text_content(&root[0].messages[0]);
     let delegating_reminder = text_content(&delegating[0].messages[0]);
     let leaf_reminder = text_content(&leaf[0].messages[0]);
@@ -414,18 +404,10 @@ fn runner_with_store(
     store: RunDirStore,
 ) -> Arc<AgentRunner> {
     let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(BashTool), ExplicitSpawn::Allowed)
-        .unwrap();
-    tools
-        .register(Arc::new(MarkerTool), ExplicitSpawn::Allowed)
-        .unwrap();
-    tools
-        .register(Arc::new(ReadTool), ExplicitSpawn::Allowed)
-        .unwrap();
-    tools
-        .register(Arc::new(WriteTool::default()), ExplicitSpawn::Allowed)
-        .unwrap();
+    tools.register(Arc::new(BashTool)).unwrap();
+    tools.register(Arc::new(MarkerTool)).unwrap();
+    tools.register(Arc::new(ReadTool)).unwrap();
+    tools.register(Arc::new(WriteTool::default())).unwrap();
     AgentRunner::new(AgentRunnerConfig {
         provider,
         model: "test-model".to_owned(),
@@ -481,22 +463,6 @@ fn tool_names(request: &ModelRequest) -> Vec<&str> {
         .tools
         .iter()
         .map(|tool| tool.name.as_str())
-        .collect()
-}
-
-fn spawn_tool_enum(request: &ModelRequest) -> Vec<&str> {
-    request
-        .tools
-        .iter()
-        .find(|tool| tool.name == "spawn")
-        .unwrap()
-        .input_schema
-        .pointer("/properties/tool/enum")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|name| name.as_str().unwrap())
         .collect()
 }
 

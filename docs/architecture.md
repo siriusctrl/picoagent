@@ -14,8 +14,8 @@ job/CLI
         -> flat local Tool adapters
         -> MCP Tool adapters
         -> TaskManager
-           -> explicitly spawned Tool
-           -> child AgentRunner
+           -> promoted direct Tool future
+           -> delegated child AgentRunner
      -> ArtifactStore
      -> RunDirStore
         -> compacted-state metadata / compacted-history reader
@@ -65,7 +65,9 @@ Its typed compile-time `tool.yaml` keeps the static name, folded purpose
 description, folded return guidance, and input schema together. The common
 loader validates both prose fields and joins them with a `Returns:` semantic
 boundary into the standard provider description. Its Rust module owns
-arguments, semantic validation, dynamic schema augmentation, and execution.
+arguments, semantic validation, and execution.
+The base `bash` adapter uses a non-login shell and inherits the picoagent
+process environment, avoiding per-call profile output and PATH rewrites.
 The loader rejects unknown manifest fields, empty or padded prose, and
 non-object input schemas. Domain engines remain separate: task state is owned
 by `TaskManager`, skills by `SkillRegistry`, and trajectory retrieval by
@@ -73,14 +75,11 @@ by `TaskManager`, skills by `SkillRegistry`, and trajectory retrieval by
 remain in `mcp.rs`.
 
 `build_app_tools` assembles process-wide local capabilities. `RunToolAssembly`
-is the single path that adds run-scoped history and task controls. Every
-registration explicitly says whether the model may name that tool in
-`spawn(kind=tool)`; this does not affect automatic promotion of a direct call
-whose foreground window elapses. The `spawn` tool's schema enum exposes the
-exact allowed set, so the model-visible schema and resume hash commit the same
-capability contract. `spawn/tool.yaml` contains the complete static superset;
-Rust injects the exact sorted tool enum and removes tool-only fields when that
-profile has no spawnable tools.
+is the single path that adds run-scoped history, task controls, and `delegate`
+for depth-eligible profiles. Ordinary tools are called directly; only an
+unfinished direct call can enter task control through foreground promotion.
+The model-visible schema set and resume hash therefore commit the same fixed
+capability contract without a dynamic spawn allowlist.
 
 Root and delegating/leaf GeneralTask have explicit capability sets. Each normal
 profile registers `history_search` and
@@ -111,9 +110,8 @@ sequence, a timestamp, SHA-256 of the exact Chat JSON, the layout needed to
 recover provider-neutral content, and a second SHA-256 over that reconstruction
 metadata. A queued steering input's idempotency id is stored separately when
 present. Tool-error state and opaque provider continuation items also remain
-there, as do structured result artifact refs and the exact preview-byte counts
-used to restore the per-run budget. Compaction request/state classification and
-state boundaries also live only in the sidecar. None of these
+there, as do structured result artifact refs. Compaction request/state
+classification and state boundaries also live only in the sidecar. None of these
 private fields are added to the Chat message. `run.json` identifies the format
 as `openai-chat-compatible`.
 
@@ -162,22 +160,27 @@ queued -> running -> completed
 
 Whether a terminal result has entered the parent context is derived from the
 parent's committed `BackgroundTaskResult` messages; task JSON does not carry a
-second authoritative `delivered` flag. A `spawn` result is one normal tool
-result; later completion is a new user/runtime message, never a second tool
-result with the same provider call id.
+second authoritative `delivered` flag. A `delegate` result is one normal tool
+result. For an automatically promoted direct call, the running acknowledgement
+fills the original provider `tool_call_id` slot. Later completion is a new
+user/runtime message correlated by `task_id`, never a second tool result with
+the same provider call id; artifact metadata retains that originating call id.
 
 The full run holds a filesystem execution lease. Resume rebuilds the recorded
 profile, validates provider/model/workspace identity, loads the paired message
 log and latest completed compacted state, and continues after the last completed
 model step. An unpaired direct tool request becomes an explicit interrupted
-error result; it is never automatically replayed.
+error result and is never automatically replayed. If the call had already been
+promoted, its durable task record instead reconstructs the missing task
+acknowledgement and supplies the terminal result separately.
 
 ### Artifact storage
 
 Large tool outputs are never discarded and do not enter the live context in
 full. The store writes the complete bytes, records immutable metadata, and gives
 the model a bounded beginning/end preview and a relative path it can inspect in
-pages. See [artifacts.md](artifacts.md).
+pages. Each result is limited independently; earlier tool output and compaction
+do not change how a later result is represented. See [artifacts.md](artifacts.md).
 
 ### Context compaction and trajectory retrieval
 
@@ -196,7 +199,9 @@ adopts provider-reported input usage whenever available. Configuring
 `compact_at_tokens` controls compacted-state creation only; the normal system
 prompt and history-tool schemas are already present and remain unchanged. The
 additional request uses the same provider, model, system, and frozen schemas,
-then appends one compaction user instruction. Returned tool calls are rejected.
+then appends one compaction user instruction. A returned tool call or empty
+state is never executed or committed; picoagent records the invalid attempt and
+retries that compaction request once.
 Picoagent does not implement provider/server-side compaction.
 
 `history_search` and `history_read` expose a read-only `TrajectoryReader`
@@ -261,18 +266,24 @@ project files; it is not a special second workspace abstraction. Child
 transcripts stay out of the parent context; only the bounded final result and
 artifact reference return to the parent.
 
-`spawn` starts a schema-listed tool or GeneralTask child in the background
-immediately. A direct ordinary tool starts in the foreground; when its configured
-foreground window elapses, the same in-flight future moves into this task
-lifecycle without stopping or restarting. Explicit background work has no hard
-execution deadline.
+All direct calls returned in one assistant message start concurrently and share
+one foreground window. The runner returns as soon as all settle. At the
+configured deadline, the same in-flight futures for only unfinished calls move
+into this task lifecycle without stopping or restarting. The runner resumes and
+tracks every unfinished future before awaiting promotion events, then commits
+tool-result messages in original call order with their original provider call
+ids; events may show actual completion order. A promoted result containing a
+task id is only a running acknowledgement, so dependent work waits for the
+separate terminal background message correlated by that id.
 
-The `task` control surface provides status, bounded wait, inspect, steer, and
-stop. Inspect projects a bounded page of the child's durable messages in their
-native Chat-compatible form. Steer appends a durable pending ordinary user
-message after the child's current assistant response and complete tool-call
-batch, before its next provider request. Stop aborts the selected future and
-commits `cancelled`; it does not affect unrelated tasks.
+`delegate` starts a GeneralTask child in the background immediately.
+`task_status`, `task_wait`, `task_inspect`, `task_steer`, and `task_stop`
+provide explicit lifecycle operations. Inspect projects a bounded page of the
+child's durable messages in their native Chat-compatible form. Steer appends a
+durable pending ordinary user message after the child's current assistant
+response and complete tool-call batch, before its next provider request. Stop
+aborts the selected future and commits `cancelled`; it does not affect unrelated
+tasks. Background work has no hard execution deadline.
 
 Each task record is durable coordination state only. Child messages remain in
 the child's run directory. Recovery derives delivered ids from the parent
@@ -281,8 +292,8 @@ effects, reconciles terminal children, and resumes queued/running children
 through the same runner. Resume validates the frozen tool-schema hash before
 task reconciliation can update any of those records.
 
-The durable child guarantee belongs to `spawn(kind="agent")` GeneralTask
-records, and the parent run is the only resume entrypoint. Memory consolidation
+The durable child guarantee belongs to `delegate` GeneralTask records, and the
+parent run is the only resume entrypoint. Memory consolidation
 uses this same path rather than a special direct-tool child.
 
 ## Prompt And Cache Shape

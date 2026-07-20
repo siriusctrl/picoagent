@@ -55,7 +55,7 @@ impl Tool for BashTool {
             .context("clone shell output spool for stderr")?;
         let mut command = Command::new("bash");
         command
-            .arg("-lc")
+            .arg("-c")
             .arg(&args.command)
             .current_dir(&context.workspace)
             .stdin(Stdio::null())

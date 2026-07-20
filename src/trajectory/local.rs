@@ -216,21 +216,23 @@ fn tool_pairs(messages: &[TrajectoryMessage]) -> Vec<ToolPair> {
 fn artifact_refs(record: &TrajectoryMessage) -> Result<Vec<&ArtifactRef>> {
     let mut artifacts = Vec::new();
     for content in &record.message.content {
-        let (expected_call_id, artifact) = match content {
+        let artifact = match content {
             MessageContent::ToolResult {
                 call_id, metadata, ..
-            } => (call_id.clone(), metadata.artifact.as_ref()),
-            MessageContent::BackgroundTaskResult {
-                task_id, metadata, ..
-            } => (format!("background-{task_id}"), metadata.artifact.as_ref()),
+            } => {
+                if let Some(artifact) = &metadata.artifact {
+                    ensure!(
+                        artifact.call_id == *call_id,
+                        "result metadata artifact call id `{}` does not match `{call_id}`",
+                        artifact.call_id
+                    );
+                }
+                metadata.artifact.as_ref()
+            }
+            MessageContent::BackgroundTaskResult { metadata, .. } => metadata.artifact.as_ref(),
             _ => continue,
         };
         if let Some(artifact) = artifact {
-            ensure!(
-                artifact.call_id == expected_call_id,
-                "result metadata artifact call id `{}` does not match `{expected_call_id}`",
-                artifact.call_id
-            );
             artifacts.push(artifact);
         }
     }

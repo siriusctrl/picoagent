@@ -8,26 +8,35 @@ use crate::model::ToolSpec;
 
 mod assembly;
 pub mod bash;
+pub mod delegate;
 pub mod history_read;
 pub mod history_search;
 pub mod load_skill;
 mod manifest;
 mod paths;
 pub mod read;
-pub mod spawn;
-pub mod task;
+pub mod task_inspect;
+mod task_result;
+pub mod task_status;
+pub mod task_steer;
+pub mod task_stop;
+pub mod task_wait;
 pub mod web_search;
 pub mod write;
 
 pub use assembly::{RunToolAssembly, build_app_tools};
 pub use bash::BashTool;
+pub use delegate::DelegateTool;
 pub use history_read::HistoryReadTool;
 pub use history_search::HistorySearchTool;
 pub use load_skill::LoadSkillTool;
 pub(crate) use manifest::embedded_tool_spec;
 pub use read::ReadTool;
-pub use spawn::SpawnTool;
-pub use task::TaskTool;
+pub use task_inspect::TaskInspectTool;
+pub use task_status::TaskStatusTool;
+pub use task_steer::TaskSteerTool;
+pub use task_stop::TaskStopTool;
+pub use task_wait::TaskWaitTool;
 pub use web_search::WebSearchTool;
 pub use write::WriteTool;
 
@@ -83,23 +92,10 @@ pub struct ToolRegistry {
 struct RegisteredTool {
     implementation: Arc<dyn Tool>,
     spec: ToolSpec,
-    explicit_spawn: ExplicitSpawn,
-}
-
-/// Whether the model may start this tool directly through `spawn(kind=tool)`.
-/// Foreground calls may still be promoted when their foreground window elapses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExplicitSpawn {
-    Allowed,
-    Denied,
 }
 
 impl ToolRegistry {
-    pub fn register(
-        &mut self,
-        implementation: Arc<dyn Tool>,
-        explicit_spawn: ExplicitSpawn,
-    ) -> Result<()> {
+    pub fn register(&mut self, implementation: Arc<dyn Tool>) -> Result<()> {
         let spec = implementation.spec();
         let name = spec.name.clone();
         if self.tools.contains_key(&name) {
@@ -110,7 +106,6 @@ impl ToolRegistry {
             RegisteredTool {
                 implementation,
                 spec,
-                explicit_spawn,
             },
         );
         Ok(())
@@ -130,25 +125,6 @@ impl ToolRegistry {
 
     pub fn contains(&self, name: &str) -> bool {
         self.tools.contains_key(name)
-    }
-
-    pub fn explicit_spawn_names(&self) -> Vec<String> {
-        self.tools
-            .iter()
-            .filter(|(_, tool)| tool.explicit_spawn == ExplicitSpawn::Allowed)
-            .map(|(name, _)| name.clone())
-            .collect()
-    }
-
-    pub(crate) fn explicitly_spawnable(&self) -> Self {
-        Self {
-            tools: self
-                .tools
-                .iter()
-                .filter(|(_, tool)| tool.explicit_spawn == ExplicitSpawn::Allowed)
-                .map(|(name, tool)| (name.clone(), tool.clone()))
-                .collect(),
-        }
     }
 }
 
@@ -182,26 +158,20 @@ mod registry_tests {
     }
 
     #[test]
-    fn registry_freezes_specs_once_and_tracks_spawnability_explicitly() {
+    fn registry_freezes_specs_once() {
         let calls = Arc::new(AtomicUsize::new(0));
         let mut registry = ToolRegistry::default();
         registry
-            .register(
-                Arc::new(CountingTool {
-                    name: "backgroundable",
-                    spec_calls: calls.clone(),
-                }),
-                ExplicitSpawn::Allowed,
-            )
+            .register(Arc::new(CountingTool {
+                name: "backgroundable",
+                spec_calls: calls.clone(),
+            }))
             .unwrap();
         registry
-            .register(
-                Arc::new(CountingTool {
-                    name: "control",
-                    spec_calls: calls.clone(),
-                }),
-                ExplicitSpawn::Denied,
-            )
+            .register(Arc::new(CountingTool {
+                name: "control",
+                spec_calls: calls.clone(),
+            }))
             .unwrap();
 
         assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -214,6 +184,5 @@ mod registry_tests {
             ["backgroundable", "control"]
         );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert_eq!(registry.explicit_spawn_names(), ["backgroundable"]);
     }
 }
