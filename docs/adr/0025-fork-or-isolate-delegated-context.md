@@ -31,6 +31,11 @@ the prefix and record reported usage without claiming a hit.
   message log before appending the child reminder and prompt. Preserve message
   timestamps and compaction request/state metadata. Clear pending-input ids:
   they are run-local steering idempotency keys and are not model context.
+- Preserve inherited model-facing messages and artifact refs byte-for-byte,
+  including original model-visible paths. Copy each referenced artifact into
+  a deterministic child-local snapshot before its message commits. History
+  and ordinary reads resolve the old path to that integrity-checked local copy;
+  nested forks copy from the immediate parent's snapshot.
 - Build the child's active context with the ordinary compaction projection.
   Its first model request reuses the parent's exact active messages and adds
   only the child suffix; automatic compaction is deferred until after that
@@ -55,11 +60,11 @@ history, and resume as portable run directories. Parallel siblings share the
 longest possible parent message prefix. Fresh remains available when copying a
 long context would cost more than restating the task.
 
-Each fork child duplicates its inherited trajectory on disk. This is an
-intentional simplicity tradeoff: local immutable JSONL is easier to inspect,
-move, and recover than cross-run references. A process loss during the copy
-still needs the parent until that fixed prefix finishes, but a completed
-snapshot has no such dependency.
+Each fork child duplicates its inherited trajectory and referenced artifact
+bytes on disk. This is an intentional simplicity tradeoff: local immutable
+JSONL and artifacts are easier to inspect, move, and recover than cross-run
+references. A process loss during the copy still needs the parent until that
+fixed prefix finishes, but a completed snapshot has no such dependency.
 
 The harness cannot guarantee a provider cache hit. Different tool schemas,
 expired provider cache entries, or provider routing can report zero cached

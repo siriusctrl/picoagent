@@ -352,6 +352,14 @@ pending-input ids are cleared. A complete child snapshot no longer reads the
 parent on resume, while a partial snapshot may finish copying through its
 already-recorded boundary.
 
+The copied prefix remains byte-identical even when it references artifacts, so
+provider cache shape does not change. Before each inherited message commits,
+its complete artifact bytes are copied under the child run using a stable name
+derived from the unchanged source ref. History search and ordinary `read`
+resolve the old model-visible path to that child-local copy and verify its
+ownership boundary, length, id, and digest. Nested forks resolve from the
+immediate parent's snapshot; a complete child never needs ancestor files.
+
 Each task record is durable coordination state only. Child messages remain in
 the child's run directory. Recovery derives delivered ids from the parent
 transcript, marks in-flight ordinary tools `interrupted` with unknown side

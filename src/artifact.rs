@@ -10,8 +10,12 @@ use crate::{
     tools::{RawToolOutput, ToolContext},
 };
 
+mod inherited;
 mod preview;
 
+pub(crate) use inherited::{
+    message_artifact_refs, snapshot_message_artifacts, verified_artifact_path_for_run,
+};
 pub use preview::{PreviewInfo, PreviewLimitation};
 use preview::{file_preview, textual_preview, unavailable_preview};
 

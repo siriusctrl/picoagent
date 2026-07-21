@@ -660,7 +660,7 @@ async fn recovered_child_retries_a_busy_lease_and_reconciles_completion() {
 }
 
 #[tokio::test]
-async fn completed_fork_snapshot_resumes_without_reading_the_parent_trajectory() {
+async fn completed_fork_snapshot_resumes_without_any_parent_run_files() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -709,48 +709,16 @@ async fn completed_fork_snapshot_resumes_without_reading_the_parent_trajectory()
         .update_state("fork-child", RunState::Running)
         .await
         .unwrap();
-    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
-    let mut task = BackgroundTaskRecord::queued_agent_with_context(
-        "agent-task".to_owned(),
-        "fork-child".to_owned(),
-        "fork-child".to_owned(),
-        "resume self-contained fork".to_owned(),
-        0,
-        DelegateContext::Fork,
-        Some(1),
-    );
-    task.state = BackgroundTaskState::Running;
-    task_store.write(&task).await.unwrap();
-
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
-        .await
-        .unwrap();
-    assert_eq!(recoverable.len(), 1);
-    tokio::fs::remove_file(&store.paths("parent").messages)
-        .await
-        .unwrap();
-    tokio::fs::remove_file(&store.paths("parent").message_metadata)
-        .await
-        .unwrap();
-    tokio::fs::remove_file(&store.paths("parent").metadata)
+    let runner = config(workspace.path(), &store, "parent").runner;
+    tokio::fs::remove_dir_all(store.paths("parent").directory)
         .await
         .unwrap();
 
-    manager
-        .resume_agent_task(recoverable[0].clone())
+    let completed = runner
+        .resume_child("fork-child".to_owned(), "parent")
         .await
         .unwrap();
-    let completed = tokio::time::timeout(Duration::from_secs(5), manager.wait_all())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
-    assert!(
-        completed[0]
-            .result
-            .as_ref()
-            .is_some_and(|result| result.content.contains("received:"))
-    );
+    assert!(completed.final_output.contains("received:"));
 }
 
 #[tokio::test]

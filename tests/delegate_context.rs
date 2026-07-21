@@ -19,8 +19,12 @@ use picoagent::{
     },
     storage::{DelegateContext, RunDirStore},
     tools::{RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
-    trajectory::CompactionMessage,
+    trajectory::{
+        CompactionMessage, HistoryMatchSource, HistoryReadRequest, HistorySearchRequest,
+        LocalTrajectoryReader, TrajectoryReader,
+    },
 };
+use regex::Regex;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -262,6 +266,8 @@ async fn delegate_rejects_a_missing_context_without_creating_a_child() {
 
 struct MarkerTool;
 
+const ARTIFACT_ONLY_NEEDLE: &str = "fork-artifact-only-needle-7f93";
+
 #[async_trait]
 impl Tool for MarkerTool {
     fn spec(&self) -> ToolSpec {
@@ -278,10 +284,15 @@ impl Tool for MarkerTool {
     }
 
     async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
-        Ok(RawToolOutput::text(format!(
-            "marker-{}",
-            arguments["label"].as_str().unwrap()
-        )))
+        let label = arguments["label"].as_str().unwrap();
+        if label == "old" {
+            return Ok(RawToolOutput::text(format!(
+                "{}\n{ARTIFACT_ONLY_NEEDLE}\n{}",
+                "a".repeat(20_000),
+                "z".repeat(20_000)
+            )));
+        }
+        Ok(RawToolOutput::text(format!("marker-{label}")))
     }
 }
 
@@ -429,6 +440,118 @@ async fn fork_preserves_the_active_compacted_projection_and_exact_history() {
         serialized(&record.message).contains("old-marker")
             || serialized(&record.message).contains("marker-old")
     }));
+
+    let inherited_artifact = trajectory
+        .iter()
+        .flat_map(|record| &record.message.content)
+        .find_map(|content| match content {
+            MessageContent::ToolResult {
+                call_id, metadata, ..
+            } if call_id == "old-marker" => metadata.artifact.clone(),
+            _ => None,
+        })
+        .expect("old compacted tool result should be artifact-backed");
+    assert_eq!(inherited_artifact.run_id, parent.run_id);
+    let boundary = usize::try_from(child.fork_parent_message_seq.unwrap()).unwrap();
+    let parent_messages = tokio::fs::read_to_string(&store.paths(&parent.run_id).messages)
+        .await
+        .unwrap();
+    let child_messages = tokio::fs::read_to_string(&store.paths(&child.id).messages)
+        .await
+        .unwrap();
+    assert_eq!(
+        child_messages.lines().take(boundary).collect::<Vec<_>>(),
+        parent_messages.lines().take(boundary).collect::<Vec<_>>()
+    );
+    let parent_metadata = tokio::fs::read_to_string(&store.paths(&parent.run_id).message_metadata)
+        .await
+        .unwrap();
+    let child_metadata = tokio::fs::read_to_string(&store.paths(&child.id).message_metadata)
+        .await
+        .unwrap();
+    assert_eq!(
+        child_metadata.lines().take(boundary).collect::<Vec<_>>(),
+        parent_metadata.lines().take(boundary).collect::<Vec<_>>()
+    );
+
+    tokio::fs::remove_dir_all(store.paths(&parent.run_id).directory)
+        .await
+        .unwrap();
+    let reader = LocalTrajectoryReader::new(store.clone());
+    let search = reader
+        .search(HistorySearchRequest {
+            run_id: child.id.clone(),
+            pattern: Regex::new(ARTIFACT_ONLY_NEEDLE).unwrap(),
+            max_matches: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(search.matches.len(), 1);
+    assert_eq!(search.matches[0].match_source, HistoryMatchSource::Artifact);
+    assert_eq!(
+        search.matches[0].artifact.as_deref(),
+        Some(inherited_artifact.path.as_str())
+    );
+    assert!(search.matches[0].snippet.contains(ARTIFACT_ONLY_NEEDLE));
+    let read = reader
+        .read(HistoryReadRequest {
+            run_id: child.id.clone(),
+            message_ref: search.matches[0].message_ref.clone(),
+            before: 1,
+            after: 1,
+        })
+        .await
+        .unwrap();
+    assert!(read.messages.iter().any(|record| {
+        record.message.content.iter().any(|content| {
+            matches!(
+                content,
+                MessageContent::ToolResult { metadata, .. }
+                    if metadata.artifact.as_ref() == Some(&inherited_artifact)
+            )
+        })
+    }));
+
+    let artifact_output = ReadTool::default()
+        .execute(
+            ToolContext {
+                run_id: child.id.clone(),
+                call_id: "read-inherited-artifact".to_owned(),
+                workspace: workspace.path().to_owned(),
+            },
+            json!({"path": inherited_artifact.path}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8(artifact_output.content)
+            .unwrap()
+            .contains(ARTIFACT_ONLY_NEEDLE)
+    );
+
+    let mut artifacts = tokio::fs::read_dir(store.paths(&child.id).artifacts)
+        .await
+        .unwrap();
+    let inherited_copy = loop {
+        let entry = artifacts.next_entry().await.unwrap().unwrap();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("inherited-") && name.ends_with(".txt") {
+            break entry.path();
+        }
+    };
+    let bytes = tokio::fs::read(&inherited_copy).await.unwrap();
+    tokio::fs::write(&inherited_copy, vec![b'x'; bytes.len()])
+        .await
+        .unwrap();
+    let error = reader
+        .search(HistorySearchRequest {
+            run_id: child.id,
+            pattern: Regex::new(ARTIFACT_ONLY_NEEDLE).unwrap(),
+            max_matches: 10,
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("artifact content hash changed"));
 }
 
 fn runner(

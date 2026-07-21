@@ -1,4 +1,7 @@
-use std::{io::Cursor, path::Path};
+use std::{
+    io::Cursor,
+    path::{Component, Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
@@ -8,7 +11,9 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 
 use crate::{
+    artifact::{ArtifactRef, message_artifact_refs, verified_artifact_path_for_run},
     model::ToolSpec,
+    storage::RunDirStore,
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
@@ -54,7 +59,10 @@ impl Tool for ReadTool {
         if args.line_offset != 0 && args.byte_offset != 0 {
             bail!("read line_offset and byte_offset are mutually exclusive");
         }
-        let path = resolve_path(&context.workspace, &args.path);
+        let requested_path = resolve_path(&context.workspace, &args.path);
+        let path = resolve_inherited_artifact(&context, &args.path, &requested_path)
+            .await?
+            .unwrap_or(requested_path);
         if let Some(image) = image_kind(&path) {
             ensure!(
                 self.image_enabled,
@@ -169,6 +177,53 @@ impl Tool for ReadTool {
         }
         Ok(RawToolOutput::text(text))
     }
+}
+
+async fn resolve_inherited_artifact(
+    context: &ToolContext,
+    requested: &str,
+    requested_path: &Path,
+) -> Result<Option<PathBuf>> {
+    if !is_run_artifact_path(&context.workspace, requested_path) {
+        return Ok(None);
+    }
+    let trajectory = RunDirStore::new(&context.workspace)
+        .load_trajectory(&context.run_id)
+        .await?;
+    let mut inherited: Option<ArtifactRef> = None;
+    for artifact in trajectory
+        .iter()
+        .flat_map(|record| message_artifact_refs(&record.message))
+        .filter(|artifact| artifact.run_id != context.run_id)
+        .filter(|artifact| resolve_path(&context.workspace, &artifact.path) == requested_path)
+    {
+        if let Some(previous) = &inherited {
+            ensure!(
+                previous == artifact,
+                "inherited artifact path `{requested}` refers to multiple immutable artifacts"
+            );
+        } else {
+            inherited = Some(artifact.clone());
+        }
+    }
+    let Some(artifact) = inherited else {
+        return Ok(None);
+    };
+    verified_artifact_path_for_run(&context.workspace, &context.run_id, &artifact)
+        .await
+        .map(Some)
+}
+
+fn is_run_artifact_path(workspace: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(workspace) else {
+        return false;
+    };
+    let mut components = relative.components();
+    matches!(components.next(), Some(Component::Normal(value)) if value == ".pico")
+        && matches!(components.next(), Some(Component::Normal(value)) if value == "runs")
+        && matches!(components.next(), Some(Component::Normal(_)))
+        && matches!(components.next(), Some(Component::Normal(value)) if value == "artifacts")
+        && components.next().is_some()
 }
 
 #[derive(Debug, Clone, Copy)]

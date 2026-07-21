@@ -28,6 +28,15 @@ impl AgentRunner {
                 "fork boundary m{boundary} is not present in parent run `{parent_run_id}`"
             );
             let expected = &parent[..boundary as usize];
+            for source in expected {
+                crate::artifact::snapshot_message_artifacts(
+                    &self.workspace,
+                    parent_run_id,
+                    child_run_id,
+                    &source.message,
+                )
+                .await?;
+            }
             for (index, (stored, source)) in child.iter().zip(expected).enumerate() {
                 ensure!(
                     fork_records_equal(stored, source)?,

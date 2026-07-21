@@ -10,6 +10,8 @@ bounded model-facing envelope.
 .pico/runs/<run-id>/artifacts/
   <tool-call-id>-<sha256-prefix>.<extension>
   <tool-call-id>-<sha256-prefix>.artifact.json
+  inherited-<source-ref-sha256>.<extension>
+  inherited-<source-ref-sha256>.artifact.json
 ```
 
 Persisted references are relative to the workspace. Run directories can be
@@ -28,6 +30,19 @@ Artifact ids are immutable within a run. Metadata includes:
 - SHA-256 digest
 
 Changing the content while retaining the same id and hash metadata is invalid.
+
+A forked child keeps every inherited Chat message and `ArtifactRef` unchanged;
+paired metadata differs only where the fork contract clears run-local pending
+input ids. An inherited ref therefore still contains the original run id and
+model-visible path. Before committing the corresponding child message,
+picoagent copies the complete bytes into the child's artifact directory under
+a deterministic name derived from that exact source ref and writes a
+child-owned sidecar. History lookup and ordinary `read` resolve the original
+path through this run-local copy and verify its directory containment, byte
+length, artifact id, and SHA-256. A nested fork copies from its immediate
+parent's local snapshot when the original run no longer exists. Once all
+inherited messages commit, neither artifact access nor child resume reads
+parent run files.
 
 ## Model-Facing Envelope
 
@@ -114,6 +129,12 @@ through SHA-256 verification, then performs its bounded `rg` search. Artifact
 matches return the exact path as well as the owning message ref, so a batched
 message with several task results is not ambiguous. Reused call ids do not
 create ambiguity, and same-length content mutation is rejected.
+
+For a forked child, the exact ref may name an ancestor run even though search is
+reading the child's deterministic local copy. Search continues to return the
+original model-visible path; the ordinary `read` tool recognizes that path from
+the child trajectory and opens the verified local copy. It never silently
+falls back to mutable ancestor bytes.
 
 ## Lifecycle
 

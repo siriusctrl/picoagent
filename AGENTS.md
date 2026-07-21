@@ -61,7 +61,9 @@ navigation, invariants, verification, and handoff.
 - A `delegate` call must choose `fresh` isolation or `fork` inheritance. Fork
   snapshots the parent input before the assistant delegate turn; same-batch
   siblings share that boundary, and each child run is self-contained and
-  resumable after its snapshot commits.
+  resumable after its snapshot commits. Preserve inherited model-facing
+  messages and artifact refs exactly; copy referenced artifacts into the child
+  and resolve their original paths through integrity-checked local snapshots.
 - Treat completed messages as the resumable boundary. Stream deltas are events,
   not durable conversation messages.
 - Keep `messages.jsonl` in the declared `openai-chat-compatible` shape. Store
