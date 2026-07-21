@@ -21,7 +21,7 @@ pub(crate) enum Command {
         #[arg(long, value_enum, default_value = "text")]
         output: OutputFormat,
     },
-    /// Continue an interrupted or failed run from its last complete message.
+    /// Continue an interrupted or failed run from its last complete checkpoint.
     Resume {
         run_id: String,
         #[arg(long, value_enum, default_value = "text")]

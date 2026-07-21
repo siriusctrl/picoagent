@@ -60,9 +60,17 @@ projections, so the durable format does not need to imitate one provider.
   attempt to detect deliberate same-shape mutation with hashes. Run directories
   are trusted local state; artifact bytes retain their separate integrity
   contract.
+
 - The runtime must enforce the sole-writer assumption through the execution
   lease. Code that bypasses the runner and concurrently appends through
   independent stores violates the contract.
+
+ADR 0033 later removes fork snapshots; the one-record message contract remains
+unchanged.
+
+ADR 0034 later groups those one-record lines into atomic logical checkpoints.
+A newline still completes one physical record, while readers publish a group
+only after every declared line is present.
 
 ## Alternatives Considered
 

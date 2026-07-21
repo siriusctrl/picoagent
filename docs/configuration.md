@@ -212,7 +212,7 @@ wait_timeout_seconds = 10
 
 [agents.general_task]
 # model = "smaller-compatible-model" # defaults to the primary provider model
-max_output_tokens = 4096
+# max_output_tokens = 4096 # defaults to the root agent limit
 ```
 
 `foreground_tool_timeout_seconds` is one shared promotion window for all

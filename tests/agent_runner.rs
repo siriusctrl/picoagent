@@ -15,14 +15,14 @@ use picoagent::{
         runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
         task::{BackgroundTaskState, TaskManager, TaskManagerConfig},
     },
-    artifact::{ArtifactPolicy, ArtifactStore},
+    artifact::{ArtifactPolicy, ArtifactStore, ResultMetadata},
     events::{NoopEventSink, SharedEventSink},
     hooks::{CommandHook, HookEvent, HookPipeline},
     model::{
         Message, MessageContent, ModelModality, ModelProvider, ModelRequest, ModelResponse,
         ModelUsage, Role, ToolCall, echo::EchoProvider,
     },
-    storage::{DelegateContext, RunDirStore, RunRecord, RunState},
+    storage::{RunDirStore, RunRecord, RunState},
     tools::{RawToolOutput, Tool, ToolContext, ToolRegistry},
 };
 use serde_json::{Value, json};
@@ -72,7 +72,7 @@ fn background_task_id(content: &str) -> Option<String> {
 
 struct ResumeProvider {
     calls: Arc<AtomicUsize>,
-    require_interrupted_result: bool,
+    require_restart_reminder: bool,
 }
 
 #[async_trait]
@@ -87,17 +87,18 @@ impl ModelProvider for ResumeProvider {
         _events: SharedEventSink,
     ) -> Result<ModelResponse> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        if self.require_interrupted_result
+        if self.require_restart_reminder
             && !request.messages.iter().any(|message| {
                 message.content.iter().any(|content| match content {
-                    MessageContent::ToolResult {
-                        content, is_error, ..
-                    } => *is_error && content.contains("side effects are unknown"),
+                    MessageContent::RuntimeReminder { text } => {
+                        text.contains("uncommitted model/tool turn was discarded")
+                            && text.contains("side effects may already have occurred")
+                    }
                     _ => false,
                 })
             })
         {
-            bail!("resume request omitted the interrupted tool result");
+            bail!("resume request omitted the restart reminder");
         }
         Ok(text_response("resumed", ModelUsage::default()))
     }
@@ -156,7 +157,7 @@ async fn create_interrupted_run(store: &RunDirStore, workspace: &Path, run_id: &
             .with_provider_resume_fingerprint(
                 ResumeProvider {
                     calls: Arc::new(AtomicUsize::new(0)),
-                    require_interrupted_result: false,
+                    require_restart_reminder: false,
                 }
                 .resume_fingerprint(),
             ),
@@ -171,21 +172,45 @@ async fn create_interrupted_run(store: &RunDirStore, workspace: &Path, run_id: &
 }
 
 #[tokio::test]
-async fn resume_marks_incomplete_tool_calls_interrupted_without_reexecution() {
+async fn resume_discards_an_incomplete_tool_checkpoint_and_warns_without_reexecution() {
     let workspace = TempDir::new().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    create_interrupted_run(&store, workspace.path(), "resume-tool").await;
-    store
-        .append_message(
+    let setup_store = RunDirStore::new(workspace.path());
+    create_interrupted_run(&setup_store, workspace.path(), "resume-tool").await;
+    setup_store
+        .append_checkpoint(
             "resume-tool",
-            &Message::assistant(vec![MessageContent::ToolCall {
-                id: "side-effect-call".to_owned(),
-                name: "side_effect".to_owned(),
-                arguments: json!({}).into(),
-            }]),
+            &[
+                Message::assistant(vec![MessageContent::ToolCall {
+                    id: "side-effect-call".to_owned(),
+                    name: "side_effect".to_owned(),
+                    arguments: json!({}).into(),
+                }]),
+                Message {
+                    role: Role::Tool,
+                    content: vec![MessageContent::ToolResult {
+                        call_id: "side-effect-call".to_owned(),
+                        content: "uncommitted result".to_owned(),
+                        is_error: false,
+                        metadata: ResultMetadata::empty(),
+                    }],
+                },
+            ],
         )
         .await
         .unwrap();
+    let messages_path = setup_store.paths("resume-tool").messages;
+    let bytes = tokio::fs::read(&messages_path).await.unwrap();
+    let incomplete_end = bytes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, byte)| (*byte == b'\n').then_some(index + 1))
+        .nth(1)
+        .unwrap();
+    tokio::fs::write(&messages_path, &bytes[..incomplete_end])
+        .await
+        .unwrap();
+    let store = RunDirStore::new(workspace.path());
+    assert_eq!(store.load_messages("resume-tool").await.unwrap().len(), 1);
     let model_calls = Arc::new(AtomicUsize::new(0));
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::default();
@@ -197,7 +222,7 @@ async fn resume_marks_incomplete_tool_calls_interrupted_without_reexecution() {
         &store,
         ResumeProvider {
             calls: model_calls.clone(),
-            require_interrupted_result: true,
+            require_restart_reminder: true,
         },
         tools,
     );
@@ -207,305 +232,11 @@ async fn resume_marks_incomplete_tool_calls_interrupted_without_reexecution() {
     assert_eq!(model_calls.load(Ordering::SeqCst), 1);
     assert_eq!(tool_calls.load(Ordering::SeqCst), 0);
     let messages = store.load_messages("resume-tool").await.unwrap();
-    assert_eq!(messages.len(), 4);
+    assert_eq!(messages.len(), 3);
     assert!(matches!(
         messages[2].content.as_slice(),
-        [MessageContent::ToolResult {
-            content,
-            is_error: true,
-            metadata,
-            ..
-        }] if metadata.artifact.is_none() && !content.is_empty()
+        [MessageContent::Text { text }] if text == "resumed"
     ));
-}
-
-struct MalformedResumeProvider(Arc<AtomicUsize>);
-
-#[async_trait]
-impl ModelProvider for MalformedResumeProvider {
-    fn name(&self) -> &str {
-        "malformed-resume"
-    }
-
-    async fn complete(
-        &self,
-        request: ModelRequest,
-        _events: SharedEventSink,
-    ) -> Result<ModelResponse> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        let recovered = request
-            .messages
-            .iter()
-            .flat_map(|message| &message.content)
-            .any(|content| {
-                matches!(
-                    content,
-                    MessageContent::ToolResult {
-                        call_id,
-                        content,
-                        is_error: true,
-                        ..
-                    } if call_id == "malformed-call"
-                        && content.contains("tool arguments are not valid JSON")
-                        && !content.contains("side effects are unknown")
-                )
-            });
-        if !recovered {
-            bail!("resume omitted the deterministic malformed-argument result");
-        }
-        Ok(text_response("malformed recovered", ModelUsage::default()))
-    }
-}
-
-#[tokio::test]
-async fn resume_reconstructs_malformed_arguments_without_running_the_tool() {
-    let workspace = TempDir::new().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let provider = Arc::new(MalformedResumeProvider(Arc::new(AtomicUsize::new(0))));
-    store
-        .create_run(
-            &RunRecord::new(
-                "resume-malformed",
-                "resume malformed",
-                provider.name(),
-                "scripted",
-                workspace.path().to_path_buf(),
-                None,
-            )
-            .with_provider_resume_fingerprint(provider.resume_fingerprint()),
-        )
-        .await
-        .unwrap();
-    store
-        .update_state("resume-malformed", RunState::Running)
-        .await
-        .unwrap();
-    store
-        .append_message(
-            "resume-malformed",
-            &Message::text(Role::User, "resume malformed"),
-        )
-        .await
-        .unwrap();
-    store
-        .append_message(
-            "resume-malformed",
-            &Message::assistant(vec![MessageContent::ToolCall {
-                id: "malformed-call".to_owned(),
-                name: "side_effect".to_owned(),
-                arguments: picoagent::model::ToolArguments::from_raw("{\"value\":"),
-            }]),
-        )
-        .await
-        .unwrap();
-    let executions = Arc::new(AtomicUsize::new(0));
-    let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(CountingTool(executions.clone())))
-        .unwrap();
-    let runner = AgentRunner::new(AgentRunnerConfig {
-        provider: provider.clone(),
-        model: "scripted".to_owned(),
-        workspace: workspace.path().to_path_buf(),
-        skill_catalog: String::new(),
-        tools,
-        artifacts: ArtifactStore::new(ArtifactPolicy {
-            inline_limit_bytes: 1,
-            preview_head_bytes: 256,
-            preview_tail_bytes: 64,
-        }),
-        store: store.clone(),
-        hooks: HookPipeline::new(),
-        memory: None,
-        extra_events: Arc::new(NoopEventSink),
-        options: RunnerOptions::default(),
-    });
-
-    let result = runner.resume("resume-malformed").await.unwrap();
-    assert_eq!(result.final_output, "malformed recovered");
-    assert_eq!(provider.0.load(Ordering::SeqCst), 1);
-    assert_eq!(executions.load(Ordering::SeqCst), 0);
-    let messages = store.load_messages(&result.run_id).await.unwrap();
-    let metadata = messages
-        .iter()
-        .flat_map(|message| &message.content)
-        .find_map(|content| match content {
-            MessageContent::ToolResult {
-                call_id, metadata, ..
-            } if call_id == "malformed-call" => Some(metadata),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(
-        metadata.artifact.as_ref().unwrap().call_id,
-        "malformed-call"
-    );
-}
-
-struct CompletedPromotionRecoveryProvider;
-
-#[async_trait]
-impl ModelProvider for CompletedPromotionRecoveryProvider {
-    fn name(&self) -> &str {
-        "completed-promotion-recovery"
-    }
-
-    async fn complete(
-        &self,
-        request: ModelRequest,
-        _events: SharedEventSink,
-    ) -> Result<ModelResponse> {
-        let acknowledgement = request
-            .messages
-            .iter()
-            .flat_map(|message| &message.content)
-            .find_map(|content| match content {
-                MessageContent::ToolResult {
-                    call_id,
-                    content,
-                    is_error,
-                    ..
-                } if call_id == "promoted-call" => Some((content, is_error)),
-                _ => None,
-            })
-            .context("resume omitted the promoted tool acknowledgement")?;
-        if *acknowledgement.1
-            || !acknowledgement
-                .0
-                .contains("<background_task task_id=\"t1\"")
-            || !acknowledgement.0.contains("name=\"side_effect\"")
-            || acknowledgement.0.contains("status=")
-        {
-            bail!("resume synthesized the wrong acknowledgement: {acknowledgement:?}");
-        }
-        let delivered = request
-            .messages
-            .iter()
-            .flat_map(|message| &message.content)
-            .any(|content| {
-                matches!(
-                    content,
-                    MessageContent::BackgroundTask {
-                        task_id,
-                        status,
-                        content,
-                        ..
-                    } if task_id == "t1"
-                        && status.as_deref() == Some("completed")
-                        && content == "completed output"
-                )
-            });
-        if !delivered {
-            bail!("resume omitted the durable completed background result");
-        }
-        Ok(text_response(
-            "recovered completed promotion",
-            ModelUsage::default(),
-        ))
-    }
-}
-
-#[tokio::test]
-async fn resume_reconstructs_a_missing_promotion_ack_from_its_terminal_task() {
-    let workspace = TempDir::new().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let provider = Arc::new(CompletedPromotionRecoveryProvider);
-    store
-        .create_run(
-            &RunRecord::new(
-                "resume-completed-promotion",
-                "resume a promoted tool",
-                provider.name(),
-                "scripted",
-                workspace.path().to_path_buf(),
-                None,
-            )
-            .with_provider_resume_fingerprint(provider.resume_fingerprint()),
-        )
-        .await
-        .unwrap();
-    store
-        .update_state("resume-completed-promotion", RunState::Running)
-        .await
-        .unwrap();
-    store
-        .append_message(
-            "resume-completed-promotion",
-            &Message::text(Role::User, "resume a promoted tool"),
-        )
-        .await
-        .unwrap();
-    store
-        .append_message(
-            "resume-completed-promotion",
-            &Message::assistant(vec![MessageContent::ToolCall {
-                id: "promoted-call".to_owned(),
-                name: "side_effect".to_owned(),
-                arguments: json!({}).into(),
-            }]),
-        )
-        .await
-        .unwrap();
-    let tasks = store
-        .paths("resume-completed-promotion")
-        .directory
-        .join("tasks");
-    tokio::fs::create_dir_all(&tasks).await.unwrap();
-    tokio::fs::write(
-        tasks.join("t1.json"),
-        serde_json::to_vec_pretty(&json!({
-            "version": 9,
-            "id": "t1",
-            "kind": "tool",
-            "name": "side_effect",
-            "origin_call_id": "promoted-call",
-            "state": "completed",
-            "result": {
-                "content": "completed output",
-                "metadata": {"artifact": null}
-            },
-            "error": null,
-            "child_run_id": null,
-            "child_remaining_delegation_depth": null,
-            "delegate_context": null,
-            "fork_parent_message_seq": null,
-            "prompt": null,
-            "created_at": chrono::Utc::now()
-        }))
-        .unwrap(),
-    )
-    .await
-    .unwrap();
-
-    let mut tools = ToolRegistry::default();
-    tools
-        .register(Arc::new(CountingTool(Arc::new(AtomicUsize::new(0)))))
-        .unwrap();
-    let runner = AgentRunner::new(AgentRunnerConfig {
-        provider,
-        model: "scripted".to_owned(),
-        workspace: workspace.path().to_path_buf(),
-        skill_catalog: String::new(),
-        tools,
-        artifacts: ArtifactStore::default(),
-        store: store.clone(),
-        hooks: HookPipeline::new(),
-        memory: None,
-        extra_events: Arc::new(NoopEventSink),
-        options: RunnerOptions::default(),
-    });
-
-    let result = runner.resume("resume-completed-promotion").await.unwrap();
-    assert_eq!(result.final_output, "recovered completed promotion");
-    let messages = store
-        .load_messages("resume-completed-promotion")
-        .await
-        .unwrap();
-    assert!(
-        !messages
-            .iter()
-            .any(|message| { message.visible_text().contains("side effects are unknown") })
-    );
 }
 
 #[tokio::test]
@@ -515,7 +246,7 @@ async fn resume_rejects_changed_model_modalities_before_calling_the_provider() {
     let calls = Arc::new(AtomicUsize::new(0));
     let provider = ResumeProvider {
         calls: calls.clone(),
-        require_interrupted_result: false,
+        require_restart_reminder: false,
     };
     store
         .create_run(
@@ -542,7 +273,7 @@ async fn resume_rejects_changed_model_modalities_before_calling_the_provider() {
         &store,
         ResumeProvider {
             calls: calls.clone(),
-            require_interrupted_result: false,
+            require_restart_reminder: false,
         },
         ToolRegistry::default(),
     );
@@ -560,7 +291,7 @@ async fn resume_schema_mismatch_does_not_reconcile_background_tasks() {
     let model_calls = Arc::new(AtomicUsize::new(0));
     let provider = ResumeProvider {
         calls: model_calls.clone(),
-        require_interrupted_result: false,
+        require_restart_reminder: false,
     };
     let mut tools = ToolRegistry::default();
     tools.register(Arc::new(HangingTool)).unwrap();
@@ -594,7 +325,6 @@ async fn resume_schema_mismatch_does_not_reconcile_background_tasks() {
         .delegate(
             "hang_child".to_owned(),
             "hang child".to_owned(),
-            DelegateContext::Fresh,
             "delegate-schema-call",
         )
         .await
@@ -650,7 +380,7 @@ async fn resume_finalizes_an_already_durable_final_assistant_without_model_repla
         &store,
         ResumeProvider {
             calls: model_calls.clone(),
-            require_interrupted_result: false,
+            require_restart_reminder: false,
         },
         ToolRegistry::default(),
     );
@@ -658,6 +388,11 @@ async fn resume_finalizes_an_already_durable_final_assistant_without_model_repla
     let result = runner.resume("resume-final").await.unwrap();
     assert_eq!(result.final_output, "already finished");
     assert_eq!(model_calls.load(Ordering::SeqCst), 0);
+    let messages = store.load_messages("resume-final").await.unwrap();
+    assert_eq!(messages.len(), 2);
+    assert!(!messages.iter().any(|message| message.content.iter().any(
+        |content| matches!(content, MessageContent::RuntimeReminder { text } if text.contains("uncommitted model/tool turn was discarded"))
+    )));
     assert_eq!(
         store.load_run("resume-final").await.unwrap().state,
         RunState::Completed
@@ -683,11 +418,10 @@ async fn public_resume_rejects_a_child_run_in_favor_of_parent_recovery() {
                 Some("parent".to_owned()),
             )
             .with_execution_context("general_task_leaf", 1, None, 0)
-            .with_delegate_context(DelegateContext::Fresh, None)
             .with_provider_resume_fingerprint(
                 ResumeProvider {
                     calls: Arc::new(AtomicUsize::new(0)),
-                    require_interrupted_result: false,
+                    require_restart_reminder: false,
                 }
                 .resume_fingerprint(),
             ),
@@ -699,7 +433,7 @@ async fn public_resume_rejects_a_child_run_in_favor_of_parent_recovery() {
         &store,
         ResumeProvider {
             calls: Arc::new(AtomicUsize::new(0)),
-            require_interrupted_result: false,
+            require_restart_reminder: false,
         },
         ToolRegistry::default(),
     );
@@ -893,6 +627,22 @@ async fn runner_spills_a_large_result_without_affecting_the_next_small_result() 
 
     let messages = store.load_messages(&result.run_id).await.unwrap();
     assert_eq!(messages.len(), 6);
+    let stored_lines = tokio::fs::read_to_string(store.paths(&result.run_id).messages)
+        .await
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    for (index, line) in stored_lines[1..3].iter().enumerate() {
+        assert_eq!(line["_pico"]["checkpoint"]["first_message_ref"], "m2");
+        assert_eq!(line["_pico"]["checkpoint"]["index"], index);
+        assert_eq!(line["_pico"]["checkpoint"]["count"], 2);
+    }
+    for (index, line) in stored_lines[3..5].iter().enumerate() {
+        assert_eq!(line["_pico"]["checkpoint"]["first_message_ref"], "m4");
+        assert_eq!(line["_pico"]["checkpoint"]["index"], index);
+        assert_eq!(line["_pico"]["checkpoint"]["count"], 2);
+    }
     assert_eq!(
         messages
             .iter()
@@ -966,16 +716,12 @@ impl ModelProvider for DelegatingProvider {
                     ToolCall {
                         id: "delegate-one".to_owned(),
                         name: "delegate".to_owned(),
-                        arguments:
-                            json!({"name": "child_one", "prompt": "child one", "context": "fresh"})
-                                .into(),
+                        arguments: json!({"name": "child_one", "prompt": "child one"}).into(),
                     },
                     ToolCall {
                         id: "delegate-two".to_owned(),
                         name: "delegate".to_owned(),
-                        arguments:
-                            json!({"name": "child_two", "prompt": "child two", "context": "fresh"})
-                                .into(),
+                        arguments: json!({"name": "child_two", "prompt": "child two"}).into(),
                     },
                 ],
                 ModelUsage::default(),
@@ -1151,9 +897,7 @@ impl ModelProvider for LastStepBackgroundProvider {
                 vec![ToolCall {
                     id: "delegate-edge".to_owned(),
                     name: "delegate".to_owned(),
-                    arguments:
-                        json!({"name": "slow_child", "prompt": "slow child", "context": "fresh"})
-                            .into(),
+                    arguments: json!({"name": "slow_child", "prompt": "slow child"}).into(),
                 }],
                 ModelUsage::default(),
             ));
@@ -1570,7 +1314,7 @@ impl ModelProvider for SteeringProvider {
             vec![ToolCall {
                 id: "delegate-steered-child".to_owned(),
                 name: "delegate".to_owned(),
-                arguments: json!({"name": "steer_target", "prompt": "child steer target", "context": "fresh"}).into(),
+                arguments: json!({"name": "steer_target", "prompt": "child steer target"}).into(),
             }],
             ModelUsage::default(),
         ))

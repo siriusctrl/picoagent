@@ -1,9 +1,12 @@
 # ADR 0025: Fork or Isolate Delegated Context
 
-- Status: Accepted
+- Status: Superseded by ADR 0033
 - Date: 2026-07-21
 - Refines: ADR 0006 (durable GeneralTask child recovery)
 - Refines: ADR 0017 (delegate start contract)
+
+ADR 0033 removes fork inheritance and makes every delegated child isolated.
+The decision below is retained as historical context.
 
 ## Context
 

@@ -37,9 +37,20 @@ impl AgentRunner {
         request: RunRequest,
         run_id: String,
     ) -> Result<RunResult> {
-        let plan = self.plan(&request);
-        let mut record = RunRecord::new(
-            &run_id,
+        self.prepare_run(&request, &run_id).await?;
+
+        let lease = self.store.acquire_run_lease(&run_id).await?;
+        self.run_with_mode(request, run_id, RunMode::New, lease.clone())
+            .await
+    }
+
+    /// Persist a queued run before its owner advertises it. Delegation uses
+    /// this to guarantee that every committed child task already has a
+    /// self-contained run directory which can be resumed after a restart.
+    pub(crate) async fn prepare_run(&self, request: &RunRequest, run_id: &str) -> Result<()> {
+        let plan = self.plan(request);
+        let record = RunRecord::new(
+            run_id,
             &request.prompt,
             self.provider.name(),
             &plan.model,
@@ -54,14 +65,8 @@ impl AgentRunner {
         )
         .with_model_modalities(plan.modalities.clone())
         .with_provider_resume_fingerprint(self.provider.resume_fingerprint());
-        if let Some(context) = &request.delegated_context {
-            record = record.with_delegate_context(context.mode, context.fork_parent_message_seq);
-        }
         self.store.create_run(&record).await?;
-
-        let lease = self.store.acquire_run_lease(&run_id).await?;
-        self.run_with_mode(request, run_id, RunMode::New, lease.clone())
-            .await
+        Ok(())
     }
 
     pub(super) async fn run_with_mode(
@@ -107,19 +112,17 @@ impl AgentRunner {
                     .model
                     .clone()
                     .unwrap_or_else(|| self.model.clone()),
-                self.options.general_task.max_output_tokens,
+                self.options
+                    .general_task
+                    .max_output_tokens
+                    .or(self.options.max_output_tokens),
             ),
         };
         let remaining_delegation_depth = request
             .remaining_delegation_depth
             .unwrap_or(self.options.max_subagent_depth);
-        let model = request
-            .delegated_context
-            .as_ref()
-            .and_then(|context| context.model_override.clone())
-            .unwrap_or(profile_model);
         RunPlan {
-            model,
+            model: profile_model,
             modalities: self.options.model_modalities.clone(),
             max_output_tokens,
             remaining_delegation_depth,

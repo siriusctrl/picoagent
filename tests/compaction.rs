@@ -329,7 +329,7 @@ async fn resume_after_a_durable_compacted_state_continues_instead_of_finalizing_
             .iter()
             .filter(|record| record.compaction_state().is_some())
             .count(),
-        1
+        2
     );
     assert_eq!(trajectory.last().unwrap().message.role, Role::Assistant);
     assert!(trajectory.last().unwrap().compaction.is_none());
@@ -511,6 +511,11 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     assert!(messages[6].get("type").is_none());
     assert_eq!(messages[5]["_pico"]["compaction"]["kind"], "request");
     assert_eq!(messages[6]["_pico"]["compaction"]["kind"], "state");
+    for (index, message) in messages[5..7].iter().enumerate() {
+        assert_eq!(message["_pico"]["checkpoint"]["first_message_ref"], "m6");
+        assert_eq!(message["_pico"]["checkpoint"]["index"], index);
+        assert_eq!(message["_pico"]["checkpoint"]["count"], 2);
+    }
     assert_eq!(
         messages[6]["_pico"]["compaction"]["state"]
             .as_object()

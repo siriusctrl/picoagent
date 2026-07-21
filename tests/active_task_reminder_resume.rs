@@ -13,7 +13,7 @@ use picoagent::{
     model::{
         Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
     },
-    storage::{DelegateContext, RunDirStore, RunRecord, RunState},
+    storage::{RunDirStore, RunRecord, RunState},
     tools::ToolRegistry,
 };
 use serde_json::json;
@@ -147,6 +147,31 @@ async fn create_resumable_parent_and_child(
         .append_message("resume-parent", &Message::text(Role::User, "resume parent"))
         .await
         .unwrap();
+    store
+        .append_checkpoint(
+            "resume-parent",
+            &[
+                Message {
+                    role: Role::Assistant,
+                    content: vec![MessageContent::ToolCall {
+                        id: "resume-delegate-call".to_owned(),
+                        name: "delegate".to_owned(),
+                        arguments: json!({}).into(),
+                    }],
+                },
+                Message {
+                    role: Role::Tool,
+                    content: vec![MessageContent::ToolResult {
+                        call_id: "resume-delegate-call".to_owned(),
+                        content: "background task started".to_owned(),
+                        is_error: false,
+                        metadata: picoagent::artifact::ResultMetadata::empty(),
+                    }],
+                },
+            ],
+        )
+        .await
+        .unwrap();
 
     store
         .create_run(
@@ -164,7 +189,6 @@ async fn create_resumable_parent_and_child(
                 Some(picoagent::prompts::agent_prompts().general_task.clone()),
                 0,
             )
-            .with_delegate_context(DelegateContext::Fresh, None)
             .with_provider_resume_fingerprint(fingerprint),
         )
         .await
@@ -186,7 +210,7 @@ async fn create_resumable_parent_and_child(
     tokio::fs::write(
         tasks.join("t1.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 9,
+            "version": 10,
             "id": "t1",
             "kind": "agent",
             "name": "recovered review",
@@ -196,10 +220,8 @@ async fn create_resumable_parent_and_child(
             "error": null,
             "child_run_id": "resume-child",
             "child_remaining_delegation_depth": 0,
-            "delegate_context": "fresh",
-            "fork_parent_message_seq": null,
             "prompt": "finish recovered work",
-            "created_at": chrono::Utc::now()
+            "created_at": chrono::Utc::now() - chrono::Duration::seconds(1)
         }))
         .unwrap(),
     )

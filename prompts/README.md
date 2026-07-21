@@ -13,11 +13,9 @@ delegated instructions are dynamic inputs and are not copied into this
 registry. The stable system prompt defines universal cross-tool behavior,
 including task lifecycle, compacted-history recovery, and file-backed graph
 workflow. The initial runtime reminder carries only concrete run state and
-concise GeneralTask role guidance. Its child guidance points to the paired
-delegated task; the stable system rule makes inherited fork messages background
-and gives the delegated task precedence over conflicting ancestor workflow.
-Keeping those rules in the shared system prefix preserves byte-identical Root
-and GeneralTask prefixes.
+concise GeneralTask role guidance. Its child guidance points to the paired,
+self-contained delegated task. Keeping those rules in the shared system prefix
+preserves byte-identical Root and GeneralTask prefixes.
 
 Every local model-facing tool adapter keeps a typed `tool.yaml` beside its Rust
 module. Standalone adapters live at `src/tools/<tool>/`; cohesive task, history,

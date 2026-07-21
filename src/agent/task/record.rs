@@ -5,9 +5,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
-use crate::{artifact::ResultMetadata, storage::DelegateContext};
+use crate::artifact::ResultMetadata;
 
-const TASK_RECORD_VERSION: u32 = 9;
+const TASK_RECORD_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -54,13 +54,8 @@ pub struct BackgroundTaskRecord {
     /// Capability fixed before an agent child starts. Recovery must not derive
     /// it again from the current runtime depth configuration.
     pub child_remaining_delegation_depth: Option<usize>,
-    /// Context inheritance selected by the delegate call. Promoted ordinary
-    /// tools do not have a delegate context.
-    pub delegate_context: Option<DelegateContext>,
-    /// Frozen parent trajectory boundary for a forked child.
-    pub fork_parent_message_seq: Option<u64>,
-    /// Needed only when an agent task was durably queued but its child run was
-    /// not created before the process stopped.
+    /// Complete isolated assignment retained for child validation and task
+    /// lifecycle events.
     pub prompt: Option<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -85,8 +80,6 @@ impl BackgroundTaskRecord {
             error: None,
             child_run_id: None,
             child_remaining_delegation_depth: None,
-            delegate_context: None,
-            fork_parent_message_seq: None,
             prompt: None,
             created_at: Utc::now(),
         }
@@ -101,27 +94,24 @@ impl BackgroundTaskRecord {
         child_remaining_delegation_depth: usize,
     ) -> Self {
         let origin_call_id = format!("delegate-{id}");
-        Self::queued_agent_with_context(
+        Self::queued_agent_with_origin(
             id,
             name,
             child_run_id,
             prompt,
             child_remaining_delegation_depth,
-            (DelegateContext::Fresh, None),
             origin_call_id,
         )
     }
 
-    pub(super) fn queued_agent_with_context(
+    pub(super) fn queued_agent_with_origin(
         id: String,
         name: String,
         child_run_id: String,
         prompt: String,
         child_remaining_delegation_depth: usize,
-        delegated_context: (DelegateContext, Option<u64>),
         origin_call_id: String,
     ) -> Self {
-        let (delegate_context, fork_parent_message_seq) = delegated_context;
         Self {
             version: TASK_RECORD_VERSION,
             id,
@@ -133,8 +123,6 @@ impl BackgroundTaskRecord {
             error: None,
             child_run_id: Some(child_run_id),
             child_remaining_delegation_depth: Some(child_remaining_delegation_depth),
-            delegate_context: Some(delegate_context),
-            fork_parent_message_seq,
             prompt: Some(prompt),
             created_at: Utc::now(),
         }
@@ -211,8 +199,6 @@ impl BackgroundTaskRecord {
                 ensure!(
                     self.child_run_id.is_none()
                         && self.child_remaining_delegation_depth.is_none()
-                        && self.delegate_context.is_none()
-                        && self.fork_parent_message_seq.is_none()
                         && self.prompt.is_none(),
                     "tool task {} cannot reference child state",
                     self.id
@@ -222,23 +208,10 @@ impl BackgroundTaskRecord {
                 ensure!(
                     self.child_run_id.is_some()
                         && self.child_remaining_delegation_depth.is_some()
-                        && self.delegate_context.is_some()
                         && self.prompt.is_some(),
                     "agent task {} must reference a child run, capability, and prompt",
                     self.id
                 );
-                match (self.delegate_context, self.fork_parent_message_seq) {
-                    (Some(DelegateContext::Fresh), None) => {}
-                    (Some(DelegateContext::Fork), Some(seq)) if seq > 0 => {}
-                    (Some(DelegateContext::Fresh), Some(_)) => {
-                        bail!("fresh agent task {} cannot have a fork boundary", self.id)
-                    }
-                    (Some(DelegateContext::Fork), _) => bail!(
-                        "forked agent task {} must have a positive parent message boundary",
-                        self.id
-                    ),
-                    (None, _) => bail!("agent task {} has no delegate context", self.id),
-                }
             }
             kind => bail!("unknown task kind `{kind}` in task {}", self.id),
         }
@@ -449,40 +422,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("original provider call id")
-        );
-    }
-
-    #[test]
-    fn agent_task_requires_a_context_consistent_with_its_fork_boundary() {
-        let fork = BackgroundTaskRecord::queued_agent_with_context(
-            "task-1".to_owned(),
-            "fork".to_owned(),
-            "child-1".to_owned(),
-            "inspect".to_owned(),
-            0,
-            (DelegateContext::Fork, Some(4)),
-            "provider-call-8".to_owned(),
-        );
-        fork.validate().unwrap();
-
-        let mut missing_boundary = fork.clone();
-        missing_boundary.fork_parent_message_seq = None;
-        assert!(
-            missing_boundary
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("positive parent message boundary")
-        );
-
-        let mut fresh_with_boundary = fork;
-        fresh_with_boundary.delegate_context = Some(DelegateContext::Fresh);
-        assert!(
-            fresh_with_boundary
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("fresh agent task")
         );
     }
 }

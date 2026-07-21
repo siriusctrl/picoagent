@@ -112,8 +112,7 @@ impl ModelProvider for CompletingDuringCompactionProvider {
                 "delegate",
                 json!({
                     "name": "compaction review",
-                    "prompt": "Inspect only and return a report.",
-                    "context": "fresh"
+                    "prompt": "Inspect only and return a report."
                 }),
             )),
             1 => Ok(tool_response(

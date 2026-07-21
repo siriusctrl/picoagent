@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use anyhow::{Context, Result};
 
@@ -67,13 +67,36 @@ impl TaskManager {
                 .directory
                 .join("tasks"),
         );
-        let records = task_store.load().await?;
-        let delivered = config
-            .store
-            .load_messages(&config.parent_run_id)
-            .await?
+        let mut records = task_store.load().await?;
+        let reserved_task_ids = records.keys().cloned().collect::<BTreeSet<_>>();
+        let trajectory = config.store.load_trajectory(&config.parent_run_id).await?;
+        let committed_call_results = trajectory
+            .iter()
+            .flat_map(|record| {
+                record
+                    .message
+                    .content
+                    .iter()
+                    .filter_map(move |content| match content {
+                        crate::model::MessageContent::ToolResult { call_id, .. } => {
+                            Some((call_id.as_str(), record.created_at))
+                        }
+                        _ => None,
+                    })
+            })
+            .collect::<Vec<_>>();
+        // A task file written by an uncommitted tool turn is an orphan. The
+        // process tree is dead before resume, so it must not be restarted or
+        // shown to the model. Keep only task starts acknowledged by a complete
+        // parent checkpoint.
+        records.retain(|_, record| {
+            committed_call_results.iter().any(|(call_id, created_at)| {
+                *call_id == record.origin_call_id && *created_at >= record.created_at
+            })
+        });
+        let delivered = trajectory
             .into_iter()
-            .flat_map(|message| message.content)
+            .flat_map(|record| record.message.content)
             .filter_map(|content| match content {
                 crate::model::MessageContent::BackgroundTask {
                     task_id,
@@ -83,7 +106,7 @@ impl TaskManager {
                 _ => None,
             })
             .collect();
-        let manager = Self::from_config(config, records, delivered);
+        let manager = Self::from_config(config, records, delivered, reserved_task_ids);
         Ok(manager)
     }
 
@@ -155,16 +178,6 @@ impl TaskManager {
         anyhow::ensure!(
             child.prompt == prompt,
             "child run `{child_run_id}` prompt does not match task `{}`",
-            task.id
-        );
-        anyhow::ensure!(
-            child.delegate_context == task.delegate_context,
-            "child run `{child_run_id}` delegate context does not match task `{}`",
-            task.id
-        );
-        anyhow::ensure!(
-            child.fork_parent_message_seq == task.fork_parent_message_seq,
-            "child run `{child_run_id}` fork boundary does not match task `{}`",
             task.id
         );
         Ok(())
@@ -250,41 +263,44 @@ impl TaskManager {
                 .clone()
                 .context("agent task is missing child_run_id")?;
             let child_paths = self.store.paths(&child_run_id);
-            if tokio::fs::try_exists(&child_paths.metadata).await? {
-                let child = self.store.load_run(&child_run_id).await?;
-                self.validate_child_run(&record, &child)?;
-                match child.state {
-                    crate::storage::RunState::Completed => {
-                        let result = tokio::fs::read_to_string(&child_paths.final_output)
-                            .await
-                            .with_context(|| {
-                                format!(
-                                    "read completed child output {}",
-                                    child_paths.final_output.display()
-                                )
-                            })?;
-                        let context = crate::tools::ToolContext {
-                            run_id: self.parent_run_id.clone(),
-                            call_id: format!("background-{}", record.id),
-                            workspace: self.workspace.clone(),
-                        };
-                        let output = self
-                            .persist_output(&context, crate::tools::RawToolOutput::text(result))
-                            .await?;
-                        self.complete(&record.id, output).await?;
-                        continue;
-                    }
-                    crate::storage::RunState::Failed => {
-                        self.fail(&record.id, "child run failed".to_owned()).await?;
-                        continue;
-                    }
-                    crate::storage::RunState::Cancelled => {
-                        self.cancel(&record.id, "child run was cancelled".to_owned())
-                            .await?;
-                        continue;
-                    }
-                    crate::storage::RunState::Queued | crate::storage::RunState::Running => {}
+            let child = self.store.load_run(&child_run_id).await.with_context(|| {
+                format!(
+                    "committed agent task `{}` is missing child run `{child_run_id}`",
+                    record.id
+                )
+            })?;
+            self.validate_child_run(&record, &child)?;
+            match child.state {
+                crate::storage::RunState::Completed => {
+                    let result = tokio::fs::read_to_string(&child_paths.final_output)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "read completed child output {}",
+                                child_paths.final_output.display()
+                            )
+                        })?;
+                    let context = crate::tools::ToolContext {
+                        run_id: self.parent_run_id.clone(),
+                        call_id: format!("background-{}", record.id),
+                        workspace: self.workspace.clone(),
+                    };
+                    let output = self
+                        .persist_output(&context, crate::tools::RawToolOutput::text(result))
+                        .await?;
+                    self.complete(&record.id, output).await?;
+                    continue;
                 }
+                crate::storage::RunState::Failed => {
+                    self.fail(&record.id, "child run failed".to_owned()).await?;
+                    continue;
+                }
+                crate::storage::RunState::Cancelled => {
+                    self.cancel(&record.id, "child run was cancelled".to_owned())
+                        .await?;
+                    continue;
+                }
+                crate::storage::RunState::Queued | crate::storage::RunState::Running => {}
             }
             recoverable.push(RecoverableSubagent {
                 task_id: record.id,

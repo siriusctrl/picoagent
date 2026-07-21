@@ -50,13 +50,9 @@ mod tests {
         assert!(
             prompts
                 .system
-                .contains("takes precedence over conflicting ancestor requests")
+                .contains("starts one independent GeneralTask asynchronously")
         );
-        assert!(
-            prompts.system.contains(
-                "do not repeat ancestor orchestration, delegation, task-control, or edits"
-            )
-        );
+        assert!(prompts.general_task.contains("complete assignment"));
         assert!(prompts.compaction_request.contains("# Compacted state"));
         assert!(!prompts.compaction_request.ends_with('\n'));
         assert!(!prompts.compaction_request.contains("history_search"));
@@ -67,7 +63,7 @@ mod tests {
         assert!(
             prompts
                 .general_task
-                .contains("task text paired with this reminder defines your immediate scope")
+                .contains("task text paired with this reminder is your complete assignment and defines your immediate scope")
         );
     }
 

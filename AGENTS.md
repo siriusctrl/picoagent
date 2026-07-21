@@ -58,14 +58,19 @@ navigation, invariants, verification, and handoff.
 - Use `delegate` as the sole asynchronous GeneralTask start operation. Keep
   status, bounded wait, inspect, steer, and stop as separate task-control tools;
   ordinary tools enter task control only through foreground promotion.
-- A `delegate` call must choose `fresh` isolation or `fork` inheritance. Fork
-  snapshots the parent input before the assistant delegate turn; same-batch
-  siblings share that boundary, and each child run is self-contained and
-  resumable after its snapshot commits. Preserve inherited model-facing
-  messages and artifact refs exactly; copy referenced artifacts into the child
-  and resolve their original paths through integrity-checked local snapshots.
-- Treat completed messages as the resumable boundary. Stream deltas are events,
-  not durable conversation messages.
+- Every `delegate` starts an isolated child whose prompt contains its complete
+  objective and task-specific context. Each child run is self-contained and
+  resumable from its own messages; parent conversation and artifacts are not
+  copied into it.
+- Treat complete checkpoints as the resumable boundary. A normal tool turn
+  commits its assistant message, ordered tool results, and optional attachment
+  message as one checkpoint; compaction commits request and state together.
+  Stream deltas are events, not durable conversation messages.
+- Resume assumes the supervisor, cgroup, or container has already terminated
+  the old picoagent process and every locally managed descendant. Ignore task
+  files not acknowledged by a complete parent checkpoint; resume committed
+  child runs, mark committed ordinary background tools interrupted, and never
+  wait for a stale run lease to disappear.
 - Keep provider function-call arguments as exact strings through message
   persistence and parse them only at the individual tool execution boundary.
   A malformed call returns its own ordered tool error and cannot suppress valid
@@ -82,10 +87,11 @@ navigation, invariants, verification, and handoff.
   one-based message sequence. Store pending-input ids separately for steering
   idempotency; do not overload the model-facing ref with unrelated identity.
 - Allow exactly one process to advance a run under its execution lease and any
-  number of lock-free read-only viewers. A newline commits one message. Viewers
-  ignore an incomplete final line; the writer trims it before its next append.
-  In-memory cursors are only a writer fast path and must be invalidated before
-  cancellable writes.
+  number of lock-free read-only viewers. Newlines complete physical records,
+  while `_pico.checkpoint` declares the logical commit group. Viewers expose
+  only complete groups; the writer trims an incomplete tail group before its
+  next append. In-memory cursors are only a writer fast path and must be
+  invalidated before cancellable writes.
 - Spill large tool results to `.pico/runs/<run-id>/artifacts/`; preserve the full
   result and return a bounded head/tail preview plus an immutable artifact ref.
 - Limit each tool result independently. Keep small UTF-8 results inline; spill

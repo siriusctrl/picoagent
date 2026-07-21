@@ -4,6 +4,10 @@
 - Date: 2026-07-21
 - Refines: ADR 0006 (delegate crash-window recovery)
 
+ADR 0034 supersedes this acknowledgement-repair decision. The originating call
+id now admits a task only when its ToolResult belongs to a complete parent
+checkpoint; an uncommitted task is an ignored orphan.
+
 ## Context
 
 `delegate` durably creates and starts an agent task before its ordinary tool

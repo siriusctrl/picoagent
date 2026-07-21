@@ -9,13 +9,42 @@ use crate::{
 use super::{MESSAGE_FORMAT, RunDirStore, ensure_run_exists, message_log};
 
 impl RunDirStore {
+    /// Atomically append one logical checkpoint while preserving one JSON line
+    /// and one `m<N>` ref per message. Readers expose either all records in this
+    /// group or none of them.
+    pub async fn append_checkpoint(
+        &self,
+        run_id: &str,
+        messages: &[Message],
+    ) -> Result<Vec<TrajectoryMessage>> {
+        let created_at = Utc::now();
+        self.append_classified_checkpoint(
+            run_id,
+            messages
+                .iter()
+                .cloned()
+                .map(|message| ClassifiedMessage {
+                    message,
+                    pending_input_id: None,
+                    compaction: None,
+                    created_at,
+                })
+                .collect(),
+        )
+        .await
+    }
+
     pub async fn append_message(
         &self,
         run_id: &str,
         message: &Message,
     ) -> Result<TrajectoryMessage> {
-        self.append_classified_message(run_id, message, None, None)
-            .await
+        let mut records = self
+            .append_checkpoint(run_id, std::slice::from_ref(message))
+            .await?;
+        Ok(records
+            .pop()
+            .expect("singleton checkpoint returned no message"))
     }
 
     pub(crate) async fn append_pending_input_message(
@@ -35,18 +64,28 @@ impl RunDirStore {
         pending_input_id: Option<String>,
         compaction: Option<CompactionMessage>,
     ) -> Result<TrajectoryMessage> {
-        self.append_classified_message_at(run_id, message, pending_input_id, compaction, Utc::now())
-            .await
+        let mut records = self
+            .append_classified_checkpoint(
+                run_id,
+                vec![ClassifiedMessage {
+                    message: message.clone(),
+                    pending_input_id,
+                    compaction,
+                    created_at: Utc::now(),
+                }],
+            )
+            .await?;
+        Ok(records
+            .pop()
+            .expect("singleton checkpoint returned no message"))
     }
 
-    async fn append_classified_message_at(
+    async fn append_classified_checkpoint(
         &self,
         run_id: &str,
-        message: &Message,
-        pending_input_id: Option<String>,
-        compaction: Option<CompactionMessage>,
-        created_at: DateTime<Utc>,
-    ) -> Result<TrajectoryMessage> {
+        messages: Vec<ClassifiedMessage>,
+    ) -> Result<Vec<TrajectoryMessage>> {
+        ensure!(!messages.is_empty(), "message checkpoint must not be empty");
         let mut sequences = self.write_lock.lock().await;
         // Invalidate the fast path before cancellable I/O. A dropped append may
         // leave a non-newline-terminated tail that the next append must trim.
@@ -67,59 +106,57 @@ impl RunDirStore {
                     .saturating_add(1)
             }
         };
-        let record = TrajectoryMessage {
-            message_ref: message_ref(next),
-            seq: next,
-            created_at,
-            message: message.clone(),
-            pending_input_id,
-            compaction,
-        };
-        message_log::append(&paths.messages, &record).await?;
-        sequences.insert(
-            run_id.to_owned(),
-            super::MessageCursor {
-                next_seq: next.saturating_add(1),
-            },
-        );
-        Ok(record)
+        let records = messages
+            .into_iter()
+            .enumerate()
+            .map(|(index, message)| {
+                let seq = next.saturating_add(index as u64);
+                TrajectoryMessage {
+                    message_ref: message_ref(seq),
+                    seq,
+                    created_at: message.created_at,
+                    message: message.message,
+                    pending_input_id: message.pending_input_id,
+                    compaction: message.compaction,
+                }
+            })
+            .collect::<Vec<_>>();
+        message_log::append_checkpoint(&paths.messages, &records).await?;
+        let next_seq = next.saturating_add(records.len() as u64);
+        sequences.insert(run_id.to_owned(), super::MessageCursor { next_seq });
+        Ok(records)
     }
 
-    /// Materialize one immutable parent record into a forked child run. The
-    /// target must start empty and receive the source prefix in sequence.
-    pub(crate) async fn append_forked_message(
+    pub(crate) async fn append_compaction_checkpoint(
         &self,
         run_id: &str,
-        source: &TrajectoryMessage,
-    ) -> Result<TrajectoryMessage> {
-        let record = self
-            .append_classified_message_at(
+        request: &Message,
+        state_message: &Message,
+        state: crate::trajectory::CompactionState,
+    ) -> Result<[TrajectoryMessage; 2]> {
+        let created_at = Utc::now();
+        let records = self
+            .append_classified_checkpoint(
                 run_id,
-                &source.message,
-                // Pending-input ids are run-local idempotency keys, not model
-                // context. Copying one into the child could suppress an
-                // unrelated child steering input with the same id.
-                None,
-                source.compaction.clone(),
-                source.created_at,
+                vec![
+                    ClassifiedMessage {
+                        message: request.clone(),
+                        pending_input_id: None,
+                        compaction: Some(CompactionMessage::Request),
+                        created_at,
+                    },
+                    ClassifiedMessage {
+                        message: state_message.clone(),
+                        pending_input_id: None,
+                        compaction: Some(CompactionMessage::State { state }),
+                        created_at,
+                    },
+                ],
             )
             .await?;
-        ensure!(
-            record.seq == source.seq && record.message_ref == source.message_ref,
-            "forked trajectory record `{}` is not the next child message",
-            source.message_ref
-        );
-        Ok(record)
-    }
-
-    pub(crate) async fn append_compaction_message(
-        &self,
-        run_id: &str,
-        message: &Message,
-        compaction: CompactionMessage,
-    ) -> Result<TrajectoryMessage> {
-        self.append_classified_message(run_id, message, None, Some(compaction))
-            .await
+        records
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("compaction checkpoint did not contain two messages"))
     }
 
     pub async fn load_messages(&self, run_id: &str) -> Result<Vec<Message>> {
@@ -170,4 +207,11 @@ impl RunDirStore {
             .filter(|message| message.compaction.is_none())
             .collect())
     }
+}
+
+struct ClassifiedMessage {
+    message: Message,
+    pending_input_id: Option<String>,
+    compaction: Option<CompactionMessage>,
+    created_at: DateTime<Utc>,
 }

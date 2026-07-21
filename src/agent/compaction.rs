@@ -8,7 +8,7 @@ use crate::{
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role, ToolSpec},
     prompts::agent_prompts,
     storage::RunDirStore,
-    trajectory::{CompactionMessage, CompactionState, TrajectoryMessage, message_ref},
+    trajectory::{CompactionState, TrajectoryMessage, message_ref},
 };
 
 pub(crate) struct CompactionAttempt<'a> {
@@ -18,7 +18,6 @@ pub(crate) struct CompactionAttempt<'a> {
     pub system: &'a str,
     pub tools: &'a [ToolSpec],
     pub trajectory: &'a [TrajectoryMessage],
-    pub fork_parent_message_seq: Option<u64>,
     pub tokens_before: u64,
     pub options: &'a CompactionOptions,
     pub store: &'a RunDirStore,
@@ -33,9 +32,6 @@ pub(crate) struct CompletedCompaction {
     pub estimated_context_tokens: u64,
 }
 
-#[cfg(test)]
-mod fork_tests;
-
 const MAX_INVALID_COMPACTION_RESPONSES: usize = 2;
 
 pub(crate) async fn maybe_compact(
@@ -48,7 +44,6 @@ pub(crate) async fn maybe_compact(
         system,
         tools,
         trajectory,
-        fork_parent_message_seq,
         tokens_before,
         options,
         store,
@@ -83,13 +78,7 @@ pub(crate) async fn maybe_compact(
         run_id: run_id.to_owned(),
         model: model.to_owned(),
         system: system.to_owned(),
-        messages: compaction_input(
-            trajectory,
-            previous,
-            &plan,
-            &compaction_request,
-            fork_parent_message_seq,
-        )?,
+        messages: compaction_input(trajectory, previous, &plan, &compaction_request)?,
         tools: tools.to_vec(),
         max_output_tokens: Some(options.summary_max_output_tokens.max(1)),
         stream_idle_timeout: Duration::from_secs(stream_idle_timeout_seconds),
@@ -222,9 +211,6 @@ pub(crate) async fn maybe_compact(
     let removed_tokens = plan
         .to_compact
         .iter()
-        .filter(|record| {
-            fork_parent_message_seq.is_none_or(|boundary| record.seq != boundary.saturating_add(1))
-        })
         .map(|record| estimate_message_tokens(&record.message))
         .sum::<u64>()
         .saturating_add(
@@ -236,28 +222,24 @@ pub(crate) async fn maybe_compact(
         .saturating_sub(removed_tokens)
         .saturating_add(estimate_message_tokens(&response.assistant));
 
-    // The assistant state is the commit marker. A crash after the request
-    // append but before this append leaves an inert, auditable request that is
-    // excluded from normal context and can be retried on resume.
+    // Request and state form one checkpoint. Readers expose both records or
+    // neither, so a torn compaction cannot become active after restart.
     let records = async {
-        let request_record = store
-            .append_compaction_message(run_id, &compaction_request, CompactionMessage::Request)
-            .await?;
-        let state_record = store
-            .append_compaction_message(
+        let records = store
+            .append_compaction_checkpoint(
                 run_id,
+                &compaction_request,
                 &response.assistant,
-                CompactionMessage::State {
-                    state: state.clone(),
-                },
+                state.clone(),
             )
             .await?;
+        let state_record = &records[1];
         ensure!(
             state_record.message_ref == state_message_ref,
             "compacted state ref changed from planned `{state_message_ref}` to `{}`",
             state_record.message_ref
         );
-        Ok([request_record, state_record])
+        Ok(records)
     }
     .await;
     let records = match records {
@@ -303,10 +285,7 @@ pub(crate) async fn maybe_compact(
     }))
 }
 
-pub(crate) fn build_active_context(
-    trajectory: &[TrajectoryMessage],
-    fork_parent_message_seq: Option<u64>,
-) -> Result<Vec<Message>> {
+pub(crate) fn build_active_context(trajectory: &[TrajectoryMessage]) -> Result<Vec<Message>> {
     let Some((state_record, state)) = latest_compaction(trajectory) else {
         return Ok(ordinary_messages(trajectory)
             .map(|record| record.message.clone())
@@ -341,35 +320,9 @@ pub(crate) fn build_active_context(
             ),
         }],
     });
-    let kept = ordinary_messages(&trajectory[first_kept..]).collect::<Vec<_>>();
-    if let Some(assignment) = fork_assignment(trajectory, fork_parent_message_seq)?
-        && !kept.iter().any(|record| record.seq == assignment.seq)
-    {
-        active.push(assignment.message.clone());
-    }
-    active.extend(kept.into_iter().map(|record| record.message.clone()));
+    active
+        .extend(ordinary_messages(&trajectory[first_kept..]).map(|record| record.message.clone()));
     Ok(active)
-}
-
-fn fork_assignment(
-    trajectory: &[TrajectoryMessage],
-    fork_parent_message_seq: Option<u64>,
-) -> Result<Option<&TrajectoryMessage>> {
-    let Some(boundary) = fork_parent_message_seq else {
-        return Ok(None);
-    };
-    let assignment_seq = boundary
-        .checked_add(1)
-        .ok_or_else(|| anyhow!("fork parent message boundary overflow"))?;
-    let assignment = trajectory
-        .iter()
-        .find(|record| record.seq == assignment_seq)
-        .ok_or_else(|| anyhow!("forked run is missing local assignment m{assignment_seq}"))?;
-    ensure!(
-        assignment.compaction.is_none() && assignment.message.role == Role::User,
-        "forked run local assignment m{assignment_seq} is not an ordinary user message"
-    );
-    Ok(Some(assignment))
 }
 
 fn latest_compaction(
@@ -447,7 +400,6 @@ fn compaction_input(
     previous: Option<(&TrajectoryMessage, &CompactionState)>,
     plan: &CompactionPlan<'_>,
     instruction: &Message,
-    fork_parent_message_seq: Option<u64>,
 ) -> Result<Vec<Message>> {
     let initial = ordinary_messages(trajectory)
         .next()
@@ -457,23 +409,8 @@ fn compaction_input(
     if let Some((state_record, _)) = previous {
         messages.push(state_record.message.clone());
     }
-    let assignment = fork_assignment(trajectory, fork_parent_message_seq)?;
-    let mut assignment_added = false;
     for record in &plan.to_compact {
-        if let Some(assignment) = assignment
-            && !assignment_added
-            && assignment.seq < record.seq
-        {
-            messages.push(assignment.message.clone());
-            assignment_added = true;
-        }
         messages.push(record.message.clone());
-        if assignment.is_some_and(|assignment| assignment.seq == record.seq) {
-            assignment_added = true;
-        }
-    }
-    if let Some(assignment) = assignment.filter(|_| !assignment_added) {
-        messages.push(assignment.message.clone());
     }
     messages.push(instruction.clone());
     Ok(messages)
@@ -547,6 +484,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::trajectory::CompactionMessage;
 
     fn record(seq: u64, role: Role, content: MessageContent) -> TrajectoryMessage {
         TrajectoryMessage {
@@ -688,7 +626,7 @@ mod tests {
             state.clone(),
         ];
 
-        let active = build_active_context(&trajectory, None).unwrap();
+        let active = build_active_context(&trajectory).unwrap();
         assert_eq!(active.len(), 4);
         assert_eq!(active[0].visible_text(), "start");
         assert_eq!(active[1].visible_text(), state.message.visible_text());
@@ -735,7 +673,7 @@ mod tests {
             request,
         ];
 
-        let active = build_active_context(&trajectory, None).unwrap();
+        let active = build_active_context(&trajectory).unwrap();
         assert_eq!(active.len(), 2);
         assert!(
             !active
@@ -788,7 +726,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let instruction = Message::text(Role::User, "compact");
-        let input = compaction_input(&trajectory, previous, &plan, &instruction, None).unwrap();
+        let input = compaction_input(&trajectory, previous, &plan, &instruction).unwrap();
 
         assert_eq!(input[0].visible_text(), "start");
         assert_eq!(input[1].visible_text(), state.message.visible_text());

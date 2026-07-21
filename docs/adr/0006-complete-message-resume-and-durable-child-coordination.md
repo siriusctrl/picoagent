@@ -24,6 +24,13 @@ Together they advance the pre-release run and task record formats to version 8.
 A completed fork snapshot is self-contained; partial snapshot recovery may
 consult only the frozen parent boundary.
 
+ADR 0033 supersedes that context-mode extension: all children are isolated,
+the fork fields are removed, and the pre-release records advance to version 10.
+
+ADR 0034 replaces per-message partial-turn repair with atomic logical
+checkpoints. It keeps separate child transcripts and parent-owned delivery, but
+uncommitted task files are now ignored instead of reconstructing acknowledgements.
+
 ADR 0027 persists a delegated task's originating provider call id so recovery
 can reconstruct a missing acknowledgement without replaying `delegate`. It
 advances the pre-release task record format to version 9.

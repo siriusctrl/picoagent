@@ -3,9 +3,9 @@
 ## Run
 
 A run is one task executed by `AgentRunner`. Its states are queued, running,
-completed, or failed. `pico resume <run-id>` continues a non-completed root run from
-its last complete message. The implementation does not resume inside a provider
-stream or shell command; the last complete message is the durable boundary.
+completed, or failed. `pico resume <run-id>` continues a non-completed root run
+from its last complete checkpoint. The implementation does not resume inside a
+provider stream or shell command.
 One per-run execution lease prevents two processes from advancing the same
 trajectory concurrently. Resume also requires the same non-secret provider
 fingerprint: endpoint and wire protocol, plus provider-specific continuation
@@ -21,7 +21,8 @@ run-local `m<N>` ref, timestamp, role, and typed content blocks. The blocks
 directly represent runtime reminders, text, images, reasoning, tool calls and
 results, provider continuation items, and background-task notices. Tool errors
 and `ArtifactRef` values remain attached to their result blocks. Optional
-pending-input idempotency and compaction state use `_pico` on the same line.
+pending-input idempotency, compaction state, and checkpoint membership use
+`_pico` on the same line.
 
 This self-contained representation is not a provider wire format. OpenAI Chat,
 OpenAI Responses, and Anthropic adapters project it independently. Keeping the
@@ -29,9 +30,11 @@ runtime representation directly avoids a second metadata log, byte-span
 layout, duplicated sequence, and reconstruction hashes.
 
 The run execution lease permits one writer and any number of read-only viewers.
-A newline commits a message. Viewers ignore a non-newline-terminated final
-record; before the next append, the writer validates the complete prefix and
-trims that tail. Malformed committed JSON and a ref that does not match its
+Each line records its checkpoint's first ref, index, and count. A singleton is a
+one-message checkpoint. Readers publish a multi-message checkpoint only after
+all of its newline-terminated lines are present and contiguous. Before the next
+append, the writer validates the complete prefix and trims the whole incomplete
+tail checkpoint. Malformed committed JSON and a ref that does not match its
 one-based line fail loading. This pre-release contract does not decode older
 run-record versions.
 
@@ -41,26 +44,24 @@ For each model step:
 
 1. append newly completed background results to the current messages;
 2. if compaction is enabled and the tracked usage threshold is reached, send
-   the native older prefix plus one compaction user instruction, then persist
-   the instruction and assistant compacted state as completed messages;
+   the native older prefix plus one compaction user instruction, then commit
+   the instruction and assistant compacted state as one checkpoint;
 3. assemble the active context and send sorted tool schemas to the provider;
 4. stream visible text and explicitly returned reasoning as separate events
    while collecting the complete response;
-5. persist the complete assistant message;
-6. execute the assistant's requested tools concurrently under one shared
+5. if the assistant is final, persist it as a singleton checkpoint;
+6. otherwise execute its requested tools concurrently under one shared
    foreground window;
-7. artifact large outputs and persist complete tool messages in original call
-   order;
-8. if a direct result carries images, persist one user attachment message after
-   the complete tool-result batch;
+7. artifact large outputs, then commit the assistant, complete tool messages in
+   original call order, and optional user attachment message as one checkpoint;
 9. repeat, join outstanding background work before finalization, or write
    `final.md` when no tool calls or tasks remain.
 
-On resume, a complete final assistant message is finalized without another
-model call. If a matching promoted task record exists for an unpaired tool
-call, picoagent reconstructs its task acknowledgement and separately delivers
-the durable terminal task result. Otherwise it appends an interrupted error
-result and does not run the tool again because its side effects are unknown.
+On resume, a complete final assistant checkpoint is finalized without another
+model call. An incomplete tool-turn checkpoint is discarded in full. Picoagent
+appends a user/runtime reminder that uncommitted work may have changed the
+workspace or external systems, and the model must inspect state before retrying.
+It does not synthesize missing tool results or automatically replay the turn.
 
 ## Compaction And History
 
@@ -80,10 +81,10 @@ tool or both generic artifact
 inspection tools (`read` and `bash`) would keep the full context instead of
 compacting without exact retrieval.
 
-Compaction does not mutate committed messages. After a successful response,
-it appends the compaction user message and exact assistant compacted-state
-message to `messages.jsonl`; each record's `_pico` state distinguishes control
-from ordinary conversation. Normal
+Compaction does not mutate committed messages. After a successful response, it
+commits the compaction user message and exact assistant compacted-state message
+together; each record's `_pico` state distinguishes control from ordinary
+conversation. Normal
 context assembly excludes the compaction instruction and older compaction
 records, using the initial runtime message, latest exact assistant state, one
 synthetic user `<runtime-reminder>` that says to continue rather than compact
@@ -130,54 +131,33 @@ The default maximum depth of one gives the initial child zero remaining depth.
 `task_wait` is a bounded join; a wait timeout does not cancel the task.
 `task_stop` is the explicit cancellation operation.
 
-`delegate` requires `context: "fresh" | "fork"`. Fresh preserves the isolated
-child behavior. Fork freezes the durable parent message sequence immediately
-before the assistant message that contains the delegate call, copies that full
-trajectory prefix into the child, and appends the child runtime reminder and
-task. Calls from the same assistant batch therefore share one fork boundary.
-Compaction request/state metadata is copied so the child's first active model
-projection is exactly the parent's request messages plus its task suffix; the
-child does not immediately compact that inherited first request again.
-Pending-input ids are intentionally cleared because they are run-local
-steering idempotency keys, not model context.
+`delegate` accepts a short name and a self-contained prompt. Every child is
+isolated: it starts with its own runtime reminder and delegated task, without
+copying the parent conversation, compaction state, or artifact references.
+The prompt must therefore include the complete objective and task-specific
+context. The child uses the configured GeneralTask model and records a normal,
+independent trajectory.
 
-Inherited user messages retain applicable facts and constraints, but are
-background rather than active child instructions. The common stable system
-prompt gives the appended delegated task precedence over conflicting ancestor
-workflow, while the dynamic GeneralTask reminder only identifies the child and
-its paired task. A child therefore does not repeat ancestor orchestration,
-delegation, task control, or edits unless its own delegated task explicitly
-requires them; later direct steering may refine that scope.
-
-The local delegated assignment is the ordinary message at the current run's
-fork boundary plus one. If compaction moves it before the recent kept tail,
-normal active context pins the exact message after compacted state and its
-continuation reminder. Every later compaction input also includes it exactly
-once, preserving scope across repeated compaction and resume. Nested forks pin
-only their own innermost assignment; projection does not append another
-durable message.
-
-Once the frozen prefix is complete, child recovery validates and uses only its
-local run files; an interrupted partial copy can be completed from the recorded
-parent boundary. Fork inherits the parent's selected model. Provider-reported
-cached input usage remains observable in `model_completed` and
-`compaction_completed` events, but the harness neither predicts nor fabricates
-a cache hit.
+Child recovery uses that same local trajectory and the same `AgentRunner` as a
+root run. It does not consult parent messages; only parent-child coordination
+and eventual result delivery remain in the parent task record.
 
 `task_inspect` returns a child's latest durable Chat-compatible messages and
 can page backward by sequence. `task_steer` queues a normal user message after
 the current assistant/tool batch and before the next provider call. It does not
 interrupt the current tool batch. `task_status` reports state without adding
 an explanatory pseudo-message. Task ids are run-local: controls use ids
-returned by this run's `delegate` or `task_status`, never an inherited
-ancestor's coincidentally named `t<N>` id.
+returned by this run's `delegate` or `task_status`.
 
-Task JSON is coordination state, not a second transcript. Delivery is derived
-from `BackgroundTask` entries already committed to the parent message
-log. After restart, running ordinary tools become terminal `interrupted` tasks
-and are never replayed. A queued/running child agent resumes its separate child
-run with the same `AgentRunner`; completed or failed children are reconciled
-into the parent exactly once.
+Task JSON is coordination state, not a second transcript. A record belongs to
+the recoverable parent state only when its originating call has a ToolResult in
+a complete parent checkpoint. Pre-checkpoint records and child directories are
+ignored as orphans. Delivery is derived from `BackgroundTask` entries already
+committed to the parent log. After restart, recognized running ordinary tools
+become terminal `interrupted` tasks and are never replayed. A recognized
+queued/running child agent resumes its separate child run with the same
+`AgentRunner`; completed or failed children are reconciled into the parent
+exactly once.
 
 A status-less `<background_task>` tool result means only that work is running.
 At a later model boundary, terminal records are grouped in one
@@ -192,6 +172,12 @@ The CLI resumes the parent, not a child id. Parent recovery owns durable
 GeneralTask child reconciliation, which avoids two processes racing to advance
 the same child. Large memory updates use this same child path and need no
 separate recovery case.
+
+Resume has a process-domain precondition: the supervisor, cgroup, or container
+has terminated the old picoagent process and all locally managed descendants.
+A busy run lease is therefore an invariant violation, not a condition to poll.
+Remote jobs and side effects outside that process tree may remain and are why
+the restart reminder requires inspection.
 
 Parent, child, and compaction requests share one model-call semaphore. Its
 default capacity is one so a child can run against single-concurrency compatible

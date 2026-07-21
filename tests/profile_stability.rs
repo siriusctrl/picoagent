@@ -152,8 +152,7 @@ fn delegate_response(id: &str, prompt: &str) -> ModelResponse {
         Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: "delegate".to_owned(),
-            arguments: json!({"name": "delegated_child", "prompt": prompt, "context": "fresh"})
-                .into(),
+            arguments: json!({"name": "delegated_child", "prompt": prompt}).into(),
         }]),
         ModelUsage::default(),
     )
@@ -262,7 +261,7 @@ async fn delegate_schema_is_independent_of_the_base_tool_registry() {
         .unwrap();
     assert_eq!(
         delegate.input_schema.pointer("/required"),
-        Some(&json!(["name", "prompt", "context"]))
+        Some(&json!(["name", "prompt"]))
     );
     assert_eq!(delegate.input_schema["additionalProperties"], false);
 }
@@ -383,6 +382,36 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
             })
         })
     }));
+}
+
+#[tokio::test]
+async fn general_task_inherits_the_root_output_limit_by_default() {
+    for expected_limit in [None, Some(8_192)] {
+        let workspace = TempDir::new().unwrap();
+        let provider = Arc::new(ProfileContractProvider::default());
+        let options = RunnerOptions {
+            max_subagent_depth: 1,
+            max_output_tokens: expected_limit,
+            ..RunnerOptions::default()
+        };
+        let runner = runner(workspace.path(), provider.clone(), None, options);
+
+        runner
+            .run(RunRequest::root("root profile contract"))
+            .await
+            .unwrap();
+
+        let requests = provider.requests.lock().unwrap();
+        let root = requests_for_prompt(&requests, "root profile contract");
+        let child = requests_for_prompt(&requests, "delegating profile contract");
+        assert!(!root.is_empty());
+        assert!(!child.is_empty());
+        assert!(
+            root.iter()
+                .chain(child.iter())
+                .all(|request| request.max_output_tokens == expected_limit)
+        );
+    }
 }
 
 #[tokio::test]

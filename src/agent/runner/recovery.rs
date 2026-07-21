@@ -1,21 +1,18 @@
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 
 use crate::{
-    artifact::{ArtifactStore, ResultMetadata},
-    events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
+    artifact::ResultMetadata,
     model::{Message, MessageContent, Role},
     storage::{RunDirStore, RunState},
-    tools::ToolContext,
     trajectory::TrajectoryMessage,
 };
 
 use super::{AgentRunner, RunRequest, RunResult, lifecycle::RunMode};
-use crate::agent::{
-    compaction::estimate_message_tokens,
-    task::{BackgroundTaskRecord, TaskManager},
-};
+use crate::agent::{compaction::estimate_message_tokens, task::BackgroundTaskRecord};
+
+const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous picoagent process stopped after the last complete checkpoint. Any uncommitted model/tool turn was discarded, but its workspace or external side effects may already have occurred. Inspect the current state before retrying any operation.\n</runtime-reminder>";
 
 impl AgentRunner {
     pub async fn resume(self: &Arc<Self>, run_id: impl Into<String>) -> Result<RunResult> {
@@ -90,7 +87,12 @@ impl AgentRunner {
             record.model_modalities,
             plan.modalities
         );
-        self.run_with_mode(request, run_id, RunMode::Resume, lease.clone())
+        let mode = if record.state == RunState::Queued {
+            RunMode::New
+        } else {
+            RunMode::Resume
+        };
+        self.run_with_mode(request, run_id, mode, lease.clone())
             .await
     }
 }
@@ -140,107 +142,18 @@ pub(super) async fn append_background_results(
     Ok(estimated_tokens)
 }
 
-pub(super) async fn append_interrupted_tool_results(
+pub(super) async fn append_restart_reminder(
     store: &RunDirStore,
     run_id: &str,
     trajectory: &mut Vec<TrajectoryMessage>,
-    tasks: &TaskManager,
-    artifacts: &ArtifactStore,
-    events: &SharedEventSink,
-    workspace: &Path,
 ) -> Result<()> {
-    let Some(assistant_index) = trajectory
-        .iter()
-        .rposition(|record| record.compaction.is_none() && record.message.role == Role::Assistant)
-    else {
-        return Ok(());
+    let message = Message {
+        role: Role::User,
+        content: vec![MessageContent::RuntimeReminder {
+            text: RESTART_REMINDER.to_owned(),
+        }],
     };
-    let calls = trajectory[assistant_index].message.tool_calls();
-    let assistant_created_at = trajectory[assistant_index].created_at;
-    if calls.is_empty() {
-        return Ok(());
-    }
-    let completed = trajectory[assistant_index + 1..]
-        .iter()
-        .flat_map(|record| &record.message.content)
-        .filter_map(|content| match content {
-            MessageContent::ToolResult { call_id, .. } => Some(call_id.as_str()),
-            _ => None,
-        })
-        .collect::<std::collections::HashSet<_>>();
-    let missing = calls
-        .into_iter()
-        .filter(|call| !completed.contains(call.id.as_str()))
-        .collect::<Vec<_>>();
-    for call in missing {
-        if let Err(error) = call.arguments.parse() {
-            let error = error.context("the tool was not executed");
-            let context = ToolContext {
-                run_id: run_id.to_owned(),
-                call_id: call.id.clone(),
-                workspace: workspace.to_owned(),
-            };
-            let output = artifacts
-                .persist_output(
-                    &context,
-                    crate::agent::tool_execution::failed_tool_output(
-                        &call.name,
-                        &format!("{error:#}"),
-                    ),
-                )
-                .await?;
-            if let Some(artifact) = &output.artifact {
-                events
-                    .emit(&RuntimeEvent::new(
-                        run_id,
-                        RuntimeEventKind::ArtifactCreated {
-                            call_id: call.id.clone(),
-                            path: artifact.path.clone(),
-                            bytes: artifact.bytes,
-                        },
-                    ))
-                    .await?;
-            }
-            let message = Message {
-                role: Role::Tool,
-                content: vec![MessageContent::ToolResult {
-                    call_id: call.id,
-                    content: output.model_content(),
-                    is_error: true,
-                    metadata: output.result_metadata(),
-                }],
-            };
-            trajectory.push(store.append_message(run_id, &message).await?);
-            continue;
-        }
-        let task = tasks
-            .find_undelivered_origin(&call.id, &call.name, assistant_created_at)
-            .await;
-        let (content, is_error) = if let Some(task) = task {
-            (
-                crate::model::background_task_started_reminder(&task.id, &task.name),
-                false,
-            )
-        } else {
-            (
-                format!(
-                    "tool `{}` was interrupted before a durable result was recorded; its side effects are unknown. Inspect task state or the workspace before deciding whether to retry.",
-                    call.name
-                ),
-                true,
-            )
-        };
-        let message = Message {
-            role: Role::Tool,
-            content: vec![MessageContent::ToolResult {
-                call_id: call.id,
-                content,
-                is_error,
-                metadata: ResultMetadata::empty(),
-            }],
-        };
-        trajectory.push(store.append_message(run_id, &message).await?);
-    }
+    trajectory.push(store.append_message(run_id, &message).await?);
     Ok(())
 }
 

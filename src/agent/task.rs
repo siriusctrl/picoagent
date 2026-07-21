@@ -11,7 +11,7 @@ use tokio::sync::{Mutex, Semaphore, watch};
 use crate::{
     artifact::{ArtifactStore, ToolOutput},
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
-    storage::{DelegateContext, RunDirStore},
+    storage::RunDirStore,
 };
 
 use super::runner::AgentRunner;
@@ -36,6 +36,9 @@ pub struct TaskManager {
     remaining_delegation_depth: usize,
     events: SharedEventSink,
     records: Mutex<BTreeMap<String, BackgroundTaskRecord>>,
+    /// Includes orphan task files which are intentionally hidden after
+    /// recovery, so their readable `t<N>` ids are never reused.
+    reserved_task_ids: BTreeSet<String>,
     delivered: Mutex<BTreeSet<String>>,
     task_store: TaskRecordStore,
     handles: StdMutex<BTreeMap<String, tokio::task::JoinHandle<()>>>,
@@ -59,13 +62,14 @@ pub struct TaskManagerConfig {
 
 impl TaskManager {
     pub fn new(config: TaskManagerConfig) -> Arc<Self> {
-        Self::from_config(config, BTreeMap::new(), BTreeSet::new())
+        Self::from_config(config, BTreeMap::new(), BTreeSet::new(), BTreeSet::new())
     }
 
     fn from_config(
         config: TaskManagerConfig,
         records: BTreeMap<String, BackgroundTaskRecord>,
         delivered: BTreeSet<String>,
+        reserved_task_ids: BTreeSet<String>,
     ) -> Arc<Self> {
         let (activity, _) = watch::channel(0);
         let task_store = TaskRecordStore::new(
@@ -85,6 +89,7 @@ impl TaskManager {
             remaining_delegation_depth: config.remaining_delegation_depth,
             events: config.events,
             records: Mutex::new(records),
+            reserved_task_ids,
             delivered: Mutex::new(delivered),
             task_store,
             handles: StdMutex::new(BTreeMap::new()),
@@ -100,7 +105,7 @@ impl TaskManager {
         origin_call_id: String,
     ) -> Result<String> {
         let mut records = self.records.lock().await;
-        let task_id = next_task_id(&records);
+        let task_id = next_task_id(&records, &self.reserved_task_ids);
         let record = BackgroundTaskRecord::queued_tool(task_id.clone(), name, origin_call_id);
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);
@@ -112,19 +117,16 @@ impl TaskManager {
         name: String,
         child_run_id: String,
         prompt: String,
-        delegate_context: DelegateContext,
-        fork_parent_message_seq: Option<u64>,
         origin_call_id: String,
     ) -> Result<String> {
         let mut records = self.records.lock().await;
-        let task_id = next_task_id(&records);
-        let record = BackgroundTaskRecord::queued_agent_with_context(
+        let task_id = next_task_id(&records, &self.reserved_task_ids);
+        let record = BackgroundTaskRecord::queued_agent_with_origin(
             task_id.clone(),
             name,
             child_run_id,
             prompt,
             self.remaining_delegation_depth.saturating_sub(1),
-            (delegate_context, fork_parent_message_seq),
             origin_call_id,
         );
         self.persist(&record).await?;
@@ -239,31 +241,6 @@ impl TaskManager {
             .get(task_id)
             .cloned()
             .with_context(|| format!("unknown background task `{task_id}`"))
-    }
-
-    pub(crate) async fn find_undelivered_origin(
-        &self,
-        call_id: &str,
-        tool_name: &str,
-        not_before: chrono::DateTime<chrono::Utc>,
-    ) -> Option<BackgroundTaskRecord> {
-        let delivered = self.delivered.lock().await.clone();
-        self.records
-            .lock()
-            .await
-            .values()
-            .filter(|record| {
-                record.origin_call_id == call_id
-                    && match record.kind.as_str() {
-                        "agent" => tool_name == "delegate",
-                        "tool" => record.name == tool_name,
-                        _ => false,
-                    }
-                    && record.created_at >= not_before
-                    && !delivered.contains(&record.id)
-            })
-            .max_by(|left, right| left.created_at.cmp(&right.created_at))
-            .cloned()
     }
 
     pub async fn wait(&self, task_ids: &[String]) -> Result<Vec<BackgroundTaskRecord>> {
@@ -434,11 +411,14 @@ impl TaskManager {
     }
 }
 
-fn next_task_id(records: &BTreeMap<String, BackgroundTaskRecord>) -> String {
+fn next_task_id(
+    records: &BTreeMap<String, BackgroundTaskRecord>,
+    reserved_task_ids: &BTreeSet<String>,
+) -> String {
     let mut number = records.len().saturating_add(1);
     loop {
         let candidate = format!("t{number}");
-        if !records.contains_key(&candidate) {
+        if !records.contains_key(&candidate) && !reserved_task_ids.contains(&candidate) {
             return candidate;
         }
         number = number.saturating_add(1);

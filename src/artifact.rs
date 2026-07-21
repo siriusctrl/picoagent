@@ -10,14 +10,12 @@ use crate::{
     tools::{RawToolOutput, ToolContext},
 };
 
-mod inherited;
 mod preview;
+mod verification;
 
-pub(crate) use inherited::{
-    message_artifact_refs, snapshot_message_artifacts, verified_artifact_path_for_run,
-};
 pub use preview::{PreviewInfo, PreviewLimitation};
 use preview::{file_preview, textual_preview, unavailable_preview};
+pub(crate) use verification::verified_artifact_path_for_run;
 
 const MODEL_INSPECTION_INSTRUCTION: &str = include_str!("artifact/model-instruction.md");
 
@@ -139,24 +137,13 @@ impl ArtifactStore {
         context: &ToolContext,
         output: RawToolOutput,
     ) -> Result<ToolOutput> {
-        self.persist_output_inner(context, output, false).await
-    }
-
-    /// Persist complete bytes even when they would normally fit inline.
-    /// Fork snapshots use this to make inherited references self-contained.
-    pub async fn persist_artifact(
-        &self,
-        context: &ToolContext,
-        output: RawToolOutput,
-    ) -> Result<ToolOutput> {
-        self.persist_output_inner(context, output, true).await
+        self.persist_output_inner(context, output).await
     }
 
     async fn persist_output_inner(
         &self,
         context: &ToolContext,
         mut output: RawToolOutput,
-        force_artifact: bool,
     ) -> Result<ToolOutput> {
         let attachment = output
             .attach_to_model
@@ -167,7 +154,7 @@ impl ArtifactStore {
                 "model image attachments must provide their bytes directly"
             );
             let bytes = tokio::fs::metadata(&source_path).await?.len();
-            if bytes <= self.policy.inline_limit_bytes as u64 && !force_artifact {
+            if bytes <= self.policy.inline_limit_bytes as u64 {
                 output.content = tokio::fs::read(&source_path).await?;
                 tokio::fs::remove_file(source_path).await?;
             } else {
@@ -176,7 +163,7 @@ impl ArtifactStore {
         }
         let textual =
             is_textual(&output.media_type) && std::str::from_utf8(&output.content).is_ok();
-        if output.content.len() <= self.policy.inline_limit_bytes && textual && !force_artifact {
+        if output.content.len() <= self.policy.inline_limit_bytes && textual {
             return Ok(ToolOutput {
                 preview: String::from_utf8_lossy(&output.content).into_owned(),
                 artifact: None,

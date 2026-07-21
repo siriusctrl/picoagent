@@ -36,6 +36,8 @@ struct StoredMessage {
 #[serde(deny_unknown_fields)]
 struct LocalState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkpoint: Option<MessageCheckpoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_input_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     compaction: Option<CompactionMessage>,
@@ -43,8 +45,19 @@ struct LocalState {
 
 impl LocalState {
     fn is_empty(&self) -> bool {
-        self.pending_input_id.is_none() && self.compaction.is_none()
+        self.checkpoint.is_none() && self.pending_input_id.is_none() && self.compaction.is_none()
     }
+}
+
+/// Identifies one logical checkpoint while preserving one JSON line per
+/// message. A reader publishes none of the lines until it has observed the
+/// complete, contiguous group.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct MessageCheckpoint {
+    first_message_ref: String,
+    index: u64,
+    count: u64,
 }
 
 struct JsonlFile {
@@ -66,28 +79,46 @@ pub(super) async fn initialize(run_directory: &Path, messages_path: &Path) -> Re
     sync_directory(run_directory).await
 }
 
-pub(super) async fn append(path: &Path, record: &TrajectoryMessage) -> Result<()> {
-    record
-        .message
-        .validate()
-        .context("validate message before persistence")?;
-    let stored = StoredMessage {
-        message_ref: record.message_ref.clone(),
-        created_at: record.created_at,
-        message: record.message.clone(),
-        local: LocalState {
-            pending_input_id: record.pending_input_id.clone(),
-            compaction: record.compaction.clone(),
-        },
-    };
-    let mut line = serde_json::to_vec(&stored).context("serialize stored message")?;
-    line.push(b'\n');
+pub(super) async fn append_checkpoint(path: &Path, records: &[TrajectoryMessage]) -> Result<()> {
+    ensure!(!records.is_empty(), "message checkpoint must not be empty");
+    let first_message_ref = records[0].message_ref.clone();
+    let count = records.len() as u64;
+    let mut bytes = Vec::new();
+    for (index, record) in records.iter().enumerate() {
+        record
+            .message
+            .validate()
+            .context("validate message before persistence")?;
+        let expected_seq = records[0].seq.saturating_add(index as u64);
+        ensure!(
+            record.seq == expected_seq && record.message_ref == message_ref(expected_seq),
+            "checkpoint message ref `{}` is not the expected `{}`",
+            record.message_ref,
+            message_ref(expected_seq)
+        );
+        let stored = StoredMessage {
+            message_ref: record.message_ref.clone(),
+            created_at: record.created_at,
+            message: record.message.clone(),
+            local: LocalState {
+                checkpoint: Some(MessageCheckpoint {
+                    first_message_ref: first_message_ref.clone(),
+                    index: index as u64,
+                    count,
+                }),
+                pending_input_id: record.pending_input_id.clone(),
+                compaction: record.compaction.clone(),
+            },
+        };
+        serde_json::to_writer(&mut bytes, &stored).context("serialize stored message")?;
+        bytes.push(b'\n');
+    }
     let mut file = OpenOptions::new()
         .append(true)
         .open(path)
         .await
         .with_context(|| format!("open {} for append", path.display()))?;
-    file.write_all(&line)
+    file.write_all(&bytes)
         .await
         .with_context(|| format!("append {}", path.display()))?;
     file.flush().await?;
@@ -96,9 +127,9 @@ pub(super) async fn append(path: &Path, record: &TrajectoryMessage) -> Result<()
         .with_context(|| format!("sync {}", path.display()))
 }
 
-/// Load the committed prefix. A newline is the commit marker, so a viewer can
-/// safely ignore a concurrently written or crash-torn final line without a
-/// lock.
+/// Load the committed prefix. A checkpoint is visible only after all of its
+/// newline-terminated message lines are present, so viewers can ignore both a
+/// crash-torn line and complete lines from an incomplete final checkpoint.
 pub(super) async fn load(path: &Path) -> Result<Vec<TrajectoryMessage>> {
     Ok(read_jsonl(path).await?.records)
 }
@@ -131,48 +162,118 @@ async fn read_jsonl(path: &Path) -> Result<JsonlFile> {
         .await
         .with_context(|| format!("read initialized message log {}", path.display()))?;
     let original_len = bytes.len() as u64;
+    let complete_lines = bytes
+        .split_inclusive(|byte| *byte == b'\n')
+        .scan(0_usize, |end, line| {
+            if !line.ends_with(b"\n") {
+                return None;
+            }
+            *end += line.len();
+            Some((line, *end))
+        })
+        .collect::<Vec<_>>();
     let mut records = Vec::new();
     let mut committed_end = 0_usize;
+    let mut line_index = 0_usize;
 
-    for line_with_newline in bytes.split_inclusive(|byte| *byte == b'\n') {
-        if !line_with_newline.ends_with(b"\n") {
+    while line_index < complete_lines.len() {
+        let first = parse_stored_line(path, complete_lines[line_index].0)?;
+        let Some(checkpoint) = first.local.checkpoint.clone() else {
+            // Pre-checkpoint logs are singleton records. New appends always
+            // persist explicit count=1 checkpoint metadata.
+            let record = trajectory_record(first, records.len() as u64 + 1)?;
+            records.push(record);
+            committed_end = complete_lines[line_index].1;
+            line_index += 1;
+            continue;
+        };
+        ensure!(
+            checkpoint.count > 0,
+            "message checkpoint count must be positive"
+        );
+        ensure!(
+            checkpoint.index == 0,
+            "message checkpoint `{}` starts at index {} instead of 0",
+            checkpoint.first_message_ref,
+            checkpoint.index
+        );
+        ensure!(
+            checkpoint.first_message_ref == first.message_ref,
+            "message checkpoint `{}` starts with message `{}`",
+            checkpoint.first_message_ref,
+            first.message_ref
+        );
+        let checkpoint_count = usize::try_from(checkpoint.count)
+            .context("message checkpoint count does not fit in memory")?;
+        let available = complete_lines.len().saturating_sub(line_index);
+        let inspected = checkpoint_count.min(available);
+        let mut checkpoint_records = Vec::with_capacity(inspected);
+        for offset in 0..inspected {
+            let stored = parse_stored_line(path, complete_lines[line_index + offset].0)?;
+            let actual = stored.local.checkpoint.as_ref().with_context(|| {
+                format!(
+                    "message `{}` is missing checkpoint metadata inside group `{}`",
+                    stored.message_ref, checkpoint.first_message_ref
+                )
+            })?;
+            ensure!(
+                actual.first_message_ref == checkpoint.first_message_ref
+                    && actual.count == checkpoint.count
+                    && actual.index == offset as u64,
+                "message `{}` has inconsistent checkpoint metadata",
+                stored.message_ref
+            );
+            checkpoint_records.push(trajectory_record(
+                stored,
+                records.len() as u64 + offset as u64 + 1,
+            )?);
+        }
+        if inspected < checkpoint_count {
             break;
         }
-        let line = &line_with_newline[..line_with_newline.len() - 1];
-        ensure!(
-            !line.iter().all(u8::is_ascii_whitespace),
-            "blank line in {}",
-            path.display()
-        );
-        let stored: StoredMessage = serde_json::from_slice(line)
-            .with_context(|| format!("parse completed message in {}", path.display()))?;
-        stored
-            .message
-            .validate()
-            .with_context(|| format!("validate completed message in {}", path.display()))?;
-        let seq = message_ref_seq(&stored.message_ref)
-            .with_context(|| format!("stored message has invalid ref `{}`", stored.message_ref))?;
-        let expected_seq = records.len() as u64 + 1;
-        ensure!(
-            seq == expected_seq && stored.message_ref == message_ref(expected_seq),
-            "message ref `{}` is not the expected `m{expected_seq}`",
-            stored.message_ref
-        );
-        records.push(TrajectoryMessage {
-            message_ref: stored.message_ref,
-            seq,
-            created_at: stored.created_at,
-            message: stored.message,
-            pending_input_id: stored.local.pending_input_id,
-            compaction: stored.local.compaction,
-        });
-        committed_end += line_with_newline.len();
+        line_index += checkpoint_count;
+        committed_end = complete_lines[line_index - 1].1;
+        records.extend(checkpoint_records);
     }
 
     Ok(JsonlFile {
         records,
         original_len,
         committed_end: committed_end as u64,
+    })
+}
+
+fn parse_stored_line(path: &Path, line_with_newline: &[u8]) -> Result<StoredMessage> {
+    let line = &line_with_newline[..line_with_newline.len() - 1];
+    ensure!(
+        !line.iter().all(u8::is_ascii_whitespace),
+        "blank line in {}",
+        path.display()
+    );
+    let stored: StoredMessage = serde_json::from_slice(line)
+        .with_context(|| format!("parse completed message in {}", path.display()))?;
+    stored
+        .message
+        .validate()
+        .with_context(|| format!("validate completed message in {}", path.display()))?;
+    Ok(stored)
+}
+
+fn trajectory_record(stored: StoredMessage, expected_seq: u64) -> Result<TrajectoryMessage> {
+    let seq = message_ref_seq(&stored.message_ref)
+        .with_context(|| format!("stored message has invalid ref `{}`", stored.message_ref))?;
+    ensure!(
+        seq == expected_seq && stored.message_ref == message_ref(expected_seq),
+        "message ref `{}` is not the expected `m{expected_seq}`",
+        stored.message_ref
+    );
+    Ok(TrajectoryMessage {
+        message_ref: stored.message_ref,
+        seq,
+        created_at: stored.created_at,
+        message: stored.message,
+        pending_input_id: stored.local.pending_input_id,
+        compaction: stored.local.compaction,
     })
 }
 

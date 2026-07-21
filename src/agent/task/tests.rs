@@ -9,8 +9,6 @@ use crate::{
     tools::ToolRegistry,
 };
 
-mod fork_compaction;
-
 async fn create_run(store: &RunDirStore, id: &str, parent: Option<String>) {
     store
         .create_run(
@@ -46,12 +44,48 @@ async fn create_child_run(
                 Some(parent.to_owned()),
             )
             .with_execution_context("general_task_leaf", 1, None, 0)
-            .with_delegate_context(DelegateContext::Fresh, None)
             .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
         )
         .await
         .unwrap();
     store.update_state(id, state).await.unwrap();
+}
+
+async fn commit_task_start(
+    store: &RunDirStore,
+    parent_run_id: &str,
+    record: &BackgroundTaskRecord,
+) {
+    let tool_name = if record.kind == "agent" {
+        "delegate"
+    } else {
+        &record.name
+    };
+    store
+        .append_checkpoint(
+            parent_run_id,
+            &[
+                Message {
+                    role: Role::Assistant,
+                    content: vec![MessageContent::ToolCall {
+                        id: record.origin_call_id.clone(),
+                        name: tool_name.to_owned(),
+                        arguments: serde_json::json!({}).into(),
+                    }],
+                },
+                Message {
+                    role: Role::Tool,
+                    content: vec![MessageContent::ToolResult {
+                        call_id: record.origin_call_id.clone(),
+                        content: "background task started".to_owned(),
+                        is_error: false,
+                        metadata: crate::artifact::ResultMetadata::empty(),
+                    }],
+                },
+            ],
+        )
+        .await
+        .unwrap();
 }
 
 fn config(
@@ -115,7 +149,6 @@ async fn delegate_at_zero_remaining_depth_fails_without_creating_a_task() {
         .delegate(
             "too-deep".to_owned(),
             "must not start".to_owned(),
-            DelegateContext::Fresh,
             "delegate-call",
         )
         .await
@@ -131,52 +164,6 @@ async fn delegate_at_zero_remaining_depth_fails_without_creating_a_task() {
         !tokio::fs::try_exists(store.paths("parent").directory.join("tasks"))
             .await
             .unwrap()
-    );
-}
-
-#[tokio::test]
-async fn promotion_recovery_does_not_reuse_an_older_task_with_the_same_call_id() {
-    let workspace = tempfile::tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    create_run(&store, "parent", None).await;
-    let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
-    let old_id = manager
-        .create_tool_task("read".to_owned(), "provider-reused-call-id".to_owned())
-        .await
-        .unwrap();
-    let boundary = chrono::Utc::now();
-    manager
-        .records
-        .lock()
-        .await
-        .get_mut(&old_id)
-        .unwrap()
-        .created_at = boundary - chrono::Duration::seconds(1);
-
-    assert!(
-        manager
-            .find_undelivered_origin("provider-reused-call-id", "read", boundary)
-            .await
-            .is_none()
-    );
-
-    let current_id = manager
-        .create_tool_task("read".to_owned(), "provider-reused-call-id".to_owned())
-        .await
-        .unwrap();
-    assert_eq!(
-        manager
-            .find_undelivered_origin("provider-reused-call-id", "read", boundary)
-            .await
-            .unwrap()
-            .id,
-        current_id
-    );
-    assert!(
-        manager
-            .find_undelivered_origin("provider-reused-call-id", "bash", boundary)
-            .await
-            .is_none()
     );
 }
 
@@ -249,7 +236,7 @@ async fn task_activity_broadcast_wakes_every_waiter_for_its_completed_task() {
 }
 
 #[tokio::test]
-async fn restored_parent_continues_its_local_task_sequence() {
+async fn recovery_ignores_an_uncommitted_task_but_reserves_its_id() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -266,6 +253,7 @@ async fn restored_parent_continues_its_local_task_sequence() {
     let (manager, _) = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
+    assert!(manager.status(&[]).await.unwrap().is_empty());
 
     assert_eq!(
         manager
@@ -274,6 +262,76 @@ async fn restored_parent_continues_its_local_task_sequence() {
             .unwrap(),
         "t2"
     );
+}
+
+#[tokio::test]
+async fn recovery_does_not_link_an_orphan_to_an_older_reused_call_id() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let old = BackgroundTaskRecord::queued_tool(
+        "old".to_owned(),
+        "read".to_owned(),
+        "reused-call".to_owned(),
+    );
+    commit_task_start(&store, "parent", &old).await;
+
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    task_store
+        .write(&BackgroundTaskRecord::queued_tool(
+            "t1".to_owned(),
+            "read".to_owned(),
+            "reused-call".to_owned(),
+        ))
+        .await
+        .unwrap();
+
+    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+    assert!(recoverable.is_empty());
+    assert!(manager.status(&[]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn recovery_starts_a_committed_queued_child_from_its_prepared_run() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "start me", RunState::Queued).await;
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let task = BackgroundTaskRecord::queued_agent(
+        "t1".to_owned(),
+        "queued child".to_owned(),
+        "child".to_owned(),
+        "start me".to_owned(),
+        0,
+    );
+    task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
+
+    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+    assert_eq!(recoverable.len(), 1);
+    manager
+        .resume_agent_task(recoverable[0].clone())
+        .await
+        .unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(3), manager.wait_all())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
+    assert_eq!(
+        store.load_run("child").await.unwrap().state,
+        RunState::Completed
+    );
+    let child_messages = store.load_messages("child").await.unwrap();
+    assert_eq!(child_messages[0].role, Role::User);
+    assert!(child_messages[0].visible_text().contains("start me"));
 }
 
 #[tokio::test]
@@ -292,6 +350,7 @@ async fn restore_reconciles_tools_and_completed_children() {
     );
     tool.state = BackgroundTaskState::Running;
     task_store.write(&tool).await.unwrap();
+    commit_task_start(&store, "parent", &tool).await;
     let mut agent = BackgroundTaskRecord::queued_agent(
         "agent-task".to_owned(),
         "general-task".to_owned(),
@@ -301,6 +360,7 @@ async fn restore_reconciles_tools_and_completed_children() {
     );
     agent.state = BackgroundTaskState::Running;
     task_store.write(&agent).await.unwrap();
+    commit_task_start(&store, "parent", &agent).await;
 
     let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
@@ -346,6 +406,7 @@ async fn restore_prefers_a_durable_completed_child_regardless_of_task_age() {
     agent.state = BackgroundTaskState::Running;
     agent.created_at = chrono::Utc::now() - chrono::Duration::minutes(10);
     task_store.write(&agent).await.unwrap();
+    commit_task_start(&store, "parent", &agent).await;
 
     let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
@@ -379,6 +440,7 @@ async fn restore_and_repeated_stop_repair_a_cancelled_tasks_live_child() {
     );
     task.state = BackgroundTaskState::Cancelled;
     task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
 
     let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
@@ -417,7 +479,6 @@ async fn restore_validates_a_live_child_against_its_stored_capability() {
                 Some("parent".to_owned()),
             )
             .with_execution_context("general_task_delegating", 1, None, 1)
-            .with_delegate_context(DelegateContext::Fresh, None)
             .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
         )
         .await
@@ -436,6 +497,7 @@ async fn restore_validates_a_live_child_against_its_stored_capability() {
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
 
     // The current parent configuration says a new child would be a leaf, but
     // this existing child was durably fixed as delegating before it started.
@@ -474,7 +536,6 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
                 Some("resume the child".to_owned()),
                 0,
             )
-            .with_delegate_context(DelegateContext::Fresh, None)
             .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
         )
         .await
@@ -497,6 +558,7 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
     );
     agent.state = BackgroundTaskState::Running;
     task_store.write(&agent).await.unwrap();
+    commit_task_start(&store, "parent", &agent).await;
 
     let delivered = BackgroundTaskRecord {
         state: BackgroundTaskState::Completed,
@@ -511,6 +573,7 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
         )
     };
     task_store.write(&delivered).await.unwrap();
+    commit_task_start(&store, "parent", &delivered).await;
     store
         .append_message(
             "parent",
@@ -571,7 +634,7 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
 }
 
 #[tokio::test]
-async fn resume_agent_task_creates_a_missing_child_run() {
+async fn recovery_rejects_a_committed_agent_task_without_its_prepared_child_run() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -584,34 +647,17 @@ async fn resume_agent_task_creates_a_missing_child_run() {
         1,
     );
     task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
 
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
-        .await
-        .unwrap();
-    assert_eq!(recoverable.len(), 1);
-    manager
-        .resume_agent_task(recoverable[0].clone())
-        .await
-        .unwrap();
-    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), manager.wait_all())
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(completed.len(), 1);
-    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
-    assert_eq!(
-        store.load_run("missing-child").await.unwrap().state,
-        RunState::Completed
-    );
-    assert_eq!(
-        store.load_run("missing-child").await.unwrap().profile,
-        "general_task_delegating"
-    );
+    let error = match TaskManager::restore(config(workspace.path(), &store, "parent")).await {
+        Ok(_) => panic!("committed task without a prepared child was accepted"),
+        Err(error) => error,
+    };
+    assert!(format!("{error:#}").contains("is missing child run `missing-child`"));
 }
 
 #[tokio::test]
-async fn recovered_child_retries_a_busy_lease_and_reconciles_completion() {
+async fn recovered_child_does_not_wait_for_a_busy_lease() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -626,6 +672,7 @@ async fn recovered_child_retries_a_busy_lease_and_reconciles_completion() {
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
     let child_lease = store.acquire_run_lease("child").await.unwrap();
     let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
@@ -635,224 +682,19 @@ async fn recovered_child_retries_a_busy_lease_and_reconciles_completion() {
         .resume_agent_task(recoverable[0].clone())
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    store
-        .write_final("child", "completed by old owner")
-        .await
-        .unwrap();
-    store
-        .update_state("child", RunState::Completed)
-        .await
-        .unwrap();
-    drop(child_lease);
     let completed = tokio::time::timeout(Duration::from_secs(3), manager.wait_all())
         .await
         .unwrap()
         .unwrap();
 
     assert_eq!(completed.len(), 1);
-    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
-    assert_eq!(
+    assert_eq!(completed[0].state, BackgroundTaskState::Failed);
+    assert!(
         completed[0]
-            .result
-            .as_ref()
-            .map(|result| result.content.as_str()),
-        Some("completed by old owner")
+            .model_content()
+            .contains("already being executed")
     );
-}
-
-#[tokio::test]
-async fn completed_fork_snapshot_resumes_without_any_parent_run_files() {
-    let workspace = tempfile::tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    create_run(&store, "parent", None).await;
-    let parent_message = store
-        .append_message("parent", &Message::text(Role::User, "parent context"))
-        .await
-        .unwrap();
-    store
-        .create_run(
-            &RunRecord::new(
-                "fork-child",
-                "resume self-contained fork",
-                "echo",
-                "echo",
-                store.workspace().to_path_buf(),
-                Some("parent".to_owned()),
-            )
-            .with_execution_context("general_task_leaf", 1, None, 0)
-            .with_delegate_context(DelegateContext::Fork, Some(1))
-            .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
-        )
-        .await
-        .unwrap();
-    store
-        .append_forked_message("fork-child", &parent_message)
-        .await
-        .unwrap();
-    store
-        .append_message(
-            "fork-child",
-            &Message {
-                role: Role::User,
-                content: vec![
-                    MessageContent::RuntimeReminder {
-                        text: "<runtime-reminder>fork child</runtime-reminder>".to_owned(),
-                    },
-                    MessageContent::Text {
-                        text: "resume self-contained fork".to_owned(),
-                    },
-                ],
-            },
-        )
-        .await
-        .unwrap();
-    store
-        .update_state("fork-child", RunState::Running)
-        .await
-        .unwrap();
-    let runner = config(workspace.path(), &store, "parent").runner;
-    tokio::fs::remove_dir_all(store.paths("parent").directory)
-        .await
-        .unwrap();
-
-    let completed = runner
-        .resume_child("fork-child".to_owned(), "parent")
-        .await
-        .unwrap();
-    assert!(completed.final_output.contains("received:"));
-}
-
-#[tokio::test]
-async fn partial_fork_snapshot_is_completed_from_its_frozen_parent_boundary_on_recovery() {
-    let workspace = tempfile::tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    create_run(&store, "parent", None).await;
-    let first = store
-        .append_message("parent", &Message::text(Role::User, "parent one"))
-        .await
-        .unwrap();
-    let second = store
-        .append_message("parent", &Message::text(Role::Assistant, "parent two"))
-        .await
-        .unwrap();
-    store
-        .create_run(
-            &RunRecord::new(
-                "fork-child",
-                "finish partial fork",
-                "echo",
-                "echo",
-                store.workspace().to_path_buf(),
-                Some("parent".to_owned()),
-            )
-            .with_execution_context("general_task_leaf", 1, None, 0)
-            .with_delegate_context(DelegateContext::Fork, Some(2))
-            .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
-        )
-        .await
-        .unwrap();
-    store
-        .append_forked_message("fork-child", &first)
-        .await
-        .unwrap();
-    store
-        .update_state("fork-child", RunState::Running)
-        .await
-        .unwrap();
-    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
-    let mut task = BackgroundTaskRecord::queued_agent_with_context(
-        "agent-task".to_owned(),
-        "fork-child".to_owned(),
-        "fork-child".to_owned(),
-        "finish partial fork".to_owned(),
-        0,
-        (DelegateContext::Fork, Some(2)),
-        "delegate-call".to_owned(),
-    );
-    task.state = BackgroundTaskState::Running;
-    task_store.write(&task).await.unwrap();
-
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
-        .await
-        .unwrap();
-    manager
-        .resume_agent_task(recoverable[0].clone())
-        .await
-        .unwrap();
-    let completed = tokio::time::timeout(Duration::from_secs(5), manager.wait_all())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
-    let child = store.load_trajectory("fork-child").await.unwrap();
-    assert_eq!(
-        child[0].message.visible_text(),
-        first.message.visible_text()
-    );
-    assert_eq!(
-        child[1].message.visible_text(),
-        second.message.visible_text()
-    );
-    assert_eq!(child[1].created_at, second.created_at);
-    assert_eq!(child[2].message.visible_text(), "finish partial fork");
-}
-
-#[tokio::test]
-async fn fork_drops_parent_pending_input_ids_so_child_steering_is_not_suppressed() {
-    let workspace = tempfile::tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    create_run(&store, "parent", None).await;
-    let parent = store
-        .append_pending_input_message(
-            "parent",
-            &Message::text(Role::User, "parent steer"),
-            "input_collision".to_owned(),
-        )
-        .await
-        .unwrap();
-    store
-        .create_run(
-            &RunRecord::new(
-                "child",
-                "child",
-                "echo",
-                "echo",
-                store.workspace().to_path_buf(),
-                Some("parent".to_owned()),
-            )
-            .with_execution_context("general_task_leaf", 1, None, 0)
-            .with_delegate_context(DelegateContext::Fork, Some(1))
-            .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
-        )
-        .await
-        .unwrap();
-    let copied = store.append_forked_message("child", &parent).await.unwrap();
-    assert_eq!(copied.pending_input_id, None);
-    tokio::fs::write(
-        store.paths("child").pending_inputs,
-        format!(
-            "{}\n",
-            serde_json::json!({
-                "id": "input_collision",
-                "created_at": chrono::Utc::now(),
-                "message": Message::text(Role::User, "child steer")
-            })
-        ),
-    )
-    .await
-    .unwrap();
-    let mut trajectory = store.load_trajectory("child").await.unwrap();
-    let appended = store
-        .append_pending_inputs("child", &mut trajectory)
-        .await
-        .unwrap();
-    assert_eq!(appended.len(), 1);
-    assert_eq!(
-        appended[0].pending_input_id.as_deref(),
-        Some("input_collision")
-    );
-    assert_eq!(appended[0].message.visible_text(), "child steer");
+    drop(child_lease);
 }
 
 #[tokio::test]
@@ -879,6 +721,7 @@ async fn recovery_rejects_a_child_owned_by_another_parent() {
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
 
     let error = match TaskManager::restore(config(workspace.path(), &store, "parent")).await {
         Ok(_) => panic!("unrelated child run was accepted"),
@@ -914,6 +757,7 @@ async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
     let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
@@ -982,6 +826,7 @@ async fn in_flight_tool_recovers_as_interrupted_regardless_of_task_age() {
     task.state = BackgroundTaskState::Running;
     task.created_at = chrono::Utc::now() - chrono::Duration::minutes(10);
     task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
 
     let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
@@ -1010,6 +855,7 @@ async fn resume_load_does_not_reconcile_tasks_before_capability_validation() {
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
 
     let manager = TaskManager::load_for_resume(config(workspace.path(), &store, "parent"))
         .await
@@ -1133,8 +979,6 @@ async fn cancelled_agent_does_not_emit_completion_events_when_its_output_arrives
             "general-task".to_owned(),
             "child".to_owned(),
             "do work".to_owned(),
-            DelegateContext::Fresh,
-            None,
             "delegate-call".to_owned(),
         )
         .await
@@ -1193,6 +1037,7 @@ async fn committed_steering_succeeds_when_its_observation_event_fails() {
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
     let mut task_config = config(workspace.path(), &store, "parent");
     task_config.events = Arc::new(FailingEventSink);
     let (manager, _) = TaskManager::restore(task_config).await.unwrap();

@@ -102,3 +102,5 @@ Use these sections:
   creation](0031-validate-complete-initial-graph-topology.md)
 - [ADR 0032: Store each message as one self-contained
   record](0032-self-contained-message-log.md)
+- [ADR 0033: Isolate delegated context](0033-isolate-delegated-context.md)
+- [ADR 0034: Resume from atomic turn checkpoints](0034-atomic-turn-checkpoints.md)

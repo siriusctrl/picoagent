@@ -81,19 +81,24 @@ Inspect a previous result:
 pico inspect <run-id>
 ```
 
-Resume an interrupted or failed run from its last complete message:
+Resume an interrupted or failed run from its last complete checkpoint:
 
 ```bash
 pico resume <run-id>
 ```
 
-Resume never replays a direct tool call whose result was not durably recorded.
-It appends an error result saying the outcome and side effects are unknown, then
-lets the model inspect the workspace before deciding what to do. Background
-ordinary tools are likewise marked `interrupted`; child-agent runs keep their
-own transcripts. Durable GeneralTask children created by `delegate` continue
-when their parent is resumed; resume the parent run rather than invoking `pico
-resume` on a child id directly.
+An assistant tool turn is one checkpoint containing the assistant message, all
+ordered tool results, and any attachment message. Resume discards an incomplete
+checkpoint and appends a user/runtime reminder that its workspace or external
+side effects may already have occurred. It never replays that discarded tool
+turn automatically. Committed background ordinary tools are marked
+`interrupted`; committed GeneralTask children keep their own transcripts and
+continue when their parent is resumed. Resume the parent run rather than
+invoking `pico resume` on a child id directly.
+
+Before resume, the process supervisor, cgroup, or container must have killed
+the previous picoagent process and all locally managed descendants. Remote
+jobs and other external side effects are not covered by that assumption.
 
 ## Prompt Layout
 
@@ -116,14 +121,15 @@ request.
 short `ref` (`m1`, `m2`, ...), `created_at`, `role`, and typed `content` blocks.
 Those blocks are the exact provider-neutral messages replayed by the runner, so
 tool failures, artifact refs, images, reasoning, and opaque provider
-continuation items need no sidecar or reconstruction layout. Optional steering
-idempotency and compaction classification live under `_pico` on the same line.
-The sequence is derived from `ref` and the line position rather than duplicated.
+continuation items need no sidecar or reconstruction layout. Optional steering,
+compaction, and checkpoint membership live under `_pico` on the same line. The
+sequence is derived from `ref` and the line position rather than duplicated.
 
-A newline commits the record. The single process holding the run execution
-lease is the only writer; any number of viewers may read complete lines without
-taking a message-log lock. A viewer ignores an incomplete final line, and the
-writer trims that tail before resuming appends. `run.json` declares
+The single process holding the run execution lease is the only writer; any
+number of viewers may read complete checkpoints without taking a message-log
+lock. A viewer publishes a multi-line checkpoint only after every declared
+newline-terminated record exists, and the writer trims an incomplete tail group
+before resuming appends. `run.json` declares
 `"message_format": "pico-message"`, retains the original user prompt, and
 freezes the stored profile plus remaining delegation depth. Compaction never
 rewrites or deletes committed trajectory records.
@@ -437,10 +443,11 @@ All direct tool calls in one assistant message start concurrently and share one
 foreground window. If all finish early, picoagent returns immediately. At the
 configured deadline, it preserves each unfinished exact future, moves only
 those calls into the background task lifecycle, and returns their task ids; no
-tool is stopped or restarted. Tool-result messages are committed in the
-assistant's original call order and retain their original `tool_call_id`, even
-though completion events can arrive in another order. The model should put only
-independent calls in one batch and issue dependent work after seeing results.
+tool is stopped or restarted. The assistant message, tool-result messages in
+original call order, and any attachment message commit as one checkpoint.
+Results retain their original `tool_call_id`, even though completion events can
+arrive in another order. The model should put only independent calls in one
+batch and issue dependent work after seeing results.
 The tool result is a status-less `<background_task>` notice containing the task
 id and name; it only acknowledges that work is running.
 
@@ -456,7 +463,7 @@ so the provider sees exactly one result for each original tool call.
 The task-control calls are intentionally small:
 
 ```text
-delegate({"name":"inspect_tests","prompt":"inspect the failing tests and report the cause","context":"fork"})
+delegate({"name":"inspect_tests","prompt":"inspect the failing tests and report the cause"})
 task_status({"task_ids":[]})
 task_wait({"task_ids":["t1"]})
 task_inspect({"task_id":"t1","limit":6,"before_seq":42})
@@ -499,21 +506,18 @@ is another invocation of the same runner, not a second agent class. Each child:
 - has a separate run id, transcript, events, and artifacts
 - records its parent run id
 - shares the working project, so it can inspect and modify the same files
-- uses the configured GeneralTask output profile; fresh uses its configured
-  model while fork inherits the parent's selected model
+- uses the configured GeneralTask model and output profile
 - cannot delegate another child at the default depth limit
 
 Parent and child model requests share `runtime.max_parallel_model_calls`, which
 defaults to one for compatibility with rate-limited endpoints. Delegated-child
 capacity remains independently controlled by `runtime.max_parallel_subagents`.
 
-Every `delegate` call chooses a context mode. `context = "fresh"` starts with
-only the child runtime reminder and delegated prompt. `context = "fork"`
-inherits the exact parent model input before the assistant message containing
-the delegate call, then appends the child reminder and prompt. Fork siblings in
-one assistant tool-call batch share the same boundary. The copied trajectory,
-including compacted-state metadata, is stored in each child run so resume and
-history retrieval do not depend on a live parent process.
+Every `delegate` call starts an isolated child with only its runtime reminder
+and delegated prompt. The prompt must include the complete objective and any
+task-specific context; the child does not inherit the parent conversation.
+Its own trajectory is stored in the child run, so resume and history retrieval
+do not depend on a live parent process.
 
 `runtime.model_stream_idle_timeout_seconds` (default 300) stops a model stream
 that produces no valid SSE event for that interval, while
@@ -522,16 +526,13 @@ API call even when the stream keeps making progress. Neither limit includes
 tool execution or time spent waiting for the shared model slot.
 
 Only child results return to the parent context; full child transcripts remain
-in their own run directories. The parent stores only coordination state under
-`tasks/`. On parent resume, terminal-result delivery is derived from the parent
-transcript, while queued/running child runs continue from their own last
-complete messages. This recovery guarantee applies to every durable GeneralTask
+in their own run directories. The parent stores coordination state under
+`tasks/`, but recovery recognizes a task only when its originating call has a
+tool result in a complete parent checkpoint. Pre-checkpoint task files and child
+runs are ignored as orphans. A recognized queued/running child continues from
+its own complete checkpoints, while terminal-result delivery is derived from
+the parent transcript. This guarantee applies to every committed GeneralTask
 task record, including one used for a large memory update.
-
-If the process stops after `delegate` creates that record but before its tool
-result commits, resume reconstructs the original status-less acknowledgement
-and continues the same child. It does not replay the delegation or expose the
-provider call id in task notices.
 
 The parent can inspect a child's latest messages (six by default), page
 backward by sequence, and queue steering while it runs. Steering is stored as

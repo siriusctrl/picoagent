@@ -161,17 +161,17 @@ modality declaration, persisted profile, and remaining delegation depth. Resume
 requires the current model declaration to match and restores delegation
 authority from that run snapshot rather than current depth configuration.
 
-Only complete messages are resumable. Stream deltas are emitted to live sinks
-but omitted from the persisted `events.jsonl` and are never appended as partial
-conversation messages.
+Only complete checkpoints are resumable. Stream deltas are emitted to live
+sinks but omitted from the persisted `events.jsonl` and are never appended as
+partial conversation messages.
 
-A newline is the message commit marker. The one process holding the run
-execution lease is the sole writer. It syncs each complete line and trims any
-non-newline-terminated tail before resuming after interruption. Read-only
-viewers take no message-log lock and expose only the complete prefix, so a
-concurrent partial final write is invisible. Malformed completed records and
-out-of-sequence refs fail loading. The current pre-release format intentionally
-does not load older run-record versions.
+The one process holding the run execution lease is the sole writer. Each
+newline completes one physical message record, while `_pico.checkpoint` groups
+one or more records into the logical commit boundary. Read-only viewers take no
+message-log lock and publish a group only when every declared line is complete.
+The writer trims an incomplete tail group before resuming appends. Malformed
+completed records and out-of-sequence refs fail loading. The current pre-release
+format intentionally does not load older run-record versions.
 
 The message file is created and directory-synced with the run. The writer's
 cached next sequence is invalidated before cancellable I/O and restored only
@@ -228,13 +228,11 @@ reminder instead of adding another runtime-reminder message.
 
 The full run holds a filesystem execution lease. Resume rebuilds the recorded
 profile, validates provider/model/workspace identity, loads the message log and
-latest completed compacted state, and continues after the last completed
-model step. An unpaired direct tool request becomes an explicit interrupted
-error result and is never automatically replayed. If a direct call had already
-been promoted, or `delegate` had already created its child, the durable task
-record instead reconstructs the missing task acknowledgement and supplies the
-terminal result separately. Both task kinds persist the originating provider
-call id internally; resume never replays the call.
+latest complete checkpoint, and continues from there. A normal tool-turn
+checkpoint contains the assistant message, every ordered tool result, and any
+attachment message. An incomplete tail checkpoint is discarded as a unit and
+replaced by a user/runtime warning about possible workspace or external side
+effects; the call is never automatically replayed.
 
 ### Artifact storage
 
@@ -247,9 +245,9 @@ artifact envelope. Each result is limited independently; earlier output and
 compaction do not change later representation. See
 [artifacts.md](artifacts.md).
 
-For immediate image reads, the runner commits every tool result from the batch
-first, in assistant call order, then commits one user attachment message. This
-keeps native tool-call/result adjacency valid while still allowing several
+For immediate image reads, the runner puts every tool result from the batch in
+assistant call order and one user attachment message into the same checkpoint.
+This keeps native tool-call/result adjacency valid while still allowing several
 concurrently read images to share one model input message.
 
 ### Context compaction and trajectory retrieval
@@ -257,9 +255,9 @@ concurrently read images to share one model input message.
 Local compaction changes the active-context projection without rewriting prior
 messages. `messages.jsonl` retains every committed completed message with a
 stable `m<N>` ref whose number is its sequence, including the successful
-compaction user instruction and exact assistant compacted state. Sidecar
-metadata marks those two records and stores the covered prefix and first exact
-message kept. A normal active
+compaction user instruction and exact assistant compacted state. Their `_pico`
+state marks the pair and stores the covered prefix and first exact message kept.
+A normal active
 request excludes compaction instructions and older compacted states; it contains
 the initial runtime message, newest exact assistant state, a short synthetic
 user runtime reminder that identifies the state as context rather than a final
@@ -361,45 +359,27 @@ aborts the selected future and commits `cancelled`; it does not affect unrelated
 tasks. Background work has no hard execution deadline.
 
 Short task ids are local to the run that allocated them. Task controls accept
-only ids returned by that run's `delegate` or `task_status`; a fork child must
-not reuse an ancestor run's inherited `t<N>` ids.
+only ids returned by that run's `delegate` or `task_status`.
 
-Delegate context is explicit. A fresh child starts from its own initial
-reminder and task. A fork child records the parent's pre-assistant message
-sequence, materializes that entire prefix in its own message
-log, and then appends its child-specific reminder and task. Same-batch sibling
-calls resolve to the same boundary. Copying the durable trajectory rather than
-only the active projection preserves compaction/history behavior; run-local
-pending-input ids are cleared. The stable system prompt defines inherited
-messages as background; the appended delegated task defines the child's
-immediate scope and takes precedence over conflicting ancestor workflow. A
-complete child snapshot no longer reads the parent on resume, while a partial
-snapshot may finish copying through its already-recorded boundary.
-
-Compaction projections retain that scope exactly. The current run's local
-assignment is the ordinary message immediately after its recorded fork
-boundary. Normal active context and every later compaction request include that
-message once even after its sequence falls before the recent tail. Nested forks
-pin only their own innermost assignment. This is an in-memory projection rule;
-the native trajectory and compacted-state records remain unchanged.
-
-The copied prefix remains byte-identical even when it references artifacts, so
-provider cache shape does not change. Before each inherited message commits,
-its complete artifact bytes are copied under the child run using a stable name
-derived from the unchanged source ref. History search and ordinary `read`
-resolve the old model-visible path to that child-local copy and verify its
-ownership boundary, length, id, and digest. Nested forks resolve from the
-immediate parent's snapshot; a complete child never needs ancestor files.
+Every delegated child is isolated. It starts from its own runtime reminder and
+the delegated prompt, which must contain the complete objective and any
+task-specific context. The parent conversation, compaction state, and artifact
+references are not copied. A child uses the configured GeneralTask model and
+resumes solely from its own run messages through the same `AgentRunner` path.
 
 Each task record is durable coordination state only. Child messages remain in
-the child's run directory. Recovery derives delivered ids from the parent
-transcript, marks in-flight ordinary tools `interrupted` with unknown side
-effects, reconciles terminal children, and resumes queued/running children
-through the same runner. Resume validates the frozen tool-schema hash before
-task reconciliation can update any of those records. If a process stopped
-after a delegated task committed but before its tool result did, the task's
-originating provider call id reconstructs that one status-less acknowledgement;
-it is not exposed in model-facing task notices.
+the child's run directory. Recovery admits a task only when its originating
+call has a ToolResult in a complete parent checkpoint; other task files and
+child directories are orphans and stay hidden. It derives delivered ids from
+the parent transcript, marks recognized in-flight ordinary tools `interrupted`
+with unknown side effects, reconciles terminal children, and resumes recognized
+queued/running children through the same runner. Resume validates the frozen
+tool-schema hash before task reconciliation can update any of those records.
+
+This recovery path assumes the runtime supervisor, cgroup, or container killed
+the previous picoagent process and all locally managed descendants before
+resume. A stale busy lease fails immediately. Remote work and external side
+effects can survive and must be inspected after the restart reminder.
 
 The durable child guarantee belongs to `delegate` GeneralTask records, and the
 parent run is the only resume entrypoint. Memory consolidation

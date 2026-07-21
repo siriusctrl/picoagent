@@ -1,9 +1,9 @@
 name: delegate
 description: >-
-  Delegate independent work to a general-task subagent. Use context=fork when
-  the task needs the exact current conversation context, or context=fresh when
-  prompt is self-contained. The subagent always starts asynchronously;
-  continue independent work or use task_wait before consuming its result.
+  Delegate independent work to an isolated general-task subagent. The prompt
+  must contain the complete objective and task-specific context. The subagent
+  always starts asynchronously; continue independent work or use task_wait
+  before consuming its result.
 returns: >-
   A status-less `<background_task>` runtime notice with the task id and name.
   This only acknowledges background execution. A later terminal notice carries
@@ -20,16 +20,7 @@ input_schema:
     prompt:
       type: string
       description: >-
-        Exact child objective and any task-specific context it needs. For fork,
-        inherited parent workflow is background; repeat any orchestration the
-        child itself must perform
-    context:
-      type: string
-      enum: [fork, fresh]
-      description: >-
-        fork inherits the parent model input immediately before this delegate
-        call, excluding the assistant turn containing the call; same-batch
-        fork siblings inherit the same boundary. fresh starts an isolated
-        child context
-  required: [name, prompt, context]
+        Exact child objective and all task-specific context it needs. The child
+        does not inherit the parent conversation
+  required: [name, prompt]
   additionalProperties: false

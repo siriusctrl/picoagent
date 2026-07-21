@@ -27,6 +27,12 @@ ADR 0025 requires `delegate` to choose fresh or forked context. Same-batch fork
 siblings share the pre-assistant boundary established by this ADR's concurrent
 call batch.
 
+ADR 0033 supersedes that requirement and makes every delegated child isolated.
+
+ADR 0034 supersedes partial-batch acknowledgement reconstruction. The assistant,
+ordered tool results, and optional attachment now commit as one checkpoint;
+only task records acknowledged by that checkpoint participate in recovery.
+
 ## Context
 
 The runner executed tool calls from one assistant message sequentially. This

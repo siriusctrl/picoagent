@@ -88,8 +88,7 @@ impl ModelProvider for CompactedTaskProvider {
                 "delegate",
                 json!({
                     "name": "review existing work",
-                    "prompt": "Inspect only, then report. Do not edit or delegate.",
-                    "context": "fresh"
+                    "prompt": "Inspect only, then report. Do not edit or delegate."
                 }),
                 1_000,
             )),

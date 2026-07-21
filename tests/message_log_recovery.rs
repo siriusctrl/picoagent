@@ -88,6 +88,58 @@ async fn a_valid_record_without_a_newline_is_not_committed() {
     assert!(durable.contains("replacement"));
 }
 
+#[tokio::test]
+async fn viewers_hide_and_the_writer_discards_an_incomplete_multi_message_checkpoint() {
+    let workspace = tempdir().unwrap();
+    let original = RunDirStore::new(workspace.path());
+    let paths = original
+        .create_run(&record(workspace.path()))
+        .await
+        .unwrap();
+    original
+        .append_message("run-1", &Message::text(Role::User, "committed"))
+        .await
+        .unwrap();
+    original
+        .append_checkpoint(
+            "run-1",
+            &[
+                Message::text(Role::Assistant, "uncommitted assistant"),
+                Message::text(Role::User, "uncommitted result one"),
+                Message::text(Role::User, "uncommitted result two"),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let durable = tokio::fs::read(&paths.messages).await.unwrap();
+    let third_line_start = durable
+        .iter()
+        .enumerate()
+        .filter_map(|(index, byte)| (*byte == b'\n').then_some(index + 1))
+        .nth(2)
+        .unwrap();
+    tokio::fs::write(&paths.messages, &durable[..third_line_start])
+        .await
+        .unwrap();
+
+    let reopened = RunDirStore::new(workspace.path());
+    let visible = reopened.load_trajectory("run-1").await.unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].message.visible_text(), "committed");
+
+    let replacement = reopened
+        .append_message("run-1", &Message::text(Role::Assistant, "replacement"))
+        .await
+        .unwrap();
+    assert_eq!(replacement.message_ref, "m2");
+    let recovered = reopened.load_trajectory("run-1").await.unwrap();
+    assert_eq!(recovered.len(), 2);
+    assert_eq!(recovered[1].message.visible_text(), "replacement");
+    let repaired = tokio::fs::read_to_string(paths.messages).await.unwrap();
+    assert!(!repaired.contains("uncommitted"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn many_viewers_can_observe_one_writer_without_taking_the_run_lease() {
     let workspace = tempdir().unwrap();

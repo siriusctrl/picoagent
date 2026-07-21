@@ -10,6 +10,9 @@ per-result inline/preview/artifact policy used by foreground tools. The shared
 runtime tag, batching, task-id correlation, and hidden internal ids remain
 accepted.
 
+ADR 0034 removes recovery-time reconstruction of a missing start notice. A
+start notice and its assistant turn now belong to one complete checkpoint.
+
 ## Context
 
 Delegated children and automatically promoted tools shared durable task state,

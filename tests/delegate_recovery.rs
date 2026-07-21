@@ -16,7 +16,7 @@ use picoagent::{
     model::{
         Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
     },
-    storage::{DelegateContext, RunDirStore, RunRecord, RunState},
+    storage::{RunDirStore, RunRecord, RunState},
     tools::ToolRegistry,
 };
 use serde_json::json;
@@ -225,18 +225,28 @@ async fn create_crash_window(
         .await
         .unwrap();
     store
-        .append_message(
+        .append_checkpoint(
             PARENT_RUN_ID,
-            &Message::assistant(vec![MessageContent::ToolCall {
-                id: DELEGATE_CALL_ID.to_owned(),
-                name: "delegate".to_owned(),
-                arguments: json!({
-                    "name": "inspect_child",
-                    "prompt": "child work",
-                    "context": "fresh"
-                })
-                .into(),
-            }]),
+            &[
+                Message::assistant(vec![MessageContent::ToolCall {
+                    id: DELEGATE_CALL_ID.to_owned(),
+                    name: "delegate".to_owned(),
+                    arguments: json!({
+                        "name": "inspect_child",
+                        "prompt": "child work"
+                    })
+                    .into(),
+                }]),
+                Message {
+                    role: Role::Tool,
+                    content: vec![MessageContent::ToolResult {
+                        call_id: DELEGATE_CALL_ID.to_owned(),
+                        content: "<runtime-reminder>\n<background_task task_id=\"t1\" name=\"inspect_child\">\nThe task is now running in the background.\n</background_task>\n</runtime-reminder>".to_owned(),
+                        is_error: false,
+                        metadata: picoagent::artifact::ResultMetadata::empty(),
+                    }],
+                },
+            ],
         )
         .await
         .unwrap();
@@ -252,7 +262,6 @@ async fn create_crash_window(
                 Some(PARENT_RUN_ID.to_owned()),
             )
             .with_execution_context("general_task_leaf", 1, None, 0)
-            .with_delegate_context(DelegateContext::Fresh, None)
             .with_provider_resume_fingerprint(provider.resume_fingerprint()),
         )
         .await
@@ -271,7 +280,7 @@ async fn create_crash_window(
     tokio::fs::write(
         tasks.join("t1.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 9,
+            "version": 10,
             "id": "t1",
             "kind": "agent",
             "name": "inspect_child",
@@ -281,10 +290,8 @@ async fn create_crash_window(
             "error": null,
             "child_run_id": CHILD_RUN_ID,
             "child_remaining_delegation_depth": 0,
-            "delegate_context": "fresh",
-            "fork_parent_message_seq": null,
             "prompt": "child work",
-            "created_at": chrono::Utc::now()
+            "created_at": chrono::Utc::now() - chrono::Duration::seconds(1)
         }))
         .unwrap(),
     )

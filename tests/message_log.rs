@@ -123,7 +123,16 @@ async fn messages_are_self_contained_model_readable_records() {
         "call_1"
     );
     assert!(lines.iter().all(|line| line.get("seq").is_none()));
-    assert!(lines.iter().all(|line| line.get("_pico").is_none()));
+    for (index, line) in lines.iter().enumerate() {
+        assert_eq!(
+            line["_pico"]["checkpoint"],
+            json!({
+                "first_message_ref": format!("m{}", index + 1),
+                "index": 0,
+                "count": 1,
+            })
+        );
+    }
     assert_eq!(first.message_ref, "m1");
     assert_eq!(second.message_ref, "m2");
     assert_eq!(third.message_ref, "m3");
@@ -132,6 +141,81 @@ async fn messages_are_self_contained_model_readable_records() {
     let persisted_run: Value =
         serde_json::from_slice(&tokio::fs::read(&paths.metadata).await.unwrap()).unwrap();
     assert_eq!(persisted_run["message_format"], MESSAGE_FORMAT);
+}
+
+#[tokio::test]
+async fn appends_a_multi_message_checkpoint_with_contiguous_refs() {
+    let workspace = tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let paths = store.create_run(&record(workspace.path())).await.unwrap();
+    store
+        .append_message("run-1", &Message::text(Role::User, "before"))
+        .await
+        .unwrap();
+
+    let messages = vec![
+        Message::text(Role::Assistant, "assistant"),
+        Message {
+            role: Role::Tool,
+            content: vec![MessageContent::ToolResult {
+                call_id: "call-1".into(),
+                content: "first result".into(),
+                is_error: false,
+                metadata: ResultMetadata::empty(),
+            }],
+        },
+        Message {
+            role: Role::Tool,
+            content: vec![MessageContent::ToolResult {
+                call_id: "call-2".into(),
+                content: "second result".into(),
+                is_error: false,
+                metadata: ResultMetadata::empty(),
+            }],
+        },
+    ];
+    let records = store.append_checkpoint("run-1", &messages).await.unwrap();
+
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.message_ref.as_str())
+            .collect::<Vec<_>>(),
+        ["m2", "m3", "m4"]
+    );
+    assert_eq!(
+        store.load_messages("run-1").await.unwrap()[1..]
+            .iter()
+            .map(|message| serde_json::to_value(message).unwrap())
+            .collect::<Vec<_>>(),
+        messages
+            .iter()
+            .map(|message| serde_json::to_value(message).unwrap())
+            .collect::<Vec<_>>()
+    );
+    let lines = read_jsonl(&paths.messages).await;
+    for (index, line) in lines[1..].iter().enumerate() {
+        assert_eq!(
+            line["_pico"]["checkpoint"],
+            json!({
+                "first_message_ref": "m2",
+                "index": index,
+                "count": 3,
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn rejects_an_empty_checkpoint_without_touching_the_log() {
+    let workspace = tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let paths = store.create_run(&record(workspace.path())).await.unwrap();
+
+    let error = store.append_checkpoint("run-1", &[]).await.unwrap_err();
+
+    assert!(error.to_string().contains("must not be empty"));
+    assert!(tokio::fs::read(paths.messages).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -250,7 +334,12 @@ async fn rejects_invalid_refs_and_corrupt_committed_records() {
         .await
         .unwrap();
     let error = store.load_trajectory("run-1").await.unwrap_err();
-    assert!(error.to_string().contains("is not the expected `m1`"));
+    assert!(
+        error
+            .to_string()
+            .contains("checkpoint `m1` starts with message `m9`"),
+        "{error:#}"
+    );
 
     tokio::fs::write(&paths.messages, b"{not-json}\n")
         .await

@@ -220,7 +220,7 @@ impl Default for GeneralTaskConfig {
     fn default() -> Self {
         Self {
             model: None,
-            max_output_tokens: Some(4_096),
+            max_output_tokens: None,
         }
     }
 }
@@ -560,6 +560,7 @@ mod tests {
         assert_eq!(defaults.compaction.keep_recent_tokens, 20_000);
         assert_eq!(defaults.compaction.summary_max_output_tokens, 4_096);
         assert_eq!(defaults.compaction.history_search_max_matches, 50);
+        assert_eq!(defaults.agents.general_task.max_output_tokens, None);
     }
 
     #[test]

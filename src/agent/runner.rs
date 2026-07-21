@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -11,7 +11,7 @@ use crate::{
     memory::MemoryPaths,
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role},
     prompts::agent_prompts,
-    storage::{DelegateContext, RunDirStore, RunLease, RunState},
+    storage::{RunDirStore, RunLease, RunState},
     tools::{RunToolAssembly, ToolRegistry},
     trajectory::LocalTrajectoryReader,
 };
@@ -28,13 +28,12 @@ use super::{
 
 pub use super::types::{AgentRunnerConfig, RunRequest, RunResult, RunnerOptions};
 
-mod fork;
 mod lifecycle;
 mod model_request;
 mod recovery;
 
 use lifecycle::RunMode;
-use recovery::{append_background_results, append_interrupted_tool_results, resumable_final_text};
+use recovery::{append_background_results, append_restart_reminder, resumable_final_text};
 
 pub struct AgentRunner {
     provider: Arc<dyn ModelProvider>,
@@ -88,7 +87,7 @@ impl AgentRunner {
         let model = plan.model.clone();
         let max_output_tokens = plan.max_output_tokens;
         self.store.update_state(&run_id, RunState::Running).await?;
-        let (mut trajectory, mut needs_initial_message) = match mode {
+        let (mut trajectory, needs_initial_message) = match mode {
             RunMode::New => {
                 events
                     .emit(&RuntimeEvent::new(
@@ -123,35 +122,6 @@ impl AgentRunner {
         };
 
         let system = agent_prompts().system.clone();
-        let fork_parent_message_seq = request
-            .delegated_context
-            .as_ref()
-            .filter(|context| context.mode == DelegateContext::Fork)
-            .and_then(|context| context.fork_parent_message_seq);
-        if request
-            .delegated_context
-            .as_ref()
-            .is_some_and(|context| context.mode == DelegateContext::Fork)
-        {
-            let parent_run_id = request
-                .parent_run_id
-                .as_deref()
-                .context("forked run has no parent run id")?;
-            let boundary = request
-                .delegated_context
-                .as_ref()
-                .and_then(|context| context.fork_parent_message_seq)
-                .context("forked run has no parent message boundary")?;
-            self.materialize_fork_prefix(
-                parent_run_id,
-                &run_id,
-                boundary,
-                &request.prompt,
-                &mut trajectory,
-            )
-            .await?;
-            needs_initial_message = trajectory.len() == boundary as usize;
-        }
         if needs_initial_message {
             let runtime_reminder = build_runtime_reminder(
                 &self.workspace,
@@ -234,18 +204,6 @@ impl AgentRunner {
             task_manager.resume_agent_task(task).await?;
         }
         let outcome: Result<RunResult> = async {
-            let mut fork_first_request_pending = request
-                .delegated_context
-                .as_ref()
-                .filter(|context| context.mode == DelegateContext::Fork)
-                .and_then(|context| context.fork_parent_message_seq)
-                .is_some_and(|boundary| {
-                    !trajectory.iter().any(|record| {
-                        record.seq > boundary.saturating_add(1)
-                            && record.compaction.is_none()
-                            && record.message.role == Role::Assistant
-                    })
-                });
             let completed_steps = trajectory
                 .iter()
                 .filter(|record| {
@@ -253,22 +211,16 @@ impl AgentRunner {
                 })
                 .count();
             if mode == RunMode::Resume {
-                append_interrupted_tool_results(
-                    &self.store,
-                    &run_id,
-                    &mut trajectory,
-                    &task_manager,
-                    &self.artifacts,
-                    &events,
-                    &self.workspace,
-                )
-                .await?;
+                let resumable_final = resumable_final_text(&trajectory);
+                if resumable_final.is_none() {
+                    append_restart_reminder(&self.store, &run_id, &mut trajectory).await?;
+                }
                 let resumed_inputs = self
                     .store
                     .append_pending_inputs(&run_id, &mut trajectory)
                     .await?;
                 if resumed_inputs.is_empty()
-                    && let Some(final_text) = resumable_final_text(&trajectory)
+                    && let Some(final_text) = resumable_final
                 {
                     let ready = task_manager.pending_before_finish().await?;
                     if ready.is_empty() {
@@ -301,7 +253,7 @@ impl AgentRunner {
 
             let mut context_tokens = estimate_request_input_tokens(
                 &system,
-                &build_active_context(&trajectory, fork_parent_message_seq)?,
+                &build_active_context(&trajectory)?,
                 &tool_specs,
             );
 
@@ -327,7 +279,6 @@ impl AgentRunner {
                 });
 
                 if automatic_compaction_enabled
-                    && !fork_first_request_pending
                     && let Some(completed) = maybe_compact(CompactionAttempt {
                         provider: &self.provider,
                         model: &model,
@@ -335,7 +286,6 @@ impl AgentRunner {
                         system: &system,
                         tools: &tool_specs,
                         trajectory: &trajectory,
-                        fork_parent_message_seq,
                         tokens_before: context_tokens,
                         options: &self.options.compaction,
                         store: &self.store,
@@ -363,8 +313,7 @@ impl AgentRunner {
                 .await?;
                 task_manager.mark_delivered(&ready).await?;
                 context_tokens = context_tokens.saturating_add(added);
-                let mut active_messages =
-                    build_active_context(&trajectory, fork_parent_message_seq)?;
+                let mut active_messages = build_active_context(&trajectory)?;
                 append_active_task_reminder(&mut active_messages, &active_tasks);
                 context_tokens = context_tokens.max(estimate_request_input_tokens(
                     &system,
@@ -403,7 +352,6 @@ impl AgentRunner {
                         events.clone(),
                     )
                     .await?;
-                fork_first_request_pending = false;
                 let final_text = response.text();
                 let tool_calls = response.tool_calls();
                 let assistant_message = response.assistant;
@@ -412,13 +360,13 @@ impl AgentRunner {
                     .input_tokens
                     .unwrap_or(context_tokens)
                     .saturating_add(estimate_message_tokens(&assistant_message));
-                let assistant_record = self
-                    .store
-                    .append_message(&run_id, &assistant_message)
-                    .await?;
-                trajectory.push(assistant_record);
 
                 if tool_calls.is_empty() {
+                    let assistant_record = self
+                        .store
+                        .append_message(&run_id, &assistant_message)
+                        .await?;
+                    trajectory.push(assistant_record);
                     let steered = self
                         .store
                         .append_pending_inputs(&run_id, &mut trajectory)
@@ -466,12 +414,14 @@ impl AgentRunner {
                 }
 
                 let tool_messages = direct_tools.execute_batch(tool_calls).await?;
+                let mut checkpoint = Vec::with_capacity(tool_messages.len().saturating_add(1));
+                checkpoint.push(assistant_message);
                 for tool_message in tool_messages {
-                    let record = self.store.append_message(&run_id, &tool_message).await?;
                     context_tokens =
                         context_tokens.saturating_add(estimate_message_tokens(&tool_message));
-                    trajectory.push(record);
+                    checkpoint.push(tool_message);
                 }
+                trajectory.extend(self.store.append_checkpoint(&run_id, &checkpoint).await?);
                 step = step.saturating_add(1);
             }
         }

@@ -62,25 +62,20 @@ decision context and rejected alternatives.
 Revisit when cross-run queries, multi-worker ownership, or server-side pagination
 become concrete requirements.
 
-## Completed-Message Resume
+## Complete-Checkpoint Resume
 
-Main runs and durable GeneralTask children resume from committed complete
-messages. A run-level lease
-prevents concurrent advancement. Missing direct-tool results become explicit
-`interrupted` error results rather than replaying potentially side-effecting
-work. Durable task records coordinate parent and child state, while each child
-keeps its own transcript and result delivery is derived from the parent log.
-The parent is the recovery entrypoint for every GeneralTask child, including
-one delegated to a large memory update.
+Main runs and GeneralTask children resume from complete checkpoints. A normal
+tool turn groups the assistant, every ordered tool result, and any attachment;
+compaction groups request and state. A torn group is invisible and is removed
+before the next append. Resume injects one user/runtime warning about possible
+side effects instead of synthesizing tool errors or replaying the discarded
+turn.
 
-Delegated task records also retain the originating provider call id internally.
-That lets resume pair a crash-window `delegate` call with its existing child
-without replaying the delegation or emitting an interrupted error. See
-[ADR 0027](adr/0027-correlate-delegate-recovery-with-originating-call.md).
-
-Rejected: replaying incomplete tools, copying child messages into task JSON,
-and maintaining a second durable `delivered` boolean. See
-[ADR 0006](adr/0006-complete-message-resume-and-durable-child-coordination.md).
+Parent task files become recoverable only when the complete parent checkpoint
+contains their originating ToolResult. Orphans are ignored; committed ordinary
+background tools become interrupted, while committed children resume through
+their own runner. This assumes a supervisor has killed the old local process
+tree before resume. See [ADR 0034](adr/0034-atomic-turn-checkpoints.md).
 
 ## Self-Contained Message Log
 
@@ -90,10 +85,10 @@ rare local lifecycle classification uses optional `_pico`. There is no metadata
 sidecar, reconstruction layout, or second transcript representation.
 
 One execution lease gives a run exactly one writer while allowing any number
-of lock-free viewers. A newline is the commit marker. Viewers ignore an
-incomplete final line and the writer trims it before appending after a crash.
-This deliberately assumes viewers never mutate the run and rejects supporting
-multiple competing writers.
+of lock-free viewers. `_pico.checkpoint` groups one or more newline-terminated
+records. Viewers publish only complete groups; the writer trims an incomplete
+tail group before appending after a crash. This deliberately assumes viewers
+never mutate the run and rejects supporting multiple competing writers.
 
 Rejected: a two-file commit protocol, a provider-specific durable wire format,
 duplicated message bodies, and compatibility code for unreleased runs. See
@@ -205,18 +200,15 @@ a second graph scheduler with its own dispatch/wait/stop lifecycle. These would
 couple durable planning state to transient execution and duplicate existing
 tools. See [ADR 0026](adr/0026-file-backed-planning-graphs.md).
 
-## Forked Or Isolated Delegation
+## Isolated Delegation
 
-Delegate calls explicitly choose fresh isolation or a fork of the exact parent
-input before the assistant delegate turn. Forked siblings from one batch share
-that boundary, persist self-contained child trajectories, retain compaction and
-history semantics, and inherit the parent's selected model. Inherited messages
-remain background with applicable facts and constraints; the appended
-delegated task takes precedence over conflicting ancestor workflow. Normal and
-compaction projections keep that exact run-local task across repeated
-compaction without duplicating persisted messages. Provider cache usage is
-observed rather than inferred. See
-[ADR 0025](adr/0025-fork-or-isolate-delegated-context.md).
+Every delegate call starts an isolated GeneralTask child. Its prompt must carry
+the complete objective and task-specific context because parent messages,
+compaction state, and artifacts are not copied. The child uses the configured
+GeneralTask model, owns a normal self-contained trajectory, and resumes through
+the same runner as root runs. This keeps parent-child coordination durable
+without coupling child execution to parent context projection. See
+[ADR 0033](adr/0033-isolate-delegated-context.md).
 
 ## Conservative File Mutation
 
