@@ -5,6 +5,10 @@
 - Refines: ADR 0018 (per-result output limiting)
 - Refines: ADR 0020 (terminal background result presentation)
 
+ADR 0032 later stores the exact internal background-result block directly in
+the self-contained message record. Provider projections still escape the
+model-facing XML, while the inline/artifact policy decided here is unchanged.
+
 ## Context
 
 Terminal background results were forced into artifacts even when a small UTF-8

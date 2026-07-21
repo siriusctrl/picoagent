@@ -22,6 +22,9 @@ sequence numbers, integrity hashes, and reconstruction layout now live. The
 committed trajectory remains append-only and is still the source for compaction
 and exact recovery.
 
+ADR 0032 supersedes that physical layout with one self-contained message line.
+The append-only compaction and history-retrieval decisions here remain accepted.
+
 ## Context
 
 Long tool-using runs need to reduce the messages sent on later model calls, but

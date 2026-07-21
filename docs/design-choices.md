@@ -82,34 +82,28 @@ Rejected: replaying incomplete tools, copying child messages into task JSON,
 and maintaining a second durable `delivered` boolean. See
 [ADR 0006](adr/0006-complete-message-resume-and-durable-child-coordination.md).
 
-## Chat-Compatible Message Log
+## Self-Contained Message Log
 
-`messages.jsonl` is directly inspectable as `openai-chat-compatible` messages,
-without picoagent ids or content variants mixed into the JSON. The initial
-runtime reminder is text in the first user message. Explicit compatible-endpoint
-reasoning uses the optional `reasoning_content` extension; it is not an official
-OpenAI Chat field.
+`messages.jsonl` stores the runner's provider-neutral message directly. Each
+model-readable record contains `ref`, `created_at`, `role`, and typed `content`;
+rare local lifecycle classification uses optional `_pico`. There is no metadata
+sidecar, reconstruction layout, or second transcript representation.
 
-Stable refs, sequence and time, exact-message and reconstruction-metadata
-hashes, internal layout, tool-error state, and opaque provider continuation
-items live in a paired `message_metadata.jsonl` sidecar. Writing metadata last
-gives each pair a simple commit boundary while preserving enough information to
-reconstruct the provider-neutral runtime message. Per-run file locking keeps
-independent store instances from interleaving the two halves of a commit.
+One execution lease gives a run exactly one writer while allowing any number
+of lock-free viewers. A newline is the commit marker. Viewers ignore an
+incomplete final line and the writer trims it before appending after a crash.
+This deliberately assumes viewers never mutate the run and rejects supporting
+multiple competing writers.
 
-Rejected: a picoagent-specific envelope in the message log, private fields on
-Chat messages, duplicating all message text in metadata, and preserving a
-legacy decoder before any released run depends on it. The unversioned
-`openai-chat-compatible` name describes the contract; an actually incompatible
-future representation must use a distinct format name rather than reserving a
-speculative `v1` suffix. See
-[ADR 0005](adr/0005-openai-chat-compatible-message-log.md).
+Rejected: a two-file commit protocol, a provider-specific durable wire format,
+duplicated message bodies, and compatibility code for unreleased runs. See
+[ADR 0032](adr/0032-self-contained-message-log.md).
 
 ## Append-Only Local Compaction
 
 Compaction reduces the active model request without changing the raw evidence:
 complete messages remain append-only, and successful compaction instructions
-and assistant states are recorded in the same Chat-compatible log. Exact
+and assistant states are recorded in the same self-contained message log. Exact
 compacted details remain available
 through read-only regex search and ref-centered reads; the retrieval interface
 can be backed by local files or a future remote store.
@@ -248,8 +242,8 @@ provider headers, SSE event shapes, and prompt-cache hints stay in provider
 modules.
 
 Image reads use one canonical attachment block. Each provider adapter owns its
-native multimodal projection, while the Chat-compatible log stores native user
-content parts and the sidecar commits reconstruction layout. Direct batches
+native multimodal projection, while the message log stores the canonical image
+attachment block directly. Direct batches
 emit all paired tool results before one attachment message, avoiding ambiguous
 interleaving under concurrent completion. See
 [ADR 0022](adr/0022-native-image-attachments-after-tool-results.md).

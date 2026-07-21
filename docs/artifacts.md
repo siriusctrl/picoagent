@@ -31,10 +31,10 @@ Artifact ids are immutable within a run. Metadata includes:
 
 Changing the content while retaining the same id and hash metadata is invalid.
 
-A forked child keeps every inherited Chat message and `ArtifactRef` unchanged;
-paired metadata differs only where the fork contract clears run-local pending
-input ids. An inherited ref therefore still contains the original run id and
-model-visible path. Before committing the corresponding child message,
+A forked child keeps every inherited message and `ArtifactRef` unchanged;
+the copied record differs only where the fork contract clears run-local pending
+input ids. An inherited artifact ref therefore still contains the original run
+id and model-visible path. Before committing the corresponding child message,
 picoagent copies the complete bytes into the child's artifact directory under
 a deterministic name derived from that exact source ref and writes a
 child-owned sidecar. History lookup and ordinary `read` resolve the original
@@ -102,18 +102,18 @@ runtime message per ready set.
 
 Payload limiting happens before picoagent adds the `<background_task>` status
 wrapper. The wrapper, artifact metadata, and inspection instruction are never
-part of the preview budget. Inline payload text is XML-escaped in the native
-Chat message and decoded through its paired layout metadata, so output that
-contains runtime-like tags cannot escape its task block.
+part of the preview budget. The typed message keeps the exact inline payload;
+provider projections XML-escape it, so runtime-like tags cannot escape its task
+block.
 
 If an image read exceeds the foreground window and becomes a background task,
 its binary result remains artifact-backed. Reading that artifact again attaches
 the image on demand.
 
 A status-less background notice is only a running acknowledgement and has no
-result metadata. A terminal notice includes `status`; when its result is
-artifact-backed, the same `ArtifactRef` is paired with that block in
-`message_metadata.jsonl`.
+result artifact. A terminal notice includes `status` and keeps its result
+metadata in the same background-task content block. Artifact-backed results
+carry their exact path and `ArtifactRef`; small inline results have no artifact.
 
 ### History-query boundaries
 
@@ -125,9 +125,8 @@ regex,” while an artifact preview means “use bounded `read` on the reference
 complete bounded result.” Neither history tool uses a cursor.
 
 Full-text history search reads the exact `ArtifactRef` stored with each
-foreground or background result in `message_metadata.jsonl`. The Chat-shaped
-`messages.jsonl` line remains unchanged, and history retrieval does not parse
-the model-facing preview envelope. A foreground `ToolResult` is correlated by
+foreground or background result in `messages.jsonl`. History retrieval does not
+parse the model-facing preview envelope. A foreground `ToolResult` is correlated by
 its provider `tool_call_id`. After promotion, the running acknowledgement still
 occupies that provider tool-result slot, while the later terminal background
 message is correlated by `task_id`. The local reader follows the exact

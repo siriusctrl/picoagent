@@ -7,6 +7,10 @@
 - Refined by: ADR 0023 (run record version 6 model modalities)
 - Refined by: ADR 0024 (run record version 7 delegation depth)
 
+ADR 0032 later removes the duplicated numeric sequence and paired log. The
+`m<N>` ref now derives sequence directly from the self-contained line position;
+the model-facing identity decision here remains accepted.
+
 ## Context
 
 Messages previously had opaque ULID refs plus a separate numeric sequence. A

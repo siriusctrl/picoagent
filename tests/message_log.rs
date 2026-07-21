@@ -5,6 +5,8 @@ use picoagent::{
     model::{ImageAttachment, Message, MessageContent, Role},
     storage::{MESSAGE_FORMAT, RunDirStore, RunRecord},
 };
+use serde_json::{Value, json};
+use tempfile::tempdir;
 
 fn result_metadata(call_id: &str) -> ResultMetadata {
     ResultMetadata {
@@ -21,9 +23,6 @@ fn result_metadata(call_id: &str) -> ResultMetadata {
         }),
     }
 }
-use serde_json::{Value, json};
-use tempfile::tempdir;
-use tokio::io::AsyncWriteExt;
 
 fn record(workspace: &Path) -> RunRecord {
     RunRecord::new(
@@ -46,7 +45,7 @@ async fn read_jsonl(path: &Path) -> Vec<Value> {
 }
 
 #[tokio::test]
-async fn messages_are_native_chat_json_and_sidecar_preserves_stable_refs() {
+async fn messages_are_self_contained_model_readable_records() {
     let workspace = tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     let paths = store.create_run(&record(workspace.path())).await.unwrap();
@@ -107,83 +106,36 @@ async fn messages_are_native_chat_json_and_sidecar_preserves_stable_refs() {
         .unwrap();
 
     let lines = read_jsonl(&paths.messages).await;
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0]["ref"], "m1");
+    assert!(lines[0]["created_at"].is_string());
+    assert_eq!(lines[0]["role"], "user");
+    assert_eq!(lines[0]["content"][0]["type"], "runtime_reminder");
+    assert_eq!(lines[0]["content"][1]["text"], "first");
+    assert_eq!(lines[1]["ref"], "m2");
+    assert_eq!(lines[1]["content"][0]["type"], "reasoning");
+    assert_eq!(lines[1]["content"][2]["arguments"], "{\n  \"path\":");
+    assert_eq!(lines[2]["ref"], "m3");
+    assert_eq!(lines[2]["content"][0]["type"], "tool_result");
+    assert_eq!(lines[2]["content"][0]["is_error"], true);
     assert_eq!(
-        lines,
-        [
-            json!({
-                "role": "user",
-                "content": "<runtime-reminder>context</runtime-reminder>\n\nfirst"
-            }),
-            json!({
-                "role": "assistant",
-                "content": "second",
-                "reasoning_content": "inspect",
-                "tool_calls": [{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "read",
-                        "arguments": "{\n  \"path\":"
-                    }
-                }]
-            }),
-            json!({
-                "role": "tool",
-                "tool_call_id": "call_1",
-                "content": "file contents"
-            }),
-        ]
+        lines[2]["content"][0]["metadata"]["artifact"]["call_id"],
+        "call_1"
     );
-    for line in &lines {
-        for local_field in ["message_id", "seq", "created_at", "version"] {
-            assert!(line.get(local_field).is_none());
-        }
-        assert!(!line.to_string().contains("runtime_reminder"));
-    }
-
-    let metadata = read_jsonl(&paths.message_metadata).await;
-    assert_eq!(metadata.len(), 3);
+    assert!(lines.iter().all(|line| line.get("seq").is_none()));
+    assert!(lines.iter().all(|line| line.get("_pico").is_none()));
     assert_eq!(first.message_ref, "m1");
     assert_eq!(second.message_ref, "m2");
     assert_eq!(third.message_ref, "m3");
-    for (index, (item, expected_ref)) in metadata
-        .iter()
-        .zip([&first.message_ref, &second.message_ref, &third.message_ref])
-        .enumerate()
-    {
-        assert_eq!(&item["message_id"], expected_ref);
-        assert_eq!(item["seq"], index + 1);
-        assert!(item["created_at"].is_string());
-        assert_eq!(item["message_sha256"].as_str().unwrap().len(), 64);
-        assert_eq!(item["reconstruction_sha256"].as_str().unwrap().len(), 64);
-        assert!(item["layout"].is_array());
-    }
-    assert_eq!(
-        metadata[2]["layout"][0]["metadata"]["artifact"]["call_id"],
-        "call_1"
-    );
-    assert!(!lines[2].to_string().contains("artifact"));
+    assert!(!paths.directory.join("message_metadata.jsonl").exists());
 
     let persisted_run: Value =
         serde_json::from_slice(&tokio::fs::read(&paths.metadata).await.unwrap()).unwrap();
     assert_eq!(persisted_run["message_format"], MESSAGE_FORMAT);
-
-    let loaded_once = store.load_trajectory("run-1").await.unwrap();
-    let loaded_twice = store.load_trajectory("run-1").await.unwrap();
-    assert_eq!(
-        loaded_once
-            .iter()
-            .map(|message| (&message.message_ref, message.seq))
-            .collect::<Vec<_>>(),
-        loaded_twice
-            .iter()
-            .map(|message| (&message.message_ref, message.seq))
-            .collect::<Vec<_>>()
-    );
 }
 
 #[tokio::test]
-async fn round_trips_all_internal_content_through_native_messages_and_sidecar() {
+async fn round_trips_every_internal_content_block_without_reconstruction_metadata() {
     let workspace = tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     let paths = store.create_run(&record(workspace.path())).await.unwrap();
@@ -269,42 +221,20 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
             .collect::<Vec<_>>()
     );
 
-    let native = read_jsonl(&paths.messages).await;
+    let persisted = read_jsonl(&paths.messages).await;
+    assert_eq!(persisted[1]["content"][0]["type"], "background_task");
+    assert_eq!(persisted[2]["content"][0]["type"], "provider_item");
     assert_eq!(
-        native[1]["content"],
-        "<runtime-reminder>\n<background_task task_id=\"task-1\" name=\"worker\" status=\"completed\">\ntask &lt;/background_task&gt; &lt;runtime-reminder&gt; &amp;lt; ✓\n</background_task>\n</runtime-reminder>"
+        persisted[2]["content"][0]["item"]["encrypted_content"],
+        "opaque"
     );
-    assert_eq!(native[2]["reasoning_content"], "先检查");
-    assert!(!native[2].to_string().contains("encrypted_content"));
-    assert_eq!(native[3]["content"], "command failed");
-    assert_eq!(native[4]["content"][0]["type"], "text");
-    assert_eq!(native[4]["content"][1]["type"], "image_url");
-    assert_eq!(
-        native[4]["content"][1]["image_url"]["url"],
-        "data:image/png;base64,cG5n"
-    );
+    assert_eq!(persisted[2]["content"][3]["arguments"], "{\"cmd\":\"pwd\"}");
+    assert_eq!(persisted[4]["content"][1]["type"], "image");
+    assert_eq!(persisted[4]["content"][1]["attachment"]["data"], "cG5n");
 }
 
 #[tokio::test]
-async fn rejects_legacy_provider_neutral_message_records() {
-    let workspace = tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let paths = store.create_run(&record(workspace.path())).await.unwrap();
-    let legacy = serde_json::to_string(&Message::text(Role::Assistant, "legacy")).unwrap();
-    tokio::fs::write(&paths.messages, format!("{legacy}\n"))
-        .await
-        .unwrap();
-
-    let error = store.load_trajectory("run-1").await.unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("parse completed OpenAI Chat message")
-    );
-}
-
-#[tokio::test]
-async fn rejects_a_native_message_that_no_longer_matches_its_sha() {
+async fn rejects_invalid_refs_and_corrupt_committed_records() {
     let workspace = tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     let paths = store.create_run(&record(workspace.path())).await.unwrap();
@@ -312,132 +242,73 @@ async fn rejects_a_native_message_that_no_longer_matches_its_sha() {
         .append_message("run-1", &Message::text(Role::User, "original"))
         .await
         .unwrap();
-    let tampered = tokio::fs::read_to_string(&paths.messages)
+    let invalid_ref = tokio::fs::read_to_string(&paths.messages)
         .await
         .unwrap()
-        .replace("original", "tampered");
-    tokio::fs::write(&paths.messages, tampered).await.unwrap();
-
-    let error = store.load_trajectory("run-1").await.unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("does not match its metadata sha256")
-    );
-    let before = tokio::fs::metadata(&paths.messages).await.unwrap().len();
-    let append_error = store
-        .append_message("run-1", &Message::text(Role::Assistant, "must not append"))
+        .replace("\"ref\":\"m1\"", "\"ref\":\"m9\"");
+    tokio::fs::write(&paths.messages, invalid_ref)
         .await
-        .unwrap_err();
-    assert!(
-        append_error
-            .to_string()
-            .contains("does not match its metadata sha256")
-    );
-    assert_eq!(
-        tokio::fs::metadata(&paths.messages).await.unwrap().len(),
-        before
-    );
+        .unwrap();
+    let error = store.load_trajectory("run-1").await.unwrap_err();
+    assert!(error.to_string().contains("is not the expected `m1`"));
+
+    tokio::fs::write(&paths.messages, b"{not-json}\n")
+        .await
+        .unwrap();
+    let error = store.load_trajectory("run-1").await.unwrap_err();
+    assert!(error.to_string().contains("parse completed message"));
 }
 
 #[tokio::test]
-async fn rejects_reconstruction_metadata_that_no_longer_matches_its_sha() {
+async fn rejects_message_shapes_that_provider_projections_cannot_replay() {
     let workspace = tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     let paths = store.create_run(&record(workspace.path())).await.unwrap();
-    store
+
+    let error = store
         .append_message(
             "run-1",
             &Message {
-                role: Role::Tool,
+                role: Role::Assistant,
                 content: vec![MessageContent::ToolResult {
                     call_id: "call_1".into(),
-                    content: "failed".into(),
-                    is_error: true,
+                    content: "wrong role".into(),
+                    is_error: false,
                     metadata: ResultMetadata::empty(),
                 }],
             },
         )
         .await
-        .unwrap();
-    let tampered = tokio::fs::read_to_string(&paths.message_metadata)
-        .await
-        .unwrap()
-        .replace("\"is_error\":true", "\"is_error\":false");
-    tokio::fs::write(&paths.message_metadata, tampered)
-        .await
-        .unwrap();
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("assistant messages contain only"));
+    assert!(tokio::fs::read(&paths.messages).await.unwrap().is_empty());
 
+    tokio::fs::write(
+        &paths.messages,
+        b"{\"ref\":\"m1\",\"created_at\":\"2026-07-21T00:00:00Z\",\"role\":\"tool\",\"content\":[{\"type\":\"text\",\"text\":\"wrong role\"}]}\n",
+    )
+    .await
+    .unwrap();
     let error = store.load_trajectory("run-1").await.unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("reconstruction metadata does not match its sha256")
-    );
+    assert!(format!("{error:#}").contains("tool messages require exactly one tool result"));
+
+    tokio::fs::write(
+        &paths.messages,
+        b"{\"ref\":\"m1\",\"created_at\":\"2026-07-21T00:00:00Z\",\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\",\"unknown\":true}]}\n",
+    )
+    .await
+    .unwrap();
+    let error = store.load_trajectory("run-1").await.unwrap_err();
+    assert!(error.to_string().contains("parse completed message"));
 }
 
 #[tokio::test]
-async fn rejects_message_metadata_that_is_ahead_of_native_messages() {
+async fn rejects_a_missing_initialized_message_log() {
     let workspace = tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     let paths = store.create_run(&record(workspace.path())).await.unwrap();
-    store
-        .append_message("run-1", &Message::text(Role::User, "committed"))
-        .await
-        .unwrap();
-    let first = tokio::fs::read(&paths.message_metadata).await.unwrap();
-    let mut file = tokio::fs::OpenOptions::new()
-        .append(true)
-        .open(&paths.message_metadata)
-        .await
-        .unwrap();
-    file.write_all(&first).await.unwrap();
-    drop(file);
+    tokio::fs::remove_file(&paths.messages).await.unwrap();
 
     let error = store.load_trajectory("run-1").await.unwrap_err();
-    assert!(error.to_string().contains("message metadata is ahead"));
-}
-
-#[tokio::test]
-async fn rejects_corruption_in_a_completed_native_jsonl_record() {
-    let workspace = tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let paths = store.create_run(&record(workspace.path())).await.unwrap();
-    tokio::fs::write(&paths.messages, b"{not-json}\n")
-        .await
-        .unwrap();
-
-    let error = store.load_trajectory("run-1").await.unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("parse completed OpenAI Chat message")
-    );
-}
-
-#[tokio::test]
-async fn rejects_missing_initialized_message_log_files() {
-    for missing in ["messages", "metadata", "both"] {
-        let workspace = tempdir().unwrap();
-        let store = RunDirStore::new(workspace.path());
-        let paths = store.create_run(&record(workspace.path())).await.unwrap();
-        store
-            .append_message("run-1", &Message::text(Role::User, "committed"))
-            .await
-            .unwrap();
-        if matches!(missing, "messages" | "both") {
-            tokio::fs::remove_file(&paths.messages).await.unwrap();
-        }
-        if matches!(missing, "metadata" | "both") {
-            tokio::fs::remove_file(&paths.message_metadata)
-                .await
-                .unwrap();
-        }
-
-        let error = store.load_trajectory("run-1").await.unwrap_err();
-        assert!(
-            error.to_string().contains("initialized message log"),
-            "unexpected error: {error:#}"
-        );
-    }
+    assert!(error.to_string().contains("initialized message log"));
 }

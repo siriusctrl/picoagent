@@ -100,13 +100,6 @@ pub(crate) fn escape_xml_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-pub(crate) fn unescape_xml_text(value: &str) -> String {
-    value
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,6 +8,10 @@ ADR 0005 refines only the physical encoding of these completed messages:
 provider-neutral reconstruction state live in `message_metadata.jsonl`. The
 completed-message boundary and transient-delta decisions below remain accepted.
 
+ADR 0032 supersedes ADR 0005's physical encoding with one self-contained
+provider-neutral record per message. The completed-message boundary and
+transient-delta decision here remain accepted.
+
 ## Context
 
 Picoagent needs a portable, searchable trajectory for inspection and future

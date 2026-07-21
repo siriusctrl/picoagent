@@ -205,17 +205,6 @@ async fn fork_siblings_share_the_exact_pre_assistant_request_and_fresh_is_isolat
         first_messages.lines().next().unwrap(),
         second_messages.lines().next().unwrap()
     );
-    let first_metadata = tokio::fs::read_to_string(&store.paths(&fork_runs[0].id).message_metadata)
-        .await
-        .unwrap();
-    let second_metadata =
-        tokio::fs::read_to_string(&store.paths(&fork_runs[1].id).message_metadata)
-            .await
-            .unwrap();
-    assert_eq!(
-        first_metadata.lines().next().unwrap(),
-        second_metadata.lines().next().unwrap()
-    );
     for child in &fork_runs {
         let events = tokio::fs::read_to_string(&store.paths(&child.id).events)
             .await
@@ -494,17 +483,6 @@ async fn fork_preserves_the_active_compacted_projection_and_exact_history() {
         child_messages.lines().take(boundary).collect::<Vec<_>>(),
         parent_messages.lines().take(boundary).collect::<Vec<_>>()
     );
-    let parent_metadata = tokio::fs::read_to_string(&store.paths(&parent.run_id).message_metadata)
-        .await
-        .unwrap();
-    let child_metadata = tokio::fs::read_to_string(&store.paths(&child.id).message_metadata)
-        .await
-        .unwrap();
-    assert_eq!(
-        child_metadata.lines().take(boundary).collect::<Vec<_>>(),
-        parent_metadata.lines().take(boundary).collect::<Vec<_>>()
-    );
-
     tokio::fs::remove_dir_all(store.paths(&parent.run_id).directory)
         .await
         .unwrap();

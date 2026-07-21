@@ -1,6 +1,6 @@
 # ADR 0005: Persist Chat-Compatible Messages with a Metadata Sidecar
 
-- Status: Accepted
+- Status: Superseded by ADR 0032
 - Date: 2026-07-16
 - Refines: ADR 0001 (completed-message encoding)
 - Refines: ADR 0003 (stable trajectory identity and recovery metadata)

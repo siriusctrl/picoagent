@@ -100,3 +100,5 @@ Use these sections:
   work](0030-uniform-foreground-and-background-results.md)
 - [ADR 0031: Validate the complete initial graph topology before
   creation](0031-validate-complete-initial-graph-topology.md)
+- [ADR 0032: Store each message as one self-contained
+  record](0032-self-contained-message-log.md)

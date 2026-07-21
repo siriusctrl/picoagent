@@ -1,10 +1,9 @@
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use picoagent::{
     model::{Message, Role},
     storage::{RunDirStore, RunRecord},
 };
-use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::AsyncWriteExt;
 
@@ -19,17 +18,8 @@ fn record(workspace: &Path) -> RunRecord {
     )
 }
 
-async fn read_jsonl(path: &Path) -> Vec<Value> {
-    tokio::fs::read_to_string(path)
-        .await
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
 #[tokio::test]
-async fn ignores_and_repairs_a_torn_native_message_tail() {
+async fn viewers_ignore_and_the_writer_repairs_a_torn_tail() {
     let workspace = tempdir().unwrap();
     let original = RunDirStore::new(workspace.path());
     let paths = original
@@ -45,7 +35,7 @@ async fn ignores_and_repairs_a_torn_native_message_tail() {
         .open(&paths.messages)
         .await
         .unwrap();
-    file.write_all(b"{\"role\":\"assistant\",\"content\":\xff")
+    file.write_all(b"{\"ref\":\"m2\",\"created_at\":")
         .await
         .unwrap();
     drop(file);
@@ -59,11 +49,11 @@ async fn ignores_and_repairs_a_torn_native_message_tail() {
     assert_eq!(appended.seq, 2);
     let recovered = reopened.load_trajectory("run-1").await.unwrap();
     assert_eq!(recovered.len(), 2);
-    assert_eq!(recovered[1].message_ref, appended.message_ref);
+    assert_eq!(recovered[1].message_ref, "m2");
 }
 
 #[tokio::test]
-async fn ignores_an_orphan_native_message_and_replaces_it_on_append() {
+async fn a_valid_record_without_a_newline_is_not_committed() {
     let workspace = tempdir().unwrap();
     let original = RunDirStore::new(workspace.path());
     let paths = original
@@ -79,160 +69,70 @@ async fn ignores_an_orphan_native_message_and_replaces_it_on_append() {
         .open(&paths.messages)
         .await
         .unwrap();
-    file.write_all(b"{\"role\":\"assistant\",\"content\":\"orphan\"}\n")
-        .await
-        .unwrap();
+    file.write_all(
+        br#"{"ref":"m2","created_at":"2026-07-21T00:00:00Z","role":"assistant","content":[{"type":"text","text":"not committed"}]}"#,
+    )
+    .await
+    .unwrap();
     drop(file);
 
     let reopened = RunDirStore::new(workspace.path());
     assert_eq!(reopened.load_trajectory("run-1").await.unwrap().len(), 1);
-    let appended = reopened
+    reopened
         .append_message("run-1", &Message::text(Role::Assistant, "replacement"))
         .await
         .unwrap();
-    assert_eq!(appended.seq, 2);
-
-    let native = tokio::fs::read_to_string(paths.messages).await.unwrap();
-    assert_eq!(native.lines().count(), 2);
-    assert!(!native.contains("orphan"));
-    assert!(native.contains("replacement"));
-    assert_eq!(read_jsonl(&paths.message_metadata).await.len(), 2);
-}
-
-#[tokio::test]
-async fn a_cached_store_repairs_an_interrupted_native_append() {
-    let workspace = tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let paths = store.create_run(&record(workspace.path())).await.unwrap();
-    store
-        .append_message("run-1", &Message::text(Role::User, "committed"))
-        .await
-        .unwrap();
-
-    let mut file = tokio::fs::OpenOptions::new()
-        .append(true)
-        .open(&paths.messages)
-        .await
-        .unwrap();
-    file.write_all(b"{\"role\":\"assistant\",\"content\":\"orphan\"}\n")
-        .await
-        .unwrap();
-    drop(file);
-
-    let appended = store
-        .append_message("run-1", &Message::text(Role::Assistant, "replacement"))
-        .await
-        .unwrap();
-    assert_eq!(appended.seq, 2);
-    let recovered = store.load_trajectory("run-1").await.unwrap();
-    assert_eq!(recovered.len(), 2);
-    assert_eq!(recovered[1].message_ref, appended.message_ref);
-    let native = tokio::fs::read_to_string(paths.messages).await.unwrap();
-    assert!(!native.contains("orphan"));
-}
-
-#[tokio::test]
-async fn repairs_a_torn_metadata_tail_before_the_next_append() {
-    let workspace = tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let paths = store.create_run(&record(workspace.path())).await.unwrap();
-    store
-        .append_message("run-1", &Message::text(Role::User, "first"))
-        .await
-        .unwrap();
-    let mut file = tokio::fs::OpenOptions::new()
-        .append(true)
-        .open(&paths.message_metadata)
-        .await
-        .unwrap();
-    file.write_all(b"{\"message_id\":").await.unwrap();
-    drop(file);
-
-    assert_eq!(store.load_trajectory("run-1").await.unwrap().len(), 1);
-    let appended = store
-        .append_message("run-1", &Message::text(Role::Assistant, "second"))
-        .await
-        .unwrap();
-    assert_eq!(appended.seq, 2);
-    assert_eq!(store.load_trajectory("run-1").await.unwrap().len(), 2);
-    assert_eq!(read_jsonl(&paths.message_metadata).await.len(), 2);
-}
-
-#[tokio::test]
-async fn completes_a_valid_metadata_tail_without_a_newline_before_append() {
-    let workspace = tempdir().unwrap();
-    let store = RunDirStore::new(workspace.path());
-    let paths = store.create_run(&record(workspace.path())).await.unwrap();
-    store
-        .append_message("run-1", &Message::text(Role::User, "first"))
-        .await
-        .unwrap();
-    let metadata_len = tokio::fs::metadata(&paths.message_metadata)
-        .await
-        .unwrap()
-        .len();
-    let file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .open(&paths.message_metadata)
-        .await
-        .unwrap();
-    file.set_len(metadata_len - 1).await.unwrap();
-    drop(file);
-
-    let appended = store
-        .append_message("run-1", &Message::text(Role::Assistant, "second"))
-        .await
-        .unwrap();
-    assert_eq!(appended.seq, 2);
-    assert_eq!(store.load_trajectory("run-1").await.unwrap().len(), 2);
-    let metadata = tokio::fs::read(&paths.message_metadata).await.unwrap();
-    assert!(metadata.ends_with(b"\n"));
+    let durable = tokio::fs::read_to_string(paths.messages).await.unwrap();
+    assert_eq!(durable.lines().count(), 2);
+    assert!(!durable.contains("not committed"));
+    assert!(durable.contains("replacement"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn independent_stores_serialize_concurrent_message_appends() {
+async fn many_viewers_can_observe_one_writer_without_taking_the_run_lease() {
     let workspace = tempdir().unwrap();
-    let creator = RunDirStore::new(workspace.path());
-    creator.create_run(&record(workspace.path())).await.unwrap();
-    let first = RunDirStore::new(workspace.path());
-    let second = RunDirStore::new(workspace.path());
+    let store = Arc::new(RunDirStore::new(workspace.path()));
+    store.create_run(&record(workspace.path())).await.unwrap();
+    let _lease = store.acquire_run_lease("run-1").await.unwrap();
 
-    let write_first = async {
-        for index in 0..20 {
-            first
-                .append_message(
-                    "run-1",
-                    &Message::text(Role::User, format!("first-{index}")),
-                )
-                .await
-                .unwrap();
-        }
+    let writer = {
+        let store = store.clone();
+        tokio::spawn(async move {
+            for index in 0..40 {
+                store
+                    .append_message(
+                        "run-1",
+                        &Message::text(Role::User, format!("message-{index}")),
+                    )
+                    .await
+                    .unwrap();
+                tokio::task::yield_now().await;
+            }
+        })
     };
-    let write_second = async {
-        for index in 0..20 {
-            second
-                .append_message(
-                    "run-1",
-                    &Message::text(Role::Assistant, format!("second-{index}")),
-                )
-                .await
-                .unwrap();
-        }
-    };
-    tokio::join!(write_first, write_second);
-
-    let messages = creator.load_trajectory("run-1").await.unwrap();
-    assert_eq!(messages.len(), 40);
-    assert_eq!(
-        messages
-            .iter()
-            .map(|message| message.seq)
-            .collect::<Vec<_>>(),
-        (1..=40).collect::<Vec<_>>()
-    );
-    assert!(
-        messages
-            .iter()
-            .all(|message| message.message_ref == format!("m{}", message.seq))
-    );
+    let mut viewers = Vec::new();
+    for _ in 0..8 {
+        let workspace = workspace.path().to_owned();
+        viewers.push(tokio::spawn(async move {
+            let viewer = RunDirStore::new(workspace);
+            let mut previous = 0;
+            for _ in 0..80 {
+                let visible = viewer.load_trajectory("run-1").await.unwrap();
+                assert!(visible.len() >= previous);
+                assert!(
+                    visible
+                        .iter()
+                        .enumerate()
+                        .all(|(index, message)| message.seq == index as u64 + 1)
+                );
+                previous = visible.len();
+                tokio::task::yield_now().await;
+            }
+        }));
+    }
+    writer.await.unwrap();
+    for viewer in viewers {
+        viewer.await.unwrap();
+    }
+    assert_eq!(store.load_trajectory("run-1").await.unwrap().len(), 40);
 }

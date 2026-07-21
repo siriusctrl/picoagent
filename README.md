@@ -67,7 +67,6 @@ Runtime output is stored beneath the current project:
 .pico/runs/<run-id>/
   run.json
   messages.jsonl
-  message_metadata.jsonl
   pending_inputs.jsonl # created when a running child is steered
   events.jsonl
   final.md
@@ -113,25 +112,21 @@ agent not to request an absent modality. Compaction reuses this stable
 system/tool prefix and adds one final user instruction only to the compaction
 request.
 
-`messages.jsonl` uses the `openai-chat-compatible` format: each line is one
-complete Chat message with ordinary `role` and `content` fields. The runtime
-reminder is text at the beginning of the first user message, not a custom JSON
-content type. Assistant tool calls use the Chat `tool_calls` shape, and tool
-results use `role: "tool"`, `tool_call_id`, and `content`. Text-only user
-content remains a string; a user message carrying images uses native Chat
-content parts with `image_url` data URLs.
+`messages.jsonl` uses the self-contained `pico-message` format. Each line has a
+short `ref` (`m1`, `m2`, ...), `created_at`, `role`, and typed `content` blocks.
+Those blocks are the exact provider-neutral messages replayed by the runner, so
+tool failures, artifact refs, images, reasoning, and opaque provider
+continuation items need no sidecar or reconstruction layout. Optional steering
+idempotency and compaction classification live under `_pico` on the same line.
+The sequence is derived from `ref` and the line position rather than duplicated.
 
-Local fields do not alter those messages. Stable `message_id`, sequence,
-timestamp, exact-message and reconstruction-metadata hashes, internal content
-layout, tool-error state, compaction purpose and boundaries, and any opaque
-provider continuation items are stored in the paired
-`message_metadata.jsonl` sidecar. `run.json` declares
-`"message_format": "openai-chat-compatible"`, retains the original user
-prompt, and freezes the stored profile plus remaining delegation depth. The
-metadata line is written last and commits its corresponding
-message. Compaction never rewrites or deletes committed trajectory records; its
-user request and assistant compacted state are ordinary Chat-compatible message
-lines.
+A newline commits the record. The single process holding the run execution
+lease is the only writer; any number of viewers may read complete lines without
+taking a message-log lock. A viewer ignores an incomplete final line, and the
+writer trims that tail before resuming appends. `run.json` declares
+`"message_format": "pico-message"`, retains the original user prompt, and
+freezes the stored profile plus remaining delegation depth. Compaction never
+rewrites or deletes committed trajectory records.
 
 Stable agent instructions are folded scalar values in the typed, compile-time
 `prompts/agents.yaml` registry. Every local model-facing tool adapter has a

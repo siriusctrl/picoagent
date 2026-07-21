@@ -15,33 +15,25 @@ modalities and rejects resume when they change.
 
 ## Durable Messages
 
-`run.json` declares `message_format` as `openai-chat-compatible`.
-`messages.jsonl` contains one complete OpenAI Chat-compatible message per line:
-user messages have `role` and string or native multimodal `content`; assistant messages have `role`,
-`content`, optional `tool_calls`, and optional compatible-endpoint
-`reasoning_content`; tool messages have `role`, `tool_call_id`, and `content`.
-The runtime reminder is ordinary text inside the initial user `content`, so the
-message file contains no `runtime_reminder` JSON type.
+`run.json` declares `message_format` as `pico-message`. `messages.jsonl`
+contains one complete provider-neutral message per line. Each record has its
+run-local `m<N>` ref, timestamp, role, and typed content blocks. The blocks
+directly represent runtime reminders, text, images, reasoning, tool calls and
+results, provider continuation items, and background-task notices. Tool errors
+and `ArtifactRef` values remain attached to their result blocks. Optional
+pending-input idempotency and compaction state use `_pico` on the same line.
 
-`reasoning_content` records reasoning text explicitly returned by a compatible
-endpoint. It is a common endpoint extension, not an official OpenAI Chat
-Completions field, and is absent when the provider does not return it. Later
-compatible Chat requests replay it separately from visible assistant `content`.
+This self-contained representation is not a provider wire format. OpenAI Chat,
+OpenAI Responses, and Anthropic adapters project it independently. Keeping the
+runtime representation directly avoids a second metadata log, byte-span
+layout, duplicated sequence, and reconstruction hashes.
 
-Each message has one corresponding line in `message_metadata.jsonl`. The
-sidecar holds the stable `m<N>` ref whose number equals the one-based sequence,
-timestamp, exact-message SHA-256, provider-neutral content layout, tool-error
-state, opaque provider items, an optional pending-input idempotency id, optional
-compaction purpose/boundary state, and a result's optional
-`ArtifactRef`. A second SHA-256
-covers all reconstruction metadata. The two logs are created and
-directory-synced with the run. The Chat line is synced first and the metadata
-line is synced last as its commit marker. Reads, recovery, and appends take one
-per-run file lock, including across independently opened stores.
-Readers expose only paired records whose hashes and layouts validate. A lone
-final Chat message is treated as an interrupted append; metadata ahead of the
-message log or corruption in a committed pair is an error. This pre-release
-contract does not include a decoder for the previous private message envelope.
+The run execution lease permits one writer and any number of read-only viewers.
+A newline commits a message. Viewers ignore a non-newline-terminated final
+record; before the next append, the writer validates the complete prefix and
+trims that tail. Malformed committed JSON and a ref that does not match its
+one-based line fail loading. This pre-release contract does not decode older
+run-record versions.
 
 ## Loop
 
@@ -88,10 +80,10 @@ tool or both generic artifact
 inspection tools (`read` and `bash`) would keep the full context instead of
 compacting without exact retrieval.
 
-Compaction does not mutate committed message pairs. After a successful response,
+Compaction does not mutate committed messages. After a successful response,
 it appends the compaction user message and exact assistant compacted-state
-message to `messages.jsonl`; their sidecar records distinguish control from
-ordinary conversation and make the assistant record the commit marker. Normal
+message to `messages.jsonl`; each record's `_pico` state distinguishes control
+from ordinary conversation. Normal
 context assembly excludes the compaction instruction and older compaction
 records, using the initial runtime message, latest exact assistant state, one
 synthetic user `<runtime-reminder>` that says to continue rather than compact

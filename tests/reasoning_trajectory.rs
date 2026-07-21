@@ -109,37 +109,17 @@ async fn chat_reasoning_is_persisted_as_a_separate_trajectory_channel() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(persisted.len(), 2);
-    assert_eq!(
-        persisted[0].as_object().unwrap().keys().collect::<Vec<_>>(),
-        ["content", "role"]
-    );
+    assert_eq!(persisted[0]["ref"], "m1");
+    assert!(persisted[0]["created_at"].is_string());
     assert_eq!(persisted[0]["role"], "user");
-    assert_eq!(persisted[0]["content"], user_content);
-    assert!(!persisted[0].to_string().contains("runtime_reminder"));
-    assert_eq!(
-        persisted[1],
-        json!({
-            "role": "assistant",
-            "content": "PICO_REASONING_OK",
-            "reasoning_content": "inspect first"
-        })
-    );
-    for message in &persisted {
-        assert!(message.get("message_id").is_none());
-        assert!(message.get("seq").is_none());
-        assert!(message.get("created_at").is_none());
-    }
-
-    let metadata: Vec<Value> = tokio::fs::read_to_string(&paths.message_metadata)
-        .await
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(metadata.len(), 2);
-    assert_eq!(metadata[0]["seq"], 1);
-    assert_eq!(metadata[1]["seq"], 2);
-    assert!(metadata.iter().all(|entry| entry["message_id"].is_string()));
+    assert_eq!(persisted[0]["content"][0]["type"], "runtime_reminder");
+    assert_eq!(persisted[0]["content"][1]["text"], "test reasoning");
+    assert_eq!(persisted[1]["ref"], "m2");
+    assert_eq!(persisted[1]["role"], "assistant");
+    assert_eq!(persisted[1]["content"][0]["type"], "reasoning");
+    assert_eq!(persisted[1]["content"][0]["text"], "inspect first");
+    assert_eq!(persisted[1]["content"][1]["text"], "PICO_REASONING_OK");
+    assert!(!paths.directory.join("message_metadata.jsonl").exists());
 
     let events = tokio::fs::read_to_string(paths.events).await.unwrap();
     let events: Vec<Value> = events

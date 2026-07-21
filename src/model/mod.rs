@@ -1,6 +1,6 @@
 use std::fmt;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,7 @@ pub enum Role {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MessageContent {
     /// Synthetic runtime context prepended to the first user request.
     RuntimeReminder {
@@ -133,23 +133,6 @@ impl ImageAttachment {
     pub(crate) fn data_url(&self) -> String {
         format!("data:{};base64,{}", self.media_type, self.data)
     }
-
-    pub(crate) fn from_data_url(value: &str) -> Result<Self> {
-        let value = value
-            .strip_prefix("data:")
-            .ok_or_else(|| anyhow::anyhow!("image attachment is not a data URL"))?;
-        let (media_type, data) = value
-            .split_once(";base64,")
-            .ok_or_else(|| anyhow::anyhow!("image attachment is not base64 encoded"))?;
-        anyhow::ensure!(!media_type.is_empty(), "image attachment has no media type");
-        STANDARD
-            .decode(data)
-            .map_err(|error| anyhow::anyhow!("invalid image attachment base64: {error}"))?;
-        Ok(Self {
-            media_type: media_type.to_owned(),
-            data: data.to_owned(),
-        })
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +183,63 @@ impl Message {
                 _ => None,
             })
             .collect()
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        match self.role {
+            Role::User => {
+                let has_background_task = self
+                    .content
+                    .iter()
+                    .any(|block| matches!(block, MessageContent::BackgroundTask { .. }));
+                if has_background_task {
+                    ensure!(
+                        self.content
+                            .iter()
+                            .all(|block| matches!(block, MessageContent::BackgroundTask { .. })),
+                        "background task notices cannot be mixed with other user content"
+                    );
+                } else {
+                    ensure!(
+                        self.content.iter().all(|block| matches!(
+                            block,
+                            MessageContent::RuntimeReminder { .. }
+                                | MessageContent::Text { .. }
+                                | MessageContent::Image { .. }
+                        )),
+                        "user messages contain only runtime reminders, text, images, or background tasks"
+                    );
+                }
+            }
+            Role::Assistant => ensure!(
+                self.content.iter().all(|block| matches!(
+                    block,
+                    MessageContent::Text { .. }
+                        | MessageContent::Reasoning { .. }
+                        | MessageContent::ToolCall { .. }
+                        | MessageContent::ProviderItem { .. }
+                )),
+                "assistant messages contain only text, reasoning, tool calls, or provider items"
+            ),
+            Role::Tool => {
+                let [
+                    MessageContent::ToolResult {
+                        call_id, metadata, ..
+                    },
+                ] = self.content.as_slice()
+                else {
+                    bail!("tool messages require exactly one tool result");
+                };
+                if let Some(artifact) = &metadata.artifact {
+                    ensure!(
+                        artifact.call_id == *call_id,
+                        "result artifact call id `{}` does not match `{call_id}`",
+                        artifact.call_id
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -302,7 +342,7 @@ impl ModelResponse {
             "model provider returned a completed response with role `{:?}`; expected `assistant`",
             self.assistant.role
         );
-        Ok(())
+        self.assistant.validate()
     }
 
     pub fn text(&self) -> String {

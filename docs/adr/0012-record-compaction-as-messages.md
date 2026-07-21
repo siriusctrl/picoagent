@@ -11,6 +11,10 @@ ADR 0021 adds a non-durable user runtime reminder immediately after the exact
 assistant state in normal projected context. The durable request/state message
 decision below is unchanged.
 
+ADR 0032 later moves compaction classification from a metadata sidecar to the
+same message record's `_pico` field. Recording the request and state as
+append-only messages remains accepted.
+
 ## Context
 
 The original local compaction design flattened an older native message prefix

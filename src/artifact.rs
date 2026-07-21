@@ -55,8 +55,8 @@ pub struct ArtifactRef {
     pub sha256: String,
 }
 
-/// Local execution metadata for one completed result. It is persisted beside
-/// Chat-compatible messages, never inside their model-facing content.
+/// Local execution metadata for one completed result. It is persisted in the
+/// provider-neutral result block and omitted from provider-facing projections.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResultMetadata {

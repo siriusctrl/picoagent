@@ -138,54 +138,46 @@ main-agent-accepted outcomes. This is what persistence means in the launch
 runtime:
 a cloud worker can retain or inspect a job without a database.
 
-The durable message contract is `openai-chat-compatible`. Every
-`messages.jsonl` line is one Chat-shaped user, assistant, or tool message;
-runtime reminder text is part of the first user message's `content`, not a
-custom JSON variant. Assistant reasoning explicitly returned by a compatible
-endpoint uses the optional `reasoning_content` extension. This extension is not
-part of the official OpenAI Chat Completions schema.
+The durable message contract is `pico-message`. Every `messages.jsonl` line is
+self-contained: `ref`, `created_at`, `role`, and the exact typed
+provider-neutral `content` blocks used by the runner. Tool-error state,
+structured artifact refs, images, reasoning, background-task identity, and
+opaque provider continuation items therefore need no second representation or
+reconstruction layout. Optional pending-input idempotency and compaction state
+live under `_pico` on the same record. The one-based sequence is derived from
+the required `m<N>` ref and line position rather than stored again.
 
 Assistant function-call `arguments` remain the exact provider string in this
 log, including malformed JSON. Parsing occurs only at the individual tool
 execution boundary. An invalid call receives an ordered `is_error` result while
 valid sibling calls from the same assistant message continue normally.
 
-Text-only user messages keep string `content`. User image messages use the
-native Chat content-part array with text followed by `image_url` data URLs;
-their internal image layout is committed in `message_metadata.jsonl` so resume
-reconstructs the canonical attachments exactly.
+Image attachments remain typed base64 content blocks in the log. Provider
+adapters project text and images to their native wire shapes only when building
+a request.
 
-Picoagent-only state lives in the paired `message_metadata.jsonl` sidecar. Each
-line carries a run-local `m<N>` message id whose number equals its one-based
-sequence, a timestamp, SHA-256 of the exact Chat JSON, the layout needed to
-recover provider-neutral content, and a second SHA-256 over that reconstruction
-metadata. A queued steering input's idempotency id is stored separately when
-present. Tool-error state and opaque provider continuation items also remain
-there, as do structured result artifact refs. Compaction request/state
-classification and state boundaries also live only in the sidecar. None of these
-private fields are added to the Chat message. `run.json` identifies the format
-as `openai-chat-compatible` and records the model modality declaration,
-persisted profile, and remaining delegation depth. Resume requires the current
-model declaration to match and restores delegation authority from that run
-snapshot rather than current depth configuration.
+`run.json` identifies the format as `pico-message` and records the model
+modality declaration, persisted profile, and remaining delegation depth. Resume
+requires the current model declaration to match and restores delegation
+authority from that run snapshot rather than current depth configuration.
 
 Only complete messages are resumable. Stream deltas are emitted to live sinks
 but omitted from the persisted `events.jsonl` and are never appended as partial
 conversation messages.
 
-Writing a message syncs its Chat line first, then syncs its metadata line. The
-metadata line is the commit marker: loading exposes only paired, hash-valid
-records. A lone final Chat line is an interrupted append and is removed before
-the next append; metadata ahead of the message log, mismatched hashes, and
-malformed completed records fail loading. The current pre-release format
-intentionally does not load older run-record versions.
+A newline is the message commit marker. The one process holding the run
+execution lease is the sole writer. It syncs each complete line and trims any
+non-newline-terminated tail before resuming after interruption. Read-only
+viewers take no message-log lock and expose only the complete prefix, so a
+concurrent partial final write is invisible. Malformed completed records and
+out-of-sequence refs fail loading. The current pre-release format intentionally
+does not load older run-record versions.
 
-Both message files are created and directory-synced when the run is created.
-Reads, recovery, and paired appends hold a per-run file lock, so two
-`RunDirStore` instances cannot observe or produce half-interleaved commits. A
-cached next sequence is trusted only when both durable file lengths still match;
-it is removed before cancellable I/O and restored only after the metadata commit
-has synced.
+The message file is created and directory-synced with the run. The writer's
+cached next sequence is invalidated before cancellable I/O and restored only
+after a complete record has synced. Multiple independent writers for one run
+are outside the storage contract; the execution lease prevents that state in
+the runtime.
 
 The persisted run state is intentionally coarse; a failed or process-abandoned
 run may re-enter `running` through the explicit resume command:
@@ -235,8 +227,8 @@ boundary, the active-task section shares the existing synthetic continuation
 reminder instead of adding another runtime-reminder message.
 
 The full run holds a filesystem execution lease. Resume rebuilds the recorded
-profile, validates provider/model/workspace identity, loads the paired message
-log and latest completed compacted state, and continues after the last completed
+profile, validates provider/model/workspace identity, loads the message log and
+latest completed compacted state, and continues after the last completed
 model step. An unpaired direct tool request becomes an explicit interrupted
 error result and is never automatically replayed. If a direct call had already
 been promoted, or `delegate` had already created its child, the durable task
@@ -297,7 +289,7 @@ can implement the same reader without granting the model filesystem write
 access.
 
 For linked local artifacts, the query reads the structured `ArtifactRef` from
-the completed result's paired message metadata. It does not parse the
+the completed message content. It does not parse the
 model-facing preview prose or guess from a call id. The reader verifies the
 artifact with a bounded-memory stream and invokes `rg` with bounded output. It
 stops after the requested newest matches plus one, avoiding whole-artifact heap
@@ -362,7 +354,7 @@ separate terminal background message correlated by that id.
 `delegate` starts a GeneralTask child in the background immediately.
 `task_status`, `task_wait`, `task_inspect`, `task_steer`, and `task_stop`
 provide explicit lifecycle operations. Inspect projects a bounded page of the
-child's durable messages in their native Chat-compatible form. Steer appends a
+child's durable messages. Steer appends a
 durable pending ordinary user message after the child's current assistant
 response and complete tool-call batch, before its next provider request. Stop
 aborts the selected future and commits `cancelled`; it does not affect unrelated
@@ -374,7 +366,7 @@ not reuse an ancestor run's inherited `t<N>` ids.
 
 Delegate context is explicit. A fresh child starts from its own initial
 reminder and task. A fork child records the parent's pre-assistant message
-sequence, materializes that entire prefix in its own Chat-compatible message
+sequence, materializes that entire prefix in its own message
 log, and then appends its child-specific reminder and task. Same-batch sibling
 calls resolve to the same boundary. Copying the durable trajectory rather than
 only the active projection preserves compaction/history behavior; run-local

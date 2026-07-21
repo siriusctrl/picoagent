@@ -48,21 +48,13 @@ impl RunDirStore {
         created_at: DateTime<Utc>,
     ) -> Result<TrajectoryMessage> {
         let mut sequences = self.write_lock.lock().await;
-        // Invalidate the fast path before any cancellable I/O. If this future is
-        // dropped during either half of the commit, the next append must inspect
-        // and repair the files instead of trusting a stale sequence cursor.
+        // Invalidate the fast path before cancellable I/O. A dropped append may
+        // leave a non-newline-terminated tail that the next append must trim.
         let cached = sequences.remove(run_id);
         let paths = self.paths(run_id);
         ensure_run_exists(&paths).await?;
-        let _log_lock = message_log::exclusive_lock(&paths.directory).await?;
-        let lengths = message_log::lengths(&paths.messages, &paths.message_metadata).await?;
         let next = match cached {
-            Some(cursor)
-                if cursor.messages_len == lengths.messages
-                    && cursor.metadata_len == lengths.metadata =>
-            {
-                cursor.next_seq
-            }
+            Some(cursor) => cursor.next_seq,
             _ => {
                 let run = self.load_run(run_id).await?;
                 ensure!(
@@ -70,7 +62,7 @@ impl RunDirStore {
                     "run {run_id} uses unsupported message format {}",
                     run.message_format
                 );
-                message_log::prepare_append(&paths.messages, &paths.message_metadata)
+                message_log::prepare_append(&paths.messages)
                     .await?
                     .saturating_add(1)
             }
@@ -83,14 +75,11 @@ impl RunDirStore {
             pending_input_id,
             compaction,
         };
-        message_log::append(&paths.messages, &paths.message_metadata, &record).await?;
-        let lengths = message_log::lengths(&paths.messages, &paths.message_metadata).await?;
+        message_log::append(&paths.messages, &record).await?;
         sequences.insert(
             run_id.to_owned(),
             super::MessageCursor {
                 next_seq: next.saturating_add(1),
-                messages_len: lengths.messages,
-                metadata_len: lengths.metadata,
             },
         );
         Ok(record)
@@ -143,10 +132,6 @@ impl RunDirStore {
     }
 
     pub async fn load_trajectory(&self, run_id: &str) -> Result<Vec<TrajectoryMessage>> {
-        let mut sequences = self.write_lock.lock().await;
-        // A read may discover an orphan or corruption without repairing it.
-        // Never let a later append fast-path around that validation result.
-        sequences.remove(run_id);
         let paths = self.paths(run_id);
         let run = self.load_run(run_id).await?;
         ensure!(
@@ -154,8 +139,7 @@ impl RunDirStore {
             "run {run_id} uses unsupported message format {}",
             run.message_format
         );
-        let _log_lock = message_log::exclusive_lock(&paths.directory).await?;
-        message_log::load(&paths.messages, &paths.message_metadata).await
+        message_log::load(&paths.messages).await
     }
 
     /// Loads only the completed prefix hidden by the latest compaction.

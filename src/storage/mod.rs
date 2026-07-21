@@ -20,8 +20,8 @@ mod input;
 mod message_log;
 mod trajectory;
 
-pub const MESSAGE_FORMAT: &str = "openai-chat-compatible";
-const RUN_RECORD_VERSION: u32 = 8;
+pub const MESSAGE_FORMAT: &str = "pico-message";
+const RUN_RECORD_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -161,7 +161,6 @@ pub struct RunPaths {
     pub execution_lock: PathBuf,
     pub metadata: PathBuf,
     pub messages: PathBuf,
-    pub message_metadata: PathBuf,
     pub pending_inputs: PathBuf,
     pub events: PathBuf,
     pub final_output: PathBuf,
@@ -178,8 +177,6 @@ pub struct RunDirStore {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MessageCursor {
     next_seq: u64,
-    messages_len: u64,
-    metadata_len: u64,
 }
 
 impl RunDirStore {
@@ -205,7 +202,6 @@ impl RunDirStore {
             execution_lock: directory.join(".run.lock"),
             metadata: directory.join("run.json"),
             messages: directory.join("messages.jsonl"),
-            message_metadata: directory.join("message_metadata.jsonl"),
             pending_inputs: directory.join("pending_inputs.jsonl"),
             events: directory.join("events.jsonl"),
             final_output: directory.join("final.md"),
@@ -240,16 +236,9 @@ impl RunDirStore {
             .await
             .with_context(|| format!("create run directory {}", paths.directory.display()))?;
         sync_directory_chain(&paths.directory, &self.workspace).await?;
-        message_log::initialize(&paths.directory, &paths.messages, &paths.message_metadata).await?;
+        message_log::initialize(&paths.directory, &paths.messages).await?;
         write_json_atomic(&paths.metadata, run).await?;
-        sequences.insert(
-            run.id.clone(),
-            MessageCursor {
-                next_seq: 1,
-                messages_len: 0,
-                metadata_len: 0,
-            },
-        );
+        sequences.insert(run.id.clone(), MessageCursor { next_seq: 1 });
         Ok(paths)
     }
 

@@ -23,9 +23,9 @@ navigation, invariants, verification, and handoff.
   embedded into the binary; dynamic assembly remains in `src/agent/context.rs`.
 - `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,
   and project-local artifact paths.
-- `src/storage/`: self-contained run directories, Chat-compatible message JSONL
-  with paired local metadata (including compacted-state boundaries), event
-  JSONL, status, and final-result persistence.
+- `src/storage/`: self-contained run directories, one self-contained message
+  JSONL (including compacted-state boundaries), event JSONL, status, and
+  final-result persistence.
 - `src/trajectory.rs` and `src/trajectory/`: provider-neutral compacted-history
   search/read contracts plus the local message and artifact reader.
 - `src/skills/`: Agent Skills discovery and progressive `SKILL.md` loading.
@@ -74,16 +74,18 @@ navigation, invariants, verification, and handoff.
   responses, at most once, with a non-durable tail reminder. Never persist or
   execute the discarded partial response; retain its reported usage in the
   failure event, and do not retry unrelated provider errors through this path.
-- Keep `messages.jsonl` in the declared `openai-chat-compatible` shape. Store
-  the sequence-addressed `m<N>` ref, timestamps, exact-message and
-  reconstruction-metadata hashes, tool-error state, and opaque provider items in the paired
-  `message_metadata.jsonl`; metadata commits the already-synced message line.
+- Keep `messages.jsonl` in the declared `pico-message` shape. Each line contains
+  its `m<N>` ref, timestamp, role, and exact provider-neutral content blocks.
+  Keep optional pending-input and compaction state under `_pico`; do not add a
+  second message metadata log or reconstruction format.
 - Keep message refs run-local and equal to `m<N>`, where `N` is the durable
   one-based message sequence. Store pending-input ids separately for steering
   idempotency; do not overload the model-facing ref with unrelated identity.
-- Serialize message-log reads, recovery, and paired appends with the per-run
-  file lock. In-memory cursors are only a fast path and must be invalidated
-  before cancellable writes or whenever durable file lengths change.
+- Allow exactly one process to advance a run under its execution lease and any
+  number of lock-free read-only viewers. A newline commits one message. Viewers
+  ignore an incomplete final line; the writer trims it before its next append.
+  In-memory cursors are only a writer fast path and must be invalidated before
+  cancellable writes.
 - Spill large tool results to `.pico/runs/<run-id>/artifacts/`; preserve the full
   result and return a bounded head/tail preview plus an immutable artifact ref.
 - Limit each tool result independently. Keep small UTF-8 results inline; spill
@@ -173,7 +175,7 @@ fragmented tool arguments, error responses, and authentication refresh behavior.
 
 For runtime or artifact changes, also run a headless smoke task with the echo
 provider and inspect the generated run directory, `messages.jsonl`,
-`message_metadata.jsonl`, `events.jsonl`, final output, and artifact metadata.
+`events.jsonl`, final output, and artifact metadata.
 
 For prompt or tool-description asset changes, verify `cargo package --list`
 contains every referenced asset in addition to compiling all targets.

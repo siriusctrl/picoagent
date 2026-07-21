@@ -509,24 +509,17 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     assert_eq!(messages[6]["role"], "assistant");
     assert!(messages[5].get("type").is_none());
     assert!(messages[6].get("type").is_none());
-    let metadata = tokio::fs::read_to_string(&paths.message_metadata)
-        .await
-        .unwrap();
-    let metadata = metadata
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(metadata[5]["compaction"]["kind"], "request");
-    assert_eq!(metadata[6]["compaction"]["kind"], "state");
+    assert_eq!(messages[5]["_pico"]["compaction"]["kind"], "request");
+    assert_eq!(messages[6]["_pico"]["compaction"]["kind"], "state");
     assert_eq!(
-        metadata[6]["compaction"]["state"]
+        messages[6]["_pico"]["compaction"]["state"]
             .as_object()
             .unwrap()
             .len(),
         2
     );
     assert_eq!(
-        metadata[6]["compaction"]["state"]["first_kept_message_ref"],
+        messages[6]["_pico"]["compaction"]["state"]["first_kept_message_ref"],
         trajectory[3].message_ref
     );
 
