@@ -51,6 +51,7 @@ impl TaskManager {
                 prompt,
                 delegate_context,
                 fork_parent_message_seq,
+                origin_call_id.to_owned(),
             )
             .await?;
         let handle = self.launch_agent_task(task_id.clone());

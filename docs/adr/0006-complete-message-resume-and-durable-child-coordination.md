@@ -24,6 +24,10 @@ Together they advance the pre-release run and task record formats to version 8.
 A completed fork snapshot is self-contained; partial snapshot recovery may
 consult only the frozen parent boundary.
 
+ADR 0027 persists a delegated task's originating provider call id so recovery
+can reconstruct a missing acknowledgement without replaying `delegate`. It
+advances the pre-release task record format to version 9.
+
 ADR 0020 later refines model-facing task delivery into unified runtime notices
 whose terminal bodies contain only complete artifact paths. The durable
 parent/child coordination and transcript-derived delivery decision here remain

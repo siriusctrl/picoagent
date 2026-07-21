@@ -514,6 +514,11 @@ transcript, while queued/running child runs continue from their own last
 complete messages. This recovery guarantee applies to every durable GeneralTask
 task record, including one used for a large memory update.
 
+If the process stops after `delegate` creates that record but before its tool
+result commits, resume reconstructs the original status-less acknowledgement
+and continues the same child. It does not replay the delegation or expose the
+provider call id in task notices.
+
 The parent can inspect a child's latest messages (six by default), page
 backward by sequence, and queue steering while it runs. Steering is stored as
 an ordinary user message after the child's current assistant response and full

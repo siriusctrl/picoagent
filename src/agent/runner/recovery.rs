@@ -173,7 +173,7 @@ pub(super) async fn append_interrupted_tool_results(
         .collect::<Vec<_>>();
     for call in missing {
         let task = tasks
-            .find_undelivered_promotion(&call.id, &call.name, assistant_created_at)
+            .find_undelivered_origin(&call.id, &call.name, assistant_created_at)
             .await;
         let (content, is_error) = if let Some(task) = task {
             (

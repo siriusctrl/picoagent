@@ -114,6 +114,7 @@ impl TaskManager {
         prompt: String,
         delegate_context: DelegateContext,
         fork_parent_message_seq: Option<u64>,
+        origin_call_id: String,
     ) -> Result<String> {
         let mut records = self.records.lock().await;
         let task_id = next_task_id(&records);
@@ -123,8 +124,8 @@ impl TaskManager {
             child_run_id,
             prompt,
             self.remaining_delegation_depth.saturating_sub(1),
-            delegate_context,
-            fork_parent_message_seq,
+            (delegate_context, fork_parent_message_seq),
+            origin_call_id,
         );
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);
@@ -286,7 +287,7 @@ impl TaskManager {
             .with_context(|| format!("unknown background task `{task_id}`"))
     }
 
-    pub(crate) async fn find_undelivered_promotion(
+    pub(crate) async fn find_undelivered_origin(
         &self,
         call_id: &str,
         tool_name: &str,
@@ -298,8 +299,12 @@ impl TaskManager {
             .await
             .values()
             .filter(|record| {
-                record.origin_call_id.as_deref() == Some(call_id)
-                    && record.name == tool_name
+                record.origin_call_id == call_id
+                    && match record.kind.as_str() {
+                        "agent" => tool_name == "delegate",
+                        "tool" => record.name == tool_name,
+                        _ => false,
+                    }
                     && record.created_at >= not_before
                     && !delivered.contains(&record.id)
             })

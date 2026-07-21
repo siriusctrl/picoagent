@@ -90,3 +90,5 @@ Use these sections:
 - [ADR 0025: Fork or isolate delegated context](0025-fork-or-isolate-delegated-context.md)
 - [ADR 0026: Keep planning graphs file-backed and separate from task
   execution](0026-file-backed-planning-graphs.md)
+- [ADR 0027: Correlate delegate recovery with its originating
+  call](0027-correlate-delegate-recovery-with-originating-call.md)

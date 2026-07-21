@@ -218,9 +218,11 @@ The full run holds a filesystem execution lease. Resume rebuilds the recorded
 profile, validates provider/model/workspace identity, loads the paired message
 log and latest completed compacted state, and continues after the last completed
 model step. An unpaired direct tool request becomes an explicit interrupted
-error result and is never automatically replayed. If the call had already been
-promoted, its durable task record instead reconstructs the missing task
-acknowledgement and supplies the terminal result separately.
+error result and is never automatically replayed. If a direct call had already
+been promoted, or `delegate` had already created its child, the durable task
+record instead reconstructs the missing task acknowledgement and supplies the
+terminal result separately. Both task kinds persist the originating provider
+call id internally; resume never replays the call.
 
 ### Artifact storage
 
@@ -378,7 +380,10 @@ the child's run directory. Recovery derives delivered ids from the parent
 transcript, marks in-flight ordinary tools `interrupted` with unknown side
 effects, reconciles terminal children, and resumes queued/running children
 through the same runner. Resume validates the frozen tool-schema hash before
-task reconciliation can update any of those records.
+task reconciliation can update any of those records. If a process stopped
+after a delegated task committed but before its tool result did, the task's
+originating provider call id reconstructs that one status-less acknowledgement;
+it is not exposed in model-facing task notices.
 
 The durable child guarantee belongs to `delegate` GeneralTask records, and the
 parent run is the only resume entrypoint. Memory consolidation

@@ -73,6 +73,11 @@ keeps its own transcript and result delivery is derived from the parent log.
 The parent is the recovery entrypoint for every GeneralTask child, including
 one delegated to a large memory update.
 
+Delegated task records also retain the originating provider call id internally.
+That lets resume pair a crash-window `delegate` call with its existing child
+without replaying the delegation or emitting an interrupted error. See
+[ADR 0027](adr/0027-correlate-delegate-recovery-with-originating-call.md).
+
 Rejected: replaying incomplete tools, copying child messages into task JSON,
 and maintaining a second durable `delivered` boolean. See
 [ADR 0006](adr/0006-complete-message-resume-and-durable-child-coordination.md).

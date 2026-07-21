@@ -7,7 +7,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::{artifact::ResultMetadata, storage::DelegateContext};
 
-const TASK_RECORD_VERSION: u32 = 8;
+const TASK_RECORD_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -43,9 +43,10 @@ pub struct BackgroundTaskRecord {
     pub kind: String,
     /// Model-supplied agent task label or promoted tool name.
     pub name: String,
-    /// Original provider tool-call id for a promoted ordinary tool. This is
-    /// absent for delegated agent tasks.
-    pub origin_call_id: Option<String>,
+    /// Original provider tool-call id for the call which created this task.
+    /// It stays internal and lets recovery reconstruct the missing status-less
+    /// acknowledgement without replaying the call.
+    pub origin_call_id: String,
     pub state: BackgroundTaskState,
     pub result: Option<BackgroundTaskOutput>,
     pub error: Option<String>,
@@ -78,7 +79,7 @@ impl BackgroundTaskRecord {
             id,
             kind: "tool".to_owned(),
             name,
-            origin_call_id: Some(origin_call_id),
+            origin_call_id,
             state: BackgroundTaskState::Queued,
             result: None,
             error: None,
@@ -99,14 +100,15 @@ impl BackgroundTaskRecord {
         prompt: String,
         child_remaining_delegation_depth: usize,
     ) -> Self {
+        let origin_call_id = format!("delegate-{id}");
         Self::queued_agent_with_context(
             id,
             name,
             child_run_id,
             prompt,
             child_remaining_delegation_depth,
-            DelegateContext::Fresh,
-            None,
+            (DelegateContext::Fresh, None),
+            origin_call_id,
         )
     }
 
@@ -116,15 +118,16 @@ impl BackgroundTaskRecord {
         child_run_id: String,
         prompt: String,
         child_remaining_delegation_depth: usize,
-        delegate_context: DelegateContext,
-        fork_parent_message_seq: Option<u64>,
+        delegated_context: (DelegateContext, Option<u64>),
+        origin_call_id: String,
     ) -> Self {
+        let (delegate_context, fork_parent_message_seq) = delegated_context;
         Self {
             version: TASK_RECORD_VERSION,
             id,
             kind: "agent".to_owned(),
             name,
-            origin_call_id: None,
+            origin_call_id,
             state: BackgroundTaskState::Queued,
             result: None,
             error: None,
@@ -198,15 +201,13 @@ impl BackgroundTaskRecord {
             !self.name.chars().any(char::is_control),
             "task name must not contain control characters"
         );
+        ensure!(
+            !self.origin_call_id.is_empty(),
+            "task {} must reference its original provider call id",
+            self.id
+        );
         match self.kind.as_str() {
             "tool" => {
-                ensure!(
-                    self.origin_call_id
-                        .as_deref()
-                        .is_some_and(|call_id| !call_id.is_empty()),
-                    "tool task {} must reference its original tool-call id",
-                    self.id
-                );
                 ensure!(
                     self.child_run_id.is_none()
                         && self.child_remaining_delegation_depth.is_none()
@@ -218,11 +219,6 @@ impl BackgroundTaskRecord {
                 );
             }
             "agent" => {
-                ensure!(
-                    self.origin_call_id.is_none(),
-                    "agent task {} cannot reference a tool-call id",
-                    self.id
-                );
                 ensure!(
                     self.child_run_id.is_some()
                         && self.child_remaining_delegation_depth.is_some()
@@ -375,6 +371,7 @@ mod tests {
         let loaded = &loaded["task-1"];
         assert_eq!(loaded.child_run_id.as_deref(), Some("child-1"));
         assert_eq!(loaded.prompt.as_deref(), Some("inspect the workspace"));
+        assert_eq!(loaded.origin_call_id, "delegate-task-1");
         assert_eq!(loaded.result_metadata(), ResultMetadata::empty());
     }
 
@@ -420,25 +417,22 @@ mod tests {
         store.write(&record).await.unwrap();
         let loaded = store.load().await.unwrap();
 
-        assert_eq!(
-            loaded["task-1"].origin_call_id.as_deref(),
-            Some("provider-call-7")
-        );
+        assert_eq!(loaded["task-1"].origin_call_id, "provider-call-7");
     }
 
     #[test]
-    fn task_kind_validates_original_call_id_ownership() {
+    fn every_task_kind_requires_an_original_call_id() {
         let mut tool = BackgroundTaskRecord::queued_tool(
             "task-1".to_owned(),
             "read".to_owned(),
             "provider-call-7".to_owned(),
         );
-        tool.origin_call_id = None;
+        tool.origin_call_id.clear();
         assert!(
             tool.validate()
                 .unwrap_err()
                 .to_string()
-                .contains("original tool-call id")
+                .contains("original provider call id")
         );
 
         let mut agent = BackgroundTaskRecord::queued_agent(
@@ -448,13 +442,13 @@ mod tests {
             "inspect".to_owned(),
             0,
         );
-        agent.origin_call_id = Some("provider-call-8".to_owned());
+        agent.origin_call_id.clear();
         assert!(
             agent
                 .validate()
                 .unwrap_err()
                 .to_string()
-                .contains("cannot reference a tool-call id")
+                .contains("original provider call id")
         );
     }
 
@@ -466,8 +460,8 @@ mod tests {
             "child-1".to_owned(),
             "inspect".to_owned(),
             0,
-            DelegateContext::Fork,
-            Some(4),
+            (DelegateContext::Fork, Some(4)),
+            "provider-call-8".to_owned(),
         );
         fork.validate().unwrap();
 

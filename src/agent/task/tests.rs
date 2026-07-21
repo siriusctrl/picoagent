@@ -155,7 +155,7 @@ async fn promotion_recovery_does_not_reuse_an_older_task_with_the_same_call_id()
 
     assert!(
         manager
-            .find_undelivered_promotion("provider-reused-call-id", "read", boundary)
+            .find_undelivered_origin("provider-reused-call-id", "read", boundary)
             .await
             .is_none()
     );
@@ -166,7 +166,7 @@ async fn promotion_recovery_does_not_reuse_an_older_task_with_the_same_call_id()
         .unwrap();
     assert_eq!(
         manager
-            .find_undelivered_promotion("provider-reused-call-id", "read", boundary)
+            .find_undelivered_origin("provider-reused-call-id", "read", boundary)
             .await
             .unwrap()
             .id,
@@ -174,7 +174,7 @@ async fn promotion_recovery_does_not_reuse_an_older_task_with_the_same_call_id()
     );
     assert!(
         manager
-            .find_undelivered_promotion("provider-reused-call-id", "bash", boundary)
+            .find_undelivered_origin("provider-reused-call-id", "bash", boundary)
             .await
             .is_none()
     );
@@ -767,8 +767,8 @@ async fn partial_fork_snapshot_is_completed_from_its_frozen_parent_boundary_on_r
         "fork-child".to_owned(),
         "finish partial fork".to_owned(),
         0,
-        DelegateContext::Fork,
-        Some(2),
+        (DelegateContext::Fork, Some(2)),
+        "delegate-call".to_owned(),
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
@@ -989,7 +989,7 @@ async fn in_flight_tool_recovers_as_interrupted_regardless_of_task_age() {
     assert!(recoverable.is_empty());
     let recovered = manager.get("tool-task").await.unwrap();
     assert_eq!(recovered.state, BackgroundTaskState::Interrupted);
-    assert_eq!(recovered.origin_call_id.as_deref(), Some("bash-call"));
+    assert_eq!(recovered.origin_call_id, "bash-call");
     assert!(
         recovered
             .model_content()
@@ -1135,6 +1135,7 @@ async fn cancelled_agent_does_not_emit_completion_events_when_its_output_arrives
             "do work".to_owned(),
             DelegateContext::Fresh,
             None,
+            "delegate-call".to_owned(),
         )
         .await
         .unwrap();

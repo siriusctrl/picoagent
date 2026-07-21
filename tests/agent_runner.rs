@@ -332,7 +332,7 @@ async fn resume_reconstructs_a_missing_promotion_ack_from_its_terminal_task() {
     tokio::fs::write(
         tasks.join("t1.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 8,
+            "version": 9,
             "id": "t1",
             "kind": "tool",
             "name": "side_effect",
@@ -473,7 +473,7 @@ async fn resume_schema_mismatch_does_not_reconcile_background_tasks() {
             "hang_child".to_owned(),
             "hang child".to_owned(),
             DelegateContext::Fresh,
-            "",
+            "delegate-schema-call",
         )
         .await
         .unwrap();
@@ -892,6 +892,18 @@ async fn subagents_reuse_the_runner_and_report_failed_children() {
         }
     }
     assert_eq!(children.len(), 2);
+    let task_call_ids = std::fs::read_dir(store.paths(&parent.run_id).directory.join("tasks"))
+        .unwrap()
+        .map(|entry| {
+            let task: Value =
+                serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap();
+            task["origin_call_id"].as_str().unwrap().to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        task_call_ids,
+        BTreeSet::from(["delegate-one".to_owned(), "delegate-two".to_owned()])
+    );
     assert!(
         children
             .iter()
@@ -963,6 +975,8 @@ async fn subagents_reuse_the_runner_and_report_failed_children() {
     {
         let artifact = artifact.expect("terminal task notice omitted artifact metadata");
         assert_eq!(path, &artifact.path);
+        assert!(path.contains("/artifacts/background-t"));
+        assert!(!path.contains("delegate-one") && !path.contains("delegate-two"));
         let body = tokio::fs::read_to_string(workspace.path().join(path))
             .await
             .unwrap();

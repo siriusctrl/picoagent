@@ -66,7 +66,7 @@ impl TaskManager {
             .get(task_id)
             .await
             .ok()
-            .and_then(|record| record.origin_call_id)
+            .and_then(|record| (record.kind == "tool").then_some(record.origin_call_id))
             .unwrap_or_else(|| format!("background-{task_id}"));
         let context = ToolContext {
             run_id: self.parent_run_id.clone(),
