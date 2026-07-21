@@ -19,6 +19,7 @@ job/CLI
      -> ArtifactStore
      -> RunDirStore
         -> compacted-state metadata / compacted-history reader
+        -> run-local planning graph files
      -> EventSink
 ```
 
@@ -66,7 +67,7 @@ silently replacing an existing capability.
 
 Every local model-facing adapter keeps its typed compile-time `tool.yaml` beside
 its Rust module. Standalone tools live directly under `src/tools/<tool>/`;
-cohesive task and history families live under
+cohesive task, history, and graph families live under
 `src/tools/<family>/<member>/`. The manifest always contains the complete
 provider-visible name; paths never derive names. The common loader validates
 both prose fields and joins them with a `Returns:` semantic boundary into the
@@ -93,6 +94,15 @@ call can enter task control through foreground promotion.
 The model-visible schema set and resume hash therefore commit the same fixed
 capability contract without a dynamic spawn allowlist.
 
+The fixed built-ins also include `graph_init` and `graph_list`. Their shared
+run-local store allocates short `g<N>` YAML files without overwriting a graph
+during concurrent initialization. `graph_list` parses each file independently,
+validates its DAG and terminal state, and derives ready nodes; one malformed
+file is reported as invalid rather than failing the entire listing. Full graph
+inspection and mutation stay with `read` and `write`. Execution stays with
+`delegate` and the existing task controls, so the graph family does not create
+a second scheduler or persist task ids.
+
 Root and the persisted delegating/leaf GeneralTask profiles have one identical
 built-in capability set. Both GeneralTask profiles appear to the model as the
 common GeneralTask role. Each normal run registers `history_search` and
@@ -114,8 +124,11 @@ Its static YAML schema and description do not change.
 ### Run storage
 
 Each run is a portable directory beneath `<workspace>/.pico/runs/<run-id>/`.
-It contains run metadata, append-only complete messages, structured events, the final answer, artifacts, and
-background task records. This is what persistence means in the launch runtime:
+It contains run metadata, append-only complete messages, structured events, the
+final answer, artifacts, and background task records. It may also contain
+`graphs/g<N>.yaml` files whose nodes represent durable work-item topology and
+main-agent-accepted outcomes. This is what persistence means in the launch
+runtime:
 a cloud worker can retain or inspect a job without a database.
 
 The durable message contract is `openai-chat-compatible`. Every

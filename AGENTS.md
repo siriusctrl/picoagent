@@ -13,9 +13,12 @@ navigation, invariants, verification, and handoff.
 - `src/model/`: provider-neutral message/tool contracts plus OpenAI OAuth,
   OpenAI-compatible, Anthropic-compatible, and deterministic echo adapters.
 - `src/tools/`: the stable tool contract and explicit assembly. Standalone
-  adapters live directly below it; related task and history adapters are
+  adapters live directly below it; related task, history, and graph adapters are
   grouped by family. Every leaf owns a typed compile-time `tool.yaml` containing
   its complete model-facing name, purpose, return guidance, and static schema.
+- `src/tools/graph/`: run-local YAML planning-graph initialization, parsing,
+  validation, and listing. Ordinary file tools own graph inspection and edits;
+  delegation and task controls own execution.
 - `prompts/agents.yaml`: the typed registry of stable agent-level instructions
   embedded into the binary; dynamic assembly remains in `src/agent/context.rs`.
 - `src/artifact.rs`: large-output spill, previews, immutable artifact metadata,
@@ -100,6 +103,10 @@ navigation, invariants, verification, and handoff.
   schema in its typed compile-time `tool.yaml`. Compose the two prose fields
   deterministically into the provider description. Keep prompt assembly,
   argument validation, and execution contracts in Rust.
+- Keep planning graphs as run-local work-item topology and accepted evidence,
+  not task state or a second scheduler. Initialize and validate them through
+  `graph_init`/`graph_list`; mutate them with ordinary `write` and execute ready
+  work with `delegate` plus the existing task controls.
 - Memory is durable user/project knowledge outside the live transcript. Inspect
   and update its ordinary Markdown with the general tools; do not inject the
   tree into every prompt or add a memory-specific tool.

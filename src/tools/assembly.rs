@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::{agent::task::TaskManager, skills::SkillRegistry, trajectory::TrajectoryReader};
 
 use super::{
-    BashTool, DelegateTool, LoadSkillTool, ReadTool, ToolRegistry, WebSearchTool, WriteTool,
+    BashTool, DelegateTool, LoadSkillTool, ReadTool, ToolRegistry, WebSearchTool, WriteTool, graph,
     history, task,
 };
 
@@ -21,6 +21,7 @@ pub fn build_app_tools(
     registry.register(Arc::new(WriteTool::default()))?;
     registry.register(Arc::new(BashTool))?;
     registry.register(Arc::new(LoadSkillTool::new(skills)))?;
+    graph::register(&mut registry)?;
     if let Some(web_search) = web_search {
         registry.register(Arc::new(web_search))?;
     }

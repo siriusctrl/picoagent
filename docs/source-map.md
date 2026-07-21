@@ -34,6 +34,8 @@
   adapters with a typed compile-time `tool.yaml` beside their Rust code.
 - `src/tools/history/{read,search}/`: compacted-history adapters;
   `src/tools/history/mod.rs` registers the complete family.
+- `src/tools/graph/{init,list}/`: run-local YAML planning-graph initialization
+  and validation; `src/tools/graph/model.rs` owns the file contract.
 - `src/tools/task/{inspect,status,steer,stop,wait}/`: background-task controls;
   `src/tools/task/mod.rs` registers the complete family and owns their shared
   result projection.

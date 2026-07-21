@@ -87,3 +87,5 @@ Use these sections:
 - [ADR 0023: Declare model input modalities](0023-declare-model-input-modalities.md)
 - [ADR 0024: Freeze built-in schemas across agent
   roles](0024-freeze-built-in-schemas-across-agent-roles.md)
+- [ADR 0026: Keep planning graphs file-backed and separate from task
+  execution](0026-file-backed-planning-graphs.md)

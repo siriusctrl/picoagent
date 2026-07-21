@@ -15,8 +15,8 @@ initial runtime reminder carries concrete capabilities and concise GeneralTask
 role guidance.
 
 Every local model-facing tool adapter keeps a typed `tool.yaml` beside its Rust
-module. Standalone adapters live at `src/tools/<tool>/`; cohesive task and
-history families live at `src/tools/<family>/<member>/`. Every manifest still
+module. Standalone adapters live at `src/tools/<tool>/`; cohesive task, history,
+and graph families live at `src/tools/<family>/<member>/`. Every manifest still
 declares the complete provider-visible name rather than deriving it from its
 path. `description` states purpose, usage, side effects, and constraints;
 `returns` states the successful result shape, interpretation, and tool-specific

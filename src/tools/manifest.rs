@@ -114,6 +114,8 @@ mod tests {
         let definitions = [
             include_str!("bash/tool.yaml"),
             include_str!("delegate/tool.yaml"),
+            include_str!("graph/init/tool.yaml"),
+            include_str!("graph/list/tool.yaml"),
             include_str!("history/read/tool.yaml"),
             include_str!("history/search/tool.yaml"),
             include_str!("load_skill/tool.yaml"),
@@ -145,6 +147,8 @@ mod tests {
             BTreeSet::from([
                 "bash",
                 "delegate",
+                "graph_init",
+                "graph_list",
                 "history_read",
                 "history_search",
                 "load_skill",

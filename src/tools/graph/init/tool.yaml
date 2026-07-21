@@ -1,0 +1,48 @@
+name: graph_init
+description: |-
+  Initialize one durable planning graph for the current run. A graph records
+  work-item topology and accepted outcomes; it does not execute work or track
+  tasks. The new YAML starts with empty nodes. Use `write` to produce this exact
+  shape:
+
+  version: 1
+  status: wip
+  goal: >-
+    Overall outcome.
+  nodes:
+    inspect_api:
+      objective: >-
+        Determine the API contract.
+      depends_on: []
+      resolution:
+        summary: >-
+          Accepted outcome.
+        evidence:
+          - .pico/runs/<run-id>/artifacts/result.txt
+    implement:
+      objective: >-
+        Implement the accepted contract.
+      depends_on: [inspect_api]
+      resolution: null
+
+  Node ids are non-empty YAML mapping keys without boundary whitespace.
+  Resolution stays null until the main agent accepts a non-empty summary;
+  evidence is an optional list of project-relative paths without `..`. Use
+  `graph_list` to validate the file and discover ready nodes, `delegate` to
+  execute independent work, and task controls to supervise it. Finish with
+  top-level `status: completed` plus non-empty `summary` after every node is
+  resolved, or `status: aborted` plus non-empty `abort_reason`; omit both
+  terminal fields while status is `wip`.
+returns: >-
+  JSON containing the short run-local graph `id`, project-relative YAML `path`,
+  and initial `wip` status. Read or write that path with ordinary file tools.
+input_schema:
+  type: object
+  properties:
+    goal:
+      type: string
+      minLength: 1
+      description: Concise overall outcome the graph should coordinate
+  required:
+    - goal
+  additionalProperties: false

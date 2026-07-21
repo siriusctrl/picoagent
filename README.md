@@ -26,6 +26,7 @@ system.
 - concurrent direct-tool batches whose unfinished calls continue through
   generic background task control
 - asynchronously delegated general-task subagents that reuse the same runner
+- run-local YAML planning graphs maintained with ordinary file tools
 - ordinary Markdown user/project memory maintained with normal file tools
 - self-contained run directories and optional NDJSON events
 
@@ -71,6 +72,7 @@ Runtime output is stored beneath the current project:
   events.jsonl
   final.md
   artifacts/
+  graphs/
   tasks/
 ```
 
@@ -134,10 +136,51 @@ lines.
 Stable agent instructions are folded scalar values in the typed, compile-time
 `prompts/agents.yaml` registry. Every local model-facing tool adapter has a
 typed `tool.yaml` beside it; standalone tools live under `src/tools/<tool>/`,
-while task and history families use `src/tools/<family>/<member>/`. The manifest
+while task, history, and graph families use
+`src/tools/<family>/<member>/`. The manifest
 always owns the complete model-facing name, purpose description, return
 guidance, and input schema. Rust composes the two prose fields into the standard
 provider description and owns validation, assembly, and execution.
+
+## File-backed Planning Graphs
+
+For a complex task, `graph_init` creates a short run-local path such as
+`.pico/runs/<run-id>/graphs/g1.yaml`. The graph is durable coordination state,
+not a scheduler: nodes are work items, dependencies are accepted-outcome
+dependencies, and a node is resolved only when the main agent writes a
+resolution. Use ordinary `read` and `write` for the complete file, then call
+`graph_list` to validate it and derive ready nodes. Execute independent ready
+work with concurrent `delegate` calls and supervise those runs with the existing
+task controls; task ids are not stored in the graph.
+
+```yaml
+version: 1
+status: wip
+goal: >-
+  Implement and verify image input support.
+nodes:
+  inspect_api:
+    objective: >-
+      Determine the provider request contract.
+    depends_on: []
+    resolution:
+      summary: >-
+        The request contract is documented.
+      evidence:
+        - .pico/runs/<run-id>/artifacts/api-contract.txt
+  implement:
+    objective: >-
+      Implement the accepted contract.
+    depends_on: [inspect_api]
+    resolution: null
+```
+
+`graph_list` groups valid files as `wip`, `completed`, or `aborted`, reports
+resolved/unresolved counts, and derives ready node ids. Malformed YAML, unknown
+or repeated dependencies, dependency cycles, unsafe evidence paths, and
+inconsistent terminal state appear under `invalid` without hiding other valid
+graphs. A completed graph requires every node to be resolved and a non-empty
+top-level `summary`; an aborted graph requires a non-empty `abort_reason`.
 
 ## Provider Setup
 

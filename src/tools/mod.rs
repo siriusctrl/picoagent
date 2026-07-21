@@ -9,6 +9,7 @@ use crate::model::ToolSpec;
 mod assembly;
 pub mod bash;
 pub mod delegate;
+mod graph;
 mod history;
 pub mod load_skill;
 mod manifest;

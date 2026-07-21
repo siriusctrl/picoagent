@@ -156,6 +156,20 @@ asynchronously. Separate `task_status`, `task_wait`, `task_inspect`,
 Agent loops have no arbitrary model-step cap, and background work has no hard
 execution deadline. See [ADR 0017](adr/0017-concurrent-tool-batches-and-explicit-task-controls.md).
 
+## File-backed Planning Topology
+
+Complex tasks may keep a run-local YAML DAG whose nodes are work items and whose
+resolutions are outcomes accepted by the main agent. Two fixed tools initialize
+and summarize/validate these files; ordinary `read`/`write` maintain them, while
+`delegate` and task controls execute and supervise work independently. The
+graph never stores task ids, automatically launches successors, or treats an
+agent completion as an accepted node resolution.
+
+Rejected: equating every node with an agent, a graph-specific mutation DSL, and
+a second graph scheduler with its own dispatch/wait/stop lifecycle. These would
+couple durable planning state to transient execution and duplicate existing
+tools. See [ADR 0026](adr/0026-file-backed-planning-graphs.md).
+
 ## Conservative File Mutation
 
 `write` supports complete writes and atomic multi-region replacements. Targets
@@ -223,10 +237,10 @@ loader joins the two prose fields into the provider's standard description.
 These assets are embedded with `include_str!` and parsed strictly. Rust remains
 authoritative for prompt assembly, argument validation, and execution.
 Every local model-facing adapter keeps its complete manifest beside its Rust
-module. Standalone tools stay directly under `src/tools`; cohesive task and
-history adapters are grouped by family without deriving model-visible names
-from paths. Domain engines remain in their focused subsystems. Process and run
-capabilities are assembled through one explicit path; ordinary tools are called
+module. Standalone tools stay directly under `src/tools`; cohesive task,
+history, and graph adapters are grouped by family without deriving model-visible
+names from paths. Domain engines remain in their focused subsystems. Process and
+run capabilities are assembled through one explicit path; ordinary tools are called
 directly, while `delegate` and the task controls are complete static adapters.
 
 See [ADR 0019](adr/0019-group-related-tool-adapters.md),
