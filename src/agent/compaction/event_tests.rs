@@ -98,6 +98,7 @@ async fn compaction_started_waits_for_the_model_slot() {
         system: "system",
         tools: &tools,
         trajectory: &trajectory,
+        fork_parent_message_seq: None,
         tokens_before: 1_000,
         options: &options,
         store: &store,

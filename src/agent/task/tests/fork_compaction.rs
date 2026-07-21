@@ -154,35 +154,36 @@ async fn resumed_compacted_fork_pins_its_exact_local_assignment_without_persisti
         .unwrap();
     assert_eq!(result.final_output, "resumed fork completed");
 
-    let requests = provider.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    let messages = &requests[0].messages;
-    assert_eq!(
-        messages[0].visible_text(),
-        "root workflow must edit source files"
-    );
-    assert_eq!(
-        messages[1].visible_text(),
-        "# Compacted state\nroot workflow summarized"
-    );
-    assert!(messages[2].content.iter().any(|content| {
-        matches!(content, MessageContent::RuntimeReminder { text } if text.contains("not a final answer"))
-    }));
-    assert_eq!(
-        serde_json::to_value(&messages[3]).unwrap(),
-        serde_json::to_value(&assignment).unwrap()
-    );
-    assert_eq!(messages[4].visible_text(), "recent child work");
-    assert_eq!(
-        messages
-            .iter()
-            .filter(|message| message.content.iter().any(|content| {
-                matches!(content, MessageContent::Text { text } if text == "inspect only; do not edit")
-            }))
-            .count(),
-        1
-    );
-    drop(requests);
+    {
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let messages = &requests[0].messages;
+        assert_eq!(
+            messages[0].visible_text(),
+            "root workflow must edit source files"
+        );
+        assert_eq!(
+            messages[1].visible_text(),
+            "# Compacted state\nroot workflow summarized"
+        );
+        assert!(messages[2].content.iter().any(|content| {
+            matches!(content, MessageContent::RuntimeReminder { text } if text.contains("not a final answer"))
+        }));
+        assert_eq!(
+            serde_json::to_value(&messages[3]).unwrap(),
+            serde_json::to_value(&assignment).unwrap()
+        );
+        assert_eq!(messages[4].visible_text(), "recent child work");
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.content.iter().any(|content| {
+                    matches!(content, MessageContent::Text { text } if text == "inspect only; do not edit")
+                }))
+                .count(),
+            1
+        );
+    }
 
     let persisted = store.load_trajectory("fork-child").await.unwrap();
     assert_eq!(persisted.len(), 7);
