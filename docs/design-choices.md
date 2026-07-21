@@ -125,9 +125,15 @@ Delegated children and promoted tools use one runtime notice shape. A
 status-less task block means work is running; a terminal block contains only
 the complete result artifact path. Ready terminal tasks share one runtime
 message, and internal kind or provider call ids stay out of model-facing XML.
+Each normal request also receives a non-durable snapshot of active task ids,
+names, and states so compaction cannot make the model forget already delegated
+work. A post-compaction refresh delivers newly terminal artifacts first; when a
+compaction continuation reminder already exists, both dynamic sections share
+that one synthetic message.
 
-Rejected: separate start/result protocols, inline terminal previews, and one
-runtime message per ready task. See
+Rejected: separate start/result protocols, inline terminal previews, one
+runtime message per ready task, and persisting repeated active-state snapshots.
+See
 [ADR 0020](adr/0020-unify-background-task-runtime-notices.md).
 
 ## Artifact-First Tool Output

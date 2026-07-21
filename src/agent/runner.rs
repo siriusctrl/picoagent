@@ -21,7 +21,7 @@ use super::{
         CompactionAttempt, build_active_context, estimate_message_tokens,
         estimate_request_input_tokens, maybe_compact,
     },
-    context::build_runtime_reminder,
+    context::{append_active_task_reminder, build_runtime_reminder},
     task::{TaskManager, TaskManagerConfig},
     tool_execution::DirectToolRuntime,
 };
@@ -347,8 +347,24 @@ impl AgentRunner {
                     context_tokens = completed.estimated_context_tokens;
                     trajectory.extend(completed.records);
                 }
-                let active_messages =
+                // Compaction is a model call and can take long enough for
+                // background work to finish. Snapshot again afterwards so a
+                // newly terminal task is delivered instead of being reported
+                // as stale active work in the next normal request.
+                let (ready, active_tasks) = task_manager.snapshot_for_request().await;
+                let added = append_background_results(
+                    &self.store,
+                    &run_id,
+                    &mut trajectory,
+                    &task_manager,
+                    &ready,
+                )
+                .await?;
+                task_manager.mark_delivered(&ready).await?;
+                context_tokens = context_tokens.saturating_add(added);
+                let mut active_messages =
                     build_active_context(&trajectory, fork_parent_message_seq)?;
+                append_active_task_reminder(&mut active_messages, &active_tasks);
                 context_tokens = context_tokens.max(estimate_request_input_tokens(
                     &system,
                     &active_messages,

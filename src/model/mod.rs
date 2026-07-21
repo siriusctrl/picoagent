@@ -27,7 +27,10 @@ pub use openai_oauth::{
     DEFAULT_OPENAI_OAUTH_BASE_URL, DeviceCode, OAuthCredentials, OpenAiOAuthOptions,
     OpenAiOAuthProvider,
 };
-pub(crate) use runtime::{background_task_started_reminder, render_background_task_content};
+pub(crate) use runtime::{
+    active_background_tasks_section, background_task_started_reminder,
+    render_background_task_content,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]

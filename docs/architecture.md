@@ -214,6 +214,16 @@ all terminal records ready at that boundary. Each terminal body is only its
 complete artifact path; internal task state, not model-facing XML, retains the
 originating call id and task kind.
 
+Before every normal provider request, the runner snapshots nonterminal tasks in
+stable task-id order and adds their id, name, and queued/running state to a
+synthetic runtime reminder. The reminder tells the model not to delegate work
+that is already represented there, exposes no child run id, and is never
+appended to the trajectory. The snapshot is refreshed after any compaction
+call: tasks that completed during compaction first receive their ordinary
+terminal artifact notice and are omitted from the active list. At a compacted
+boundary, the active-task section shares the existing synthetic continuation
+reminder instead of adding another runtime-reminder message.
+
 The full run holds a filesystem execution lease. Resume rebuilds the recorded
 profile, validates provider/model/workspace identity, loads the paired message
 log and latest completed compacted state, and continues after the last completed
@@ -395,10 +405,11 @@ Agent and compaction calls use one invariant built-in system prompt and one
 sorted, frozen tool-schema set. The history schemas are included from the first
 call; automatic compaction never mutates this prefix. Project instructions,
 skill metadata, memory paths, and delegated instructions form a deterministic
-runtime reminder at the start of each run. The reminder is frozen for that run.
-Optional startup schemas are selected before the run starts. Agent role and
-remaining delegation depth change only the runtime-reminder tail, while a
-compaction request changes only the message tail.
+runtime reminder at the start of each run. That persisted reminder is frozen
+for the run. Optional startup schemas are selected before the run starts. Agent
+role and remaining delegation depth change only the initial runtime-reminder
+tail. Nonterminal background-task state is a non-durable synthetic reminder in
+normal requests, while a compaction request changes only the message tail.
 
 The durable trajectory remains append-only; before a normal model call, an
 optional assistant compacted-state message can replace its older active prefix

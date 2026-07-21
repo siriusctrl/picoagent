@@ -380,6 +380,29 @@ impl TaskManager {
             .collect())
     }
 
+    /// Capture one coherent model-request view of background work. A task that
+    /// finishes after this snapshot remains in `active`, so the current request
+    /// cannot briefly forget it before the terminal artifact notice is appended
+    /// on the next loop iteration.
+    pub(crate) async fn snapshot_for_request(
+        &self,
+    ) -> (Vec<BackgroundTaskRecord>, Vec<BackgroundTaskRecord>) {
+        let delivered = self.delivered.lock().await.clone();
+        let records = self.records.lock().await;
+        let mut ready = Vec::new();
+        let mut active = Vec::new();
+        for record in records.values() {
+            if record.state.is_terminal() {
+                if !delivered.contains(&record.id) {
+                    ready.push(record.clone());
+                }
+            } else {
+                active.push(record.clone());
+            }
+        }
+        (ready, active)
+    }
+
     /// Return anything the model must see before it can finish: first unseen
     /// terminal results, otherwise the currently active tasks after one
     /// bounded wait interval. The pause prevents a fast final-answer loop from

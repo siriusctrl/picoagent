@@ -2,7 +2,12 @@ use std::{collections::BTreeSet, fs, path::Path};
 
 use anyhow::{Context, Result};
 
-use crate::{agent::types::RunProfile, memory::MemoryPaths, model::ModelModality};
+use crate::{
+    agent::{task::BackgroundTaskRecord, types::RunProfile},
+    memory::MemoryPaths,
+    model::{Message, MessageContent, ModelModality, Role, active_background_tasks_section},
+    prompts::agent_prompts,
+};
 
 pub(crate) fn build_runtime_reminder(
     workspace: &Path,
@@ -66,6 +71,43 @@ pub(crate) fn build_runtime_reminder(
         "<runtime-reminder>\n{}\n</runtime-reminder>",
         sections.join("\n\n")
     ))
+}
+
+pub(crate) fn append_active_task_reminder(
+    messages: &mut Vec<Message>,
+    active_tasks: &[BackgroundTaskRecord],
+) {
+    let Some(section) = active_background_tasks_section(
+        active_tasks
+            .iter()
+            .map(|task| (task.id.as_str(), task.name.as_str(), task.status())),
+    ) else {
+        return;
+    };
+
+    let compaction_resume = agent_prompts().compaction_resume.trim();
+    let continuation = messages
+        .iter_mut()
+        .flat_map(|message| message.content.iter_mut())
+        .find_map(|content| match content {
+            MessageContent::RuntimeReminder { text } if text.contains(compaction_resume) => {
+                Some(text)
+            }
+            _ => None,
+        });
+    if let Some(continuation) = continuation
+        && let Some(prefix) = continuation.strip_suffix("\n</runtime-reminder>")
+    {
+        *continuation = format!("{prefix}\n\n{section}\n</runtime-reminder>");
+        return;
+    }
+
+    messages.push(Message {
+        role: Role::User,
+        content: vec![MessageContent::RuntimeReminder {
+            text: format!("<runtime-reminder>\n{section}\n</runtime-reminder>"),
+        }],
+    });
 }
 
 #[cfg(test)]

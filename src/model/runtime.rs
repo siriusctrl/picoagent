@@ -11,6 +11,29 @@ pub(crate) fn background_task_started_reminder(task_id: &str, name: &str) -> Str
     )])
 }
 
+pub(crate) fn active_background_tasks_section<'a>(
+    tasks: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+) -> Option<String> {
+    let tasks = tasks
+        .into_iter()
+        .map(|(task_id, name, state)| {
+            format!(
+                "<task task_id=\"{}\" name=\"{}\" state=\"{}\" />",
+                escape_xml_attribute(task_id),
+                escape_xml_attribute(name),
+                escape_xml_attribute(state)
+            )
+        })
+        .collect::<Vec<_>>();
+    if tasks.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "<active-background-tasks>\nThese tasks are already in progress. Do not call `delegate` again for work represented here. Use the task-control tools to observe, steer, wait for, or stop them.\n{}\n</active-background-tasks>",
+        tasks.join("\n")
+    ))
+}
+
 pub(crate) fn render_background_task_content(content: &[MessageContent]) -> Option<String> {
     if content.is_empty() {
         return None;
@@ -106,5 +129,30 @@ mod tests {
         assert_eq!(rendered.matches("<background_task ").count(), 2);
         assert!(rendered.contains("status=\"completed\""));
         assert!(rendered.contains("status=\"failed\""));
+    }
+
+    #[test]
+    fn active_task_reminder_lists_state_without_exposing_internal_ids() {
+        let rendered = active_background_tasks_section([
+            ("t1", "review <auth>", "running"),
+            ("t2", "queued work", "queued"),
+        ])
+        .unwrap();
+
+        assert!(rendered.contains("<active-background-tasks>"));
+        assert!(rendered.contains("Do not call `delegate` again"));
+        assert!(
+            rendered
+                .contains("<task task_id=\"t1\" name=\"review &lt;auth&gt;\" state=\"running\" />")
+        );
+        assert!(rendered.contains("<task task_id=\"t2\" name=\"queued work\" state=\"queued\" />"));
+        assert!(!rendered.contains("child_run"));
+    }
+
+    #[test]
+    fn active_task_reminder_is_absent_without_active_tasks() {
+        assert!(
+            active_background_tasks_section(std::iter::empty::<(&str, &str, &str)>()).is_none()
+        );
     }
 }
