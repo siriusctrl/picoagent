@@ -342,6 +342,16 @@ response and complete tool-call batch, before its next provider request. Stop
 aborts the selected future and commits `cancelled`; it does not affect unrelated
 tasks. Background work has no hard execution deadline.
 
+Delegate context is explicit. A fresh child starts from its own initial
+reminder and task. A fork child records the parent's pre-assistant message
+sequence, materializes that entire prefix in its own Chat-compatible message
+log, and then appends its child-specific reminder and task. Same-batch sibling
+calls resolve to the same boundary. Copying the durable trajectory rather than
+only the active projection preserves compaction/history behavior; run-local
+pending-input ids are cleared. A complete child snapshot no longer reads the
+parent on resume, while a partial snapshot may finish copying through its
+already-recorded boundary.
+
 Each task record is durable coordination state only. Child messages remain in
 the child's run directory. Recovery derives delivered ids from the parent
 transcript, marks in-flight ordinary tools `interrupted` with unknown side

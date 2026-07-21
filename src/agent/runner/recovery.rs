@@ -74,14 +74,7 @@ impl AgentRunner {
             self.provider.name()
         );
         record.verify_provider_resume_fingerprint(&self.provider.resume_fingerprint())?;
-        let request = RunRequest::from_stored(
-            record.prompt,
-            record.parent_run_id,
-            record.depth,
-            record.additional_instructions,
-            &record.profile,
-            record.remaining_delegation_depth,
-        )?;
+        let request = RunRequest::from_stored(&record)?;
         let plan = self.plan(&request);
         ensure!(
             record.model == plan.model,

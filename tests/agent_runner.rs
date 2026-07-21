@@ -22,7 +22,7 @@ use picoagent::{
         Message, MessageContent, ModelModality, ModelProvider, ModelRequest, ModelResponse,
         ModelUsage, Role, ToolCall, echo::EchoProvider,
     },
-    storage::{RunDirStore, RunRecord, RunState},
+    storage::{DelegateContext, RunDirStore, RunRecord, RunState},
     tools::{RawToolOutput, Tool, ToolContext, ToolRegistry},
 };
 use serde_json::{Value, json};
@@ -332,7 +332,7 @@ async fn resume_reconstructs_a_missing_promotion_ack_from_its_terminal_task() {
     tokio::fs::write(
         tasks.join("t1.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 7,
+            "version": 8,
             "id": "t1",
             "kind": "tool",
             "name": "side_effect",
@@ -345,6 +345,8 @@ async fn resume_reconstructs_a_missing_promotion_ack_from_its_terminal_task() {
             "error": null,
             "child_run_id": null,
             "child_remaining_delegation_depth": null,
+            "delegate_context": null,
+            "fork_parent_message_seq": null,
             "prompt": null,
             "created_at": chrono::Utc::now()
         }))
@@ -467,7 +469,12 @@ async fn resume_schema_mismatch_does_not_reconcile_background_tasks() {
         wait_timeout_seconds: 1,
     });
     let task = manager
-        .delegate("hang_child".to_owned(), "hang child".to_owned())
+        .delegate(
+            "hang_child".to_owned(),
+            "hang child".to_owned(),
+            DelegateContext::Fresh,
+            "",
+        )
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -554,6 +561,7 @@ async fn public_resume_rejects_a_child_run_in_favor_of_parent_recovery() {
                 Some("parent".to_owned()),
             )
             .with_execution_context("general_task_leaf", 1, None, 0)
+            .with_delegate_context(DelegateContext::Fresh, None)
             .with_provider_resume_fingerprint(
                 ResumeProvider {
                     calls: Arc::new(AtomicUsize::new(0)),
@@ -836,12 +844,12 @@ impl ModelProvider for DelegatingProvider {
                     ToolCall {
                         id: "delegate-one".to_owned(),
                         name: "delegate".to_owned(),
-                        arguments: json!({"name": "child_one", "prompt": "child one"}),
+                        arguments: json!({"name": "child_one", "prompt": "child one", "context": "fresh"}),
                     },
                     ToolCall {
                         id: "delegate-two".to_owned(),
                         name: "delegate".to_owned(),
-                        arguments: json!({"name": "child_two", "prompt": "child two"}),
+                        arguments: json!({"name": "child_two", "prompt": "child two", "context": "fresh"}),
                     },
                 ],
                 ModelUsage::default(),
@@ -997,7 +1005,7 @@ impl ModelProvider for LastStepBackgroundProvider {
                 vec![ToolCall {
                     id: "delegate-edge".to_owned(),
                     name: "delegate".to_owned(),
-                    arguments: json!({"name": "slow_child", "prompt": "slow child"}),
+                    arguments: json!({"name": "slow_child", "prompt": "slow child", "context": "fresh"}),
                 }],
                 ModelUsage::default(),
             ));
@@ -1413,7 +1421,7 @@ impl ModelProvider for SteeringProvider {
             vec![ToolCall {
                 id: "delegate-steered-child".to_owned(),
                 name: "delegate".to_owned(),
-                arguments: json!({"name": "steer_target", "prompt": "child steer target"}),
+                arguments: json!({"name": "steer_target", "prompt": "child steer target", "context": "fresh"}),
             }],
             ModelUsage::default(),
         ))

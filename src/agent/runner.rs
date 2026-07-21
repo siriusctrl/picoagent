@@ -11,7 +11,7 @@ use crate::{
     memory::MemoryPaths,
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role},
     prompts::agent_prompts,
-    storage::{RunDirStore, RunLease, RunState},
+    storage::{DelegateContext, RunDirStore, RunLease, RunState},
     tools::{RunToolAssembly, ToolRegistry},
     trajectory::LocalTrajectoryReader,
 };
@@ -28,6 +28,7 @@ use super::{
 
 pub use super::types::{AgentRunnerConfig, RunRequest, RunResult, RunnerOptions};
 
+mod fork;
 mod lifecycle;
 mod recovery;
 
@@ -86,7 +87,7 @@ impl AgentRunner {
         let model = plan.model.clone();
         let max_output_tokens = plan.max_output_tokens;
         self.store.update_state(&run_id, RunState::Running).await?;
-        let (mut trajectory, needs_initial_message) = match mode {
+        let (mut trajectory, mut needs_initial_message) = match mode {
             RunMode::New => {
                 events
                     .emit(&RuntimeEvent::new(
@@ -121,6 +122,30 @@ impl AgentRunner {
         };
 
         let system = agent_prompts().system.clone();
+        if request
+            .delegated_context
+            .as_ref()
+            .is_some_and(|context| context.mode == DelegateContext::Fork)
+        {
+            let parent_run_id = request
+                .parent_run_id
+                .as_deref()
+                .context("forked run has no parent run id")?;
+            let boundary = request
+                .delegated_context
+                .as_ref()
+                .and_then(|context| context.fork_parent_message_seq)
+                .context("forked run has no parent message boundary")?;
+            self.materialize_fork_prefix(
+                parent_run_id,
+                &run_id,
+                boundary,
+                &request.prompt,
+                &mut trajectory,
+            )
+            .await?;
+            needs_initial_message = trajectory.len() == boundary as usize;
+        }
         if needs_initial_message {
             let runtime_reminder = build_runtime_reminder(
                 &self.workspace,
@@ -203,6 +228,18 @@ impl AgentRunner {
             task_manager.resume_agent_task(task).await?;
         }
         let outcome: Result<RunResult> = async {
+            let mut fork_first_request_pending = request
+                .delegated_context
+                .as_ref()
+                .filter(|context| context.mode == DelegateContext::Fork)
+                .and_then(|context| context.fork_parent_message_seq)
+                .is_some_and(|boundary| {
+                    !trajectory.iter().any(|record| {
+                        record.seq > boundary.saturating_add(1)
+                            && record.compaction.is_none()
+                            && record.message.role == Role::Assistant
+                    })
+                });
             let completed_steps = trajectory
                 .iter()
                 .filter(|record| {
@@ -283,6 +320,7 @@ impl AgentRunner {
                 });
 
                 if automatic_compaction_enabled
+                    && !fork_first_request_pending
                     && let Some(completed) = maybe_compact(CompactionAttempt {
                         provider: &self.provider,
                         model: &model,
@@ -352,6 +390,7 @@ impl AgentRunner {
                     ),
                 )
                 .await;
+                fork_first_request_pending = false;
                 drop(model_permit);
                 let response = response
                     .with_context(|| {

@@ -38,7 +38,7 @@ impl AgentRunner {
         run_id: String,
     ) -> Result<RunResult> {
         let plan = self.plan(&request);
-        let record = RunRecord::new(
+        let mut record = RunRecord::new(
             &run_id,
             &request.prompt,
             self.provider.name(),
@@ -54,6 +54,9 @@ impl AgentRunner {
         )
         .with_model_modalities(plan.modalities.clone())
         .with_provider_resume_fingerprint(self.provider.resume_fingerprint());
+        if let Some(context) = &request.delegated_context {
+            record = record.with_delegate_context(context.mode, context.fork_parent_message_seq);
+        }
         self.store.create_run(&record).await?;
 
         let lease = self.store.acquire_run_lease(&run_id).await?;
@@ -96,7 +99,7 @@ impl AgentRunner {
     }
 
     pub(super) fn plan(&self, request: &RunRequest) -> RunPlan {
-        let (model, max_output_tokens) = match request.profile {
+        let (profile_model, max_output_tokens) = match request.profile {
             RunProfile::Root => (self.model.clone(), self.options.max_output_tokens),
             RunProfile::GeneralTaskDelegating | RunProfile::GeneralTaskLeaf => (
                 self.options
@@ -110,6 +113,11 @@ impl AgentRunner {
         let remaining_delegation_depth = request
             .remaining_delegation_depth
             .unwrap_or(self.options.max_subagent_depth);
+        let model = request
+            .delegated_context
+            .as_ref()
+            .and_then(|context| context.model_override.clone())
+            .unwrap_or(profile_model);
         RunPlan {
             model,
             modalities: self.options.model_modalities.clone(),

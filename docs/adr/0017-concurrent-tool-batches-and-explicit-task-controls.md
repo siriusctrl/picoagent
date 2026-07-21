@@ -20,6 +20,10 @@ Remaining depth is persisted runtime state, and a depth-zero call fails locally
 before task creation. The task-control and asynchronous execution decisions
 here remain accepted.
 
+ADR 0025 requires `delegate` to choose fresh or forked context. Same-batch fork
+siblings share the pre-assistant boundary established by this ADR's concurrent
+call batch.
+
 ## Context
 
 The runner executed tool calls from one assistant message sequentially. This

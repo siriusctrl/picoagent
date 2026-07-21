@@ -11,7 +11,7 @@ use tokio::sync::{Mutex, Semaphore, watch};
 use crate::{
     artifact::{ArtifactStore, ToolOutput},
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
-    storage::RunDirStore,
+    storage::{DelegateContext, RunDirStore},
 };
 
 use super::runner::AgentRunner;
@@ -112,15 +112,19 @@ impl TaskManager {
         name: String,
         child_run_id: String,
         prompt: String,
+        delegate_context: DelegateContext,
+        fork_parent_message_seq: Option<u64>,
     ) -> Result<String> {
         let mut records = self.records.lock().await;
         let task_id = next_task_id(&records);
-        let record = BackgroundTaskRecord::queued_agent(
+        let record = BackgroundTaskRecord::queued_agent_with_context(
             task_id.clone(),
             name,
             child_run_id,
             prompt,
             self.remaining_delegation_depth.saturating_sub(1),
+            delegate_context,
+            fork_parent_message_seq,
         );
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);

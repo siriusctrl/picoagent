@@ -152,7 +152,7 @@ fn delegate_response(id: &str, prompt: &str) -> ModelResponse {
         Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: "delegate".to_owned(),
-            arguments: json!({"name": "delegated_child", "prompt": prompt}),
+            arguments: json!({"name": "delegated_child", "prompt": prompt, "context": "fresh"}),
         }]),
         ModelUsage::default(),
     )
@@ -257,7 +257,7 @@ async fn delegate_schema_is_independent_of_the_base_tool_registry() {
         .unwrap();
     assert_eq!(
         delegate.input_schema.pointer("/required"),
-        Some(&json!(["name", "prompt"]))
+        Some(&json!(["name", "prompt", "context"]))
     );
     assert_eq!(delegate.input_schema["additionalProperties"], false);
 }

@@ -58,6 +58,10 @@ navigation, invariants, verification, and handoff.
 - Use `delegate` as the sole asynchronous GeneralTask start operation. Keep
   status, bounded wait, inspect, steer, and stop as separate task-control tools;
   ordinary tools enter task control only through foreground promotion.
+- A `delegate` call must choose `fresh` isolation or `fork` inheritance. Fork
+  snapshots the parent input before the assistant delegate turn; same-batch
+  siblings share that boundary, and each child run is self-contained and
+  resumable after its snapshot commits.
 - Treat completed messages as the resumable boundary. Stream deltas are events,
   not durable conversation messages.
 - Keep `messages.jsonl` in the declared `openai-chat-compatible` shape. Store

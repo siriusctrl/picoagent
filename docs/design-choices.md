@@ -170,6 +170,15 @@ a second graph scheduler with its own dispatch/wait/stop lifecycle. These would
 couple durable planning state to transient execution and duplicate existing
 tools. See [ADR 0026](adr/0026-file-backed-planning-graphs.md).
 
+## Forked Or Isolated Delegation
+
+Delegate calls explicitly choose fresh isolation or a fork of the exact parent
+input before the assistant delegate turn. Forked siblings from one batch share
+that boundary, persist self-contained child trajectories, retain compaction and
+history semantics, and inherit the parent's selected model. Provider cache
+usage is observed rather than inferred. See
+[ADR 0025](adr/0025-fork-or-isolate-delegated-context.md).
+
 ## Conservative File Mutation
 
 `write` supports complete writes and atomic multi-region replacements. Targets

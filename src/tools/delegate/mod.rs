@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::{
     agent::task::TaskManager,
     model::ToolSpec,
+    storage::DelegateContext,
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
@@ -26,6 +27,7 @@ impl DelegateTool {
 struct DelegateArgs {
     name: String,
     prompt: String,
+    context: DelegateContext,
 }
 
 #[async_trait]
@@ -34,10 +36,13 @@ impl Tool for DelegateTool {
         crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
-    async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
+    async fn execute(&self, context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
         let args: DelegateArgs =
             serde_json::from_value(arguments).context("invalid delegate arguments")?;
-        let record = self.manager.delegate(args.name, args.prompt).await?;
+        let record = self
+            .manager
+            .delegate(args.name, args.prompt, args.context, &context.call_id)
+            .await?;
         Ok(RawToolOutput::text(
             crate::model::background_task_started_reminder(&record.id, &record.name),
         ))

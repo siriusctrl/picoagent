@@ -6,7 +6,7 @@ use crate::{
     hooks::HookPipeline,
     memory::MemoryPaths,
     model::{ModelModality, ModelProvider},
-    storage::RunDirStore,
+    storage::{DelegateContext, RunDirStore, RunRecord},
     tools::ToolRegistry,
 };
 
@@ -79,10 +79,18 @@ pub struct RunRequest {
     pub(crate) parent_run_id: Option<String>,
     pub(crate) depth: usize,
     pub(crate) additional_instructions: Option<String>,
+    pub(crate) delegated_context: Option<DelegatedContext>,
     pub(crate) profile: RunProfile,
     /// Frozen for durable runs. `None` is used only by a new root request,
     /// whose initial value comes from `RunnerOptions` before the run is stored.
     pub(crate) remaining_delegation_depth: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DelegatedContext {
+    pub(crate) mode: DelegateContext,
+    pub(crate) fork_parent_message_seq: Option<u64>,
+    pub(crate) model_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +107,7 @@ impl RunRequest {
             parent_run_id: None,
             depth: 0,
             additional_instructions: None,
+            delegated_context: None,
             profile: RunProfile::Root,
             remaining_delegation_depth: None,
         }
@@ -110,12 +119,14 @@ impl RunRequest {
         depth: usize,
         additional_instructions: String,
         remaining_delegation_depth: usize,
+        delegated_context: DelegatedContext,
     ) -> Self {
         Self {
             prompt: prompt.into(),
             parent_run_id: Some(parent_run_id),
             depth,
             additional_instructions: Some(additional_instructions),
+            delegated_context: Some(delegated_context),
             profile: if remaining_delegation_depth > 0 {
                 RunProfile::GeneralTaskDelegating
             } else {
@@ -125,38 +136,55 @@ impl RunRequest {
         }
     }
 
-    pub(crate) fn from_stored(
-        prompt: String,
-        parent_run_id: Option<String>,
-        depth: usize,
-        additional_instructions: Option<String>,
-        profile: &str,
-        remaining_delegation_depth: usize,
-    ) -> anyhow::Result<Self> {
-        let profile = match profile {
+    pub(crate) fn from_stored(record: &RunRecord) -> anyhow::Result<Self> {
+        let profile = match record.profile.as_str() {
             "root" => RunProfile::Root,
             "general_task_delegating" => RunProfile::GeneralTaskDelegating,
             "general_task_leaf" => RunProfile::GeneralTaskLeaf,
             value => anyhow::bail!("unknown stored run profile `{value}`"),
         };
+        match (
+            profile,
+            record.delegate_context,
+            record.fork_parent_message_seq,
+        ) {
+            (RunProfile::Root, None, None)
+            | (
+                RunProfile::GeneralTaskDelegating | RunProfile::GeneralTaskLeaf,
+                Some(DelegateContext::Fresh),
+                None,
+            )
+            | (
+                RunProfile::GeneralTaskDelegating | RunProfile::GeneralTaskLeaf,
+                Some(DelegateContext::Fork),
+                Some(1..),
+            ) => {}
+            _ => anyhow::bail!("stored run has inconsistent delegated context"),
+        }
         match profile {
             RunProfile::Root => {}
             RunProfile::GeneralTaskDelegating => anyhow::ensure!(
-                remaining_delegation_depth > 0,
+                record.remaining_delegation_depth > 0,
                 "stored delegating GeneralTask has no remaining delegation depth"
             ),
             RunProfile::GeneralTaskLeaf => anyhow::ensure!(
-                remaining_delegation_depth == 0,
-                "stored leaf GeneralTask has remaining delegation depth {remaining_delegation_depth}"
+                record.remaining_delegation_depth == 0,
+                "stored leaf GeneralTask has remaining delegation depth {}",
+                record.remaining_delegation_depth
             ),
         }
         Ok(Self {
-            prompt,
-            parent_run_id,
-            depth,
-            additional_instructions,
+            prompt: record.prompt.clone(),
+            parent_run_id: record.parent_run_id.clone(),
+            depth: record.depth,
+            additional_instructions: record.additional_instructions.clone(),
+            delegated_context: record.delegate_context.map(|mode| DelegatedContext {
+                mode,
+                fork_parent_message_seq: record.fork_parent_message_seq,
+                model_override: (mode == DelegateContext::Fork).then(|| record.model.clone()),
+            }),
             profile,
-            remaining_delegation_depth: Some(remaining_delegation_depth),
+            remaining_delegation_depth: Some(record.remaining_delegation_depth),
         })
     }
 }

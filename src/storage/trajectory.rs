@@ -1,5 +1,5 @@
 use anyhow::{Result, bail, ensure};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 use crate::{
     model::Message,
@@ -35,6 +35,18 @@ impl RunDirStore {
         pending_input_id: Option<String>,
         compaction: Option<CompactionMessage>,
     ) -> Result<TrajectoryMessage> {
+        self.append_classified_message_at(run_id, message, pending_input_id, compaction, Utc::now())
+            .await
+    }
+
+    async fn append_classified_message_at(
+        &self,
+        run_id: &str,
+        message: &Message,
+        pending_input_id: Option<String>,
+        compaction: Option<CompactionMessage>,
+        created_at: DateTime<Utc>,
+    ) -> Result<TrajectoryMessage> {
         let mut sequences = self.write_lock.lock().await;
         // Invalidate the fast path before any cancellable I/O. If this future is
         // dropped during either half of the commit, the next append must inspect
@@ -66,7 +78,7 @@ impl RunDirStore {
         let record = TrajectoryMessage {
             message_ref: message_ref(next),
             seq: next,
-            created_at: Utc::now(),
+            created_at,
             message: message.clone(),
             pending_input_id,
             compaction,
@@ -80,6 +92,33 @@ impl RunDirStore {
                 messages_len: lengths.messages,
                 metadata_len: lengths.metadata,
             },
+        );
+        Ok(record)
+    }
+
+    /// Materialize one immutable parent record into a forked child run. The
+    /// target must start empty and receive the source prefix in sequence.
+    pub(crate) async fn append_forked_message(
+        &self,
+        run_id: &str,
+        source: &TrajectoryMessage,
+    ) -> Result<TrajectoryMessage> {
+        let record = self
+            .append_classified_message_at(
+                run_id,
+                &source.message,
+                // Pending-input ids are run-local idempotency keys, not model
+                // context. Copying one into the child could suppress an
+                // unrelated child steering input with the same id.
+                None,
+                source.compaction.clone(),
+                source.created_at,
+            )
+            .await?;
+        ensure!(
+            record.seq == source.seq && record.message_ref == source.message_ref,
+            "forked trajectory record `{}` is not the next child message",
+            source.message_ref
         );
         Ok(record)
     }

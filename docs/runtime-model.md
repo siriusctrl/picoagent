@@ -138,6 +138,23 @@ The default maximum depth of one gives the initial child zero remaining depth.
 `task_wait` is a bounded join; a wait timeout does not cancel the task.
 `task_stop` is the explicit cancellation operation.
 
+`delegate` requires `context: "fresh" | "fork"`. Fresh preserves the isolated
+child behavior. Fork freezes the durable parent message sequence immediately
+before the assistant message that contains the delegate call, copies that full
+trajectory prefix into the child, and appends the child runtime reminder and
+task. Calls from the same assistant batch therefore share one fork boundary.
+Compaction request/state metadata is copied so the child's first active model
+projection is exactly the parent's request messages plus its task suffix; the
+child does not immediately compact that inherited first request again.
+Pending-input ids are intentionally cleared because they are run-local
+steering idempotency keys, not model context.
+
+Once the frozen prefix is complete, child recovery validates and uses only its
+local run files; an interrupted partial copy can be completed from the recorded
+parent boundary. Fork inherits the parent's selected model. Provider-reported
+cached input usage remains observable in `model_completed` events, but the
+harness neither predicts nor fabricates a cache hit.
+
 `task_inspect` returns a child's latest durable Chat-compatible messages and
 can page backward by sequence. `task_steer` queues a normal user message after
 the current assistant/tool batch and before the next provider call. It does not

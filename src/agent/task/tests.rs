@@ -44,6 +44,7 @@ async fn create_child_run(
                 Some(parent.to_owned()),
             )
             .with_execution_context("general_task_leaf", 1, None, 0)
+            .with_delegate_context(DelegateContext::Fresh, None)
             .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
         )
         .await
@@ -109,7 +110,12 @@ async fn delegate_at_zero_remaining_depth_fails_without_creating_a_task() {
     let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
 
     let error = manager
-        .delegate("too-deep".to_owned(), "must not start".to_owned())
+        .delegate(
+            "too-deep".to_owned(),
+            "must not start".to_owned(),
+            DelegateContext::Fresh,
+            "delegate-call",
+        )
         .await
         .unwrap_err();
 
@@ -409,6 +415,7 @@ async fn restore_validates_a_live_child_against_its_stored_capability() {
                 Some("parent".to_owned()),
             )
             .with_execution_context("general_task_delegating", 1, None, 1)
+            .with_delegate_context(DelegateContext::Fresh, None)
             .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
         )
         .await
@@ -465,6 +472,7 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
                 Some("resume the child".to_owned()),
                 0,
             )
+            .with_delegate_context(DelegateContext::Fresh, None)
             .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
         )
         .await
@@ -649,6 +657,232 @@ async fn recovered_child_retries_a_busy_lease_and_reconciles_completion() {
             .map(|result| result.content.as_str()),
         Some("completed by old owner")
     );
+}
+
+#[tokio::test]
+async fn completed_fork_snapshot_resumes_without_reading_the_parent_trajectory() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let parent_message = store
+        .append_message("parent", &Message::text(Role::User, "parent context"))
+        .await
+        .unwrap();
+    store
+        .create_run(
+            &RunRecord::new(
+                "fork-child",
+                "resume self-contained fork",
+                "echo",
+                "echo",
+                store.workspace().to_path_buf(),
+                Some("parent".to_owned()),
+            )
+            .with_execution_context("general_task_leaf", 1, None, 0)
+            .with_delegate_context(DelegateContext::Fork, Some(1))
+            .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
+        )
+        .await
+        .unwrap();
+    store
+        .append_forked_message("fork-child", &parent_message)
+        .await
+        .unwrap();
+    store
+        .append_message(
+            "fork-child",
+            &Message {
+                role: Role::User,
+                content: vec![
+                    MessageContent::RuntimeReminder {
+                        text: "<runtime-reminder>fork child</runtime-reminder>".to_owned(),
+                    },
+                    MessageContent::Text {
+                        text: "resume self-contained fork".to_owned(),
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .update_state("fork-child", RunState::Running)
+        .await
+        .unwrap();
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_agent_with_context(
+        "agent-task".to_owned(),
+        "fork-child".to_owned(),
+        "fork-child".to_owned(),
+        "resume self-contained fork".to_owned(),
+        0,
+        DelegateContext::Fork,
+        Some(1),
+    );
+    task.state = BackgroundTaskState::Running;
+    task_store.write(&task).await.unwrap();
+
+    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+    assert_eq!(recoverable.len(), 1);
+    tokio::fs::remove_file(&store.paths("parent").messages)
+        .await
+        .unwrap();
+    tokio::fs::remove_file(&store.paths("parent").message_metadata)
+        .await
+        .unwrap();
+    tokio::fs::remove_file(&store.paths("parent").metadata)
+        .await
+        .unwrap();
+
+    manager
+        .resume_agent_task(recoverable[0].clone())
+        .await
+        .unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(5), manager.wait_all())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
+    assert!(
+        completed[0]
+            .result
+            .as_ref()
+            .is_some_and(|result| result.content.contains("received:"))
+    );
+}
+
+#[tokio::test]
+async fn partial_fork_snapshot_is_completed_from_its_frozen_parent_boundary_on_recovery() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let first = store
+        .append_message("parent", &Message::text(Role::User, "parent one"))
+        .await
+        .unwrap();
+    let second = store
+        .append_message("parent", &Message::text(Role::Assistant, "parent two"))
+        .await
+        .unwrap();
+    store
+        .create_run(
+            &RunRecord::new(
+                "fork-child",
+                "finish partial fork",
+                "echo",
+                "echo",
+                store.workspace().to_path_buf(),
+                Some("parent".to_owned()),
+            )
+            .with_execution_context("general_task_leaf", 1, None, 0)
+            .with_delegate_context(DelegateContext::Fork, Some(2))
+            .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
+        )
+        .await
+        .unwrap();
+    store
+        .append_forked_message("fork-child", &first)
+        .await
+        .unwrap();
+    store
+        .update_state("fork-child", RunState::Running)
+        .await
+        .unwrap();
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_agent_with_context(
+        "agent-task".to_owned(),
+        "fork-child".to_owned(),
+        "fork-child".to_owned(),
+        "finish partial fork".to_owned(),
+        0,
+        DelegateContext::Fork,
+        Some(2),
+    );
+    task.state = BackgroundTaskState::Running;
+    task_store.write(&task).await.unwrap();
+
+    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+    manager
+        .resume_agent_task(recoverable[0].clone())
+        .await
+        .unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(5), manager.wait_all())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
+    let child = store.load_trajectory("fork-child").await.unwrap();
+    assert_eq!(
+        child[0].message.visible_text(),
+        first.message.visible_text()
+    );
+    assert_eq!(
+        child[1].message.visible_text(),
+        second.message.visible_text()
+    );
+    assert_eq!(child[1].created_at, second.created_at);
+    assert_eq!(child[2].message.visible_text(), "finish partial fork");
+}
+
+#[tokio::test]
+async fn fork_drops_parent_pending_input_ids_so_child_steering_is_not_suppressed() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let parent = store
+        .append_pending_input_message(
+            "parent",
+            &Message::text(Role::User, "parent steer"),
+            "input_collision".to_owned(),
+        )
+        .await
+        .unwrap();
+    store
+        .create_run(
+            &RunRecord::new(
+                "child",
+                "child",
+                "echo",
+                "echo",
+                store.workspace().to_path_buf(),
+                Some("parent".to_owned()),
+            )
+            .with_execution_context("general_task_leaf", 1, None, 0)
+            .with_delegate_context(DelegateContext::Fork, Some(1))
+            .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
+        )
+        .await
+        .unwrap();
+    let copied = store.append_forked_message("child", &parent).await.unwrap();
+    assert_eq!(copied.pending_input_id, None);
+    tokio::fs::write(
+        store.paths("child").pending_inputs,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "id": "input_collision",
+                "created_at": chrono::Utc::now(),
+                "message": Message::text(Role::User, "child steer")
+            })
+        ),
+    )
+    .await
+    .unwrap();
+    let mut trajectory = store.load_trajectory("child").await.unwrap();
+    let appended = store
+        .append_pending_inputs("child", &mut trajectory)
+        .await
+        .unwrap();
+    assert_eq!(appended.len(), 1);
+    assert_eq!(
+        appended[0].pending_input_id.as_deref(),
+        Some("input_collision")
+    );
+    assert_eq!(appended[0].message.visible_text(), "child steer");
 }
 
 #[tokio::test]
@@ -929,6 +1163,8 @@ async fn cancelled_agent_does_not_emit_completion_events_when_its_output_arrives
             "general-task".to_owned(),
             "child".to_owned(),
             "do work".to_owned(),
+            DelegateContext::Fresh,
+            None,
         )
         .await
         .unwrap();

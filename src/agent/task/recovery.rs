@@ -157,6 +157,16 @@ impl TaskManager {
             "child run `{child_run_id}` prompt does not match task `{}`",
             task.id
         );
+        anyhow::ensure!(
+            child.delegate_context == task.delegate_context,
+            "child run `{child_run_id}` delegate context does not match task `{}`",
+            task.id
+        );
+        anyhow::ensure!(
+            child.fork_parent_message_seq == task.fork_parent_message_seq,
+            "child run `{child_run_id}` fork boundary does not match task `{}`",
+            task.id
+        );
         Ok(())
     }
 

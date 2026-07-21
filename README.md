@@ -441,7 +441,7 @@ so the provider sees exactly one result for each original tool call.
 The task-control calls are intentionally small:
 
 ```text
-delegate({"name":"inspect_tests","prompt":"inspect the failing tests and report the cause"})
+delegate({"name":"inspect_tests","prompt":"inspect the failing tests and report the cause","context":"fork"})
 task_status({"task_ids":[]})
 task_wait({"task_ids":["t1"]})
 task_inspect({"task_id":"t1","limit":6,"before_seq":42})
@@ -484,12 +484,22 @@ is another invocation of the same runner, not a second agent class. Each child:
 - has a separate run id, transcript, events, and artifacts
 - records its parent run id
 - shares the working project, so it can inspect and modify the same files
-- receives its own model/output profile
+- uses the configured GeneralTask output profile; fresh uses its configured
+  model while fork inherits the parent's selected model
 - cannot delegate another child at the default depth limit
 
 Parent and child model requests share `runtime.max_parallel_model_calls`, which
 defaults to one for compatibility with rate-limited endpoints. Delegated-child
 capacity remains independently controlled by `runtime.max_parallel_subagents`.
+
+Every `delegate` call chooses a context mode. `context = "fresh"` starts with
+only the child runtime reminder and delegated prompt. `context = "fork"`
+inherits the exact parent model input before the assistant message containing
+the delegate call, then appends the child reminder and prompt. Fork siblings in
+one assistant tool-call batch share the same boundary. The copied trajectory,
+including compacted-state metadata, is stored in each child run so resume and
+history retrieval do not depend on a live parent process.
+
 `runtime.model_stream_idle_timeout_seconds` (default 300) stops a model stream
 that produces no valid SSE event for that interval, while
 `runtime.model_request_deadline_seconds` (default 3600) caps the complete model

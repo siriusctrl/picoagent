@@ -21,7 +21,7 @@ mod message_log;
 mod trajectory;
 
 pub const MESSAGE_FORMAT: &str = "openai-chat-compatible";
-const RUN_RECORD_VERSION: u32 = 7;
+const RUN_RECORD_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +31,13 @@ pub enum RunState {
     Completed,
     Failed,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegateContext {
+    Fresh,
+    Fork,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +54,12 @@ pub struct RunRecord {
     /// schema remains present at zero; execution then returns a local error.
     pub remaining_delegation_depth: usize,
     pub additional_instructions: Option<String>,
+    /// Context mode fixed when a GeneralTask child is delegated. Root runs do
+    /// not have a delegate context.
+    pub delegate_context: Option<DelegateContext>,
+    /// Durable parent trajectory boundary copied by a forked child. The
+    /// assistant message containing the delegate call is strictly after it.
+    pub fork_parent_message_seq: Option<u64>,
     pub tool_schema_sha256: String,
     pub provider: String,
     /// Non-secret identity of provider settings that affect wire compatibility.
@@ -79,6 +92,8 @@ impl RunRecord {
             depth: 0,
             remaining_delegation_depth: 0,
             additional_instructions: None,
+            delegate_context: None,
+            fork_parent_message_seq: None,
             tool_schema_sha256: String::new(),
             provider: provider.into(),
             provider_resume_fingerprint: String::new(),
@@ -107,6 +122,16 @@ impl RunRecord {
 
     pub fn with_provider_resume_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
         self.provider_resume_fingerprint = fingerprint.into();
+        self
+    }
+
+    pub fn with_delegate_context(
+        mut self,
+        context: DelegateContext,
+        fork_parent_message_seq: Option<u64>,
+    ) -> Self {
+        self.delegate_context = Some(context);
+        self.fork_parent_message_seq = fork_parent_message_seq;
         self
     }
 
@@ -207,6 +232,7 @@ impl RunDirStore {
             run.model_modalities.contains(&ModelModality::Text),
             "run record model modalities must include text"
         );
+        validate_delegate_context(run)?;
         if paths.metadata.exists() {
             bail!("run `{}` already exists", run.id);
         }
@@ -278,6 +304,7 @@ impl RunDirStore {
             run.model_modalities.contains(&ModelModality::Text),
             "run record model modalities must include text"
         );
+        validate_delegate_context(&run)?;
         Ok(run)
     }
 
@@ -314,6 +341,26 @@ impl RunDirStore {
 
     pub fn event_sink(&self) -> SharedEventSink {
         Arc::new(self.clone())
+    }
+}
+
+fn validate_delegate_context(run: &RunRecord) -> Result<()> {
+    match (
+        run.parent_run_id.as_ref(),
+        run.delegate_context,
+        run.fork_parent_message_seq,
+    ) {
+        (None, None, None) => Ok(()),
+        (Some(_), Some(DelegateContext::Fresh), None) => Ok(()),
+        (Some(_), Some(DelegateContext::Fork), Some(seq)) if seq > 0 => Ok(()),
+        (None, _, _) => bail!("root run cannot have delegated context"),
+        (Some(_), None, _) => bail!("child run must record its delegate context"),
+        (Some(_), Some(DelegateContext::Fresh), Some(_)) => {
+            bail!("fresh child run cannot have a fork boundary")
+        }
+        (Some(_), Some(DelegateContext::Fork), _) => {
+            bail!("forked child run must have a positive parent message boundary")
+        }
     }
 }
 
