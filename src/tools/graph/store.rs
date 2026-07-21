@@ -30,7 +30,7 @@ impl GraphStore {
         );
         Ok(context
             .workspace
-            .join(".pico")
+            .join(".fiasco")
             .join("runs")
             .join(&context.run_id)
             .join("graphs"))

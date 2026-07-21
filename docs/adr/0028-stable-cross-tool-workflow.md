@@ -9,7 +9,7 @@
 
 The initial runtime reminder repeated a fixed task-control paragraph on every
 run, while compacted-history and graph workflow could be restated in benchmark
-task prompts to force coverage. Those rules describe picoagent itself, not a
+task prompts to force coverage. Those rules describe fiasco itself, not a
 particular workspace or task. Keeping stable prose in Rust or user requests
 makes prompt ownership unclear and makes realistic trajectory evaluation less
 representative.
@@ -54,7 +54,7 @@ workspace paths, skills, and memory locations remain dynamic.
 - **Duplicate complete tool contracts in the system prompt.** Rejected because
   it spends tokens and can drift from typed manifests.
 - **Force tool calls through benchmark user prompts.** Rejected because it
-  tests instruction compliance rather than whether picoagent's own guidance is
+  tests instruction compliance rather than whether fiasco's own guidance is
   sufficient.
 
 ## Related Documents

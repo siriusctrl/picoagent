@@ -120,14 +120,14 @@ mod tests {
                 task_id: "t1".to_owned(),
                 name: "tests".to_owned(),
                 status: Some("completed".to_owned()),
-                content: ".pico/runs/run/artifacts/t1.txt".to_owned(),
+                content: ".fiasco/runs/run/artifacts/t1.txt".to_owned(),
                 metadata: ResultMetadata::empty(),
             },
             MessageContent::BackgroundTask {
                 task_id: "t2".to_owned(),
                 name: "review".to_owned(),
                 status: Some("failed".to_owned()),
-                content: ".pico/runs/run/artifacts/t2.txt".to_owned(),
+                content: ".fiasco/runs/run/artifacts/t2.txt".to_owned(),
                 metadata: ResultMetadata::empty(),
             },
         ];

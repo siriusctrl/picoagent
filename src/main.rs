@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use picoagent::{
+use fiasco::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
     artifact::{ArtifactPolicy, ArtifactStore},
     config::{AppConfig, ProviderConfig, resolve_env_reference, resolve_openai_api_key},
@@ -39,21 +39,21 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let workspace = dunce_canonicalize(&cli.workspace)?;
     let config = AppConfig::load(&workspace, cli.config.as_deref())?;
-    let pico_home = pico_home()?;
+    let fiasco_home = fiasco_home()?;
 
     match cli.command {
         Command::Run { prompt, output } => {
-            run_task(&workspace, &pico_home, config, prompt, output).await
+            run_task(&workspace, &fiasco_home, config, prompt, output).await
         }
         Command::Resume { run_id, output } => {
-            resume_task(&workspace, &pico_home, config, run_id, output).await
+            resume_task(&workspace, &fiasco_home, config, run_id, output).await
         }
         Command::Inspect { run_id } => inspect_run(&workspace, &run_id).await,
         Command::Auth {
             command: AuthCommand::Login,
-        } => login(&pico_home, &config).await,
+        } => login(&fiasco_home, &config).await,
         Command::Memory { command } => {
-            memory_command(&workspace, &pico_home, config, command).await
+            memory_command(&workspace, &fiasco_home, config, command).await
         }
         Command::Skills {
             command: SkillsCommand::List,
@@ -63,14 +63,14 @@ async fn main() -> Result<()> {
 
 async fn run_task(
     workspace: &Path,
-    pico_home: &Path,
+    fiasco_home: &Path,
     config: AppConfig,
     prompt: String,
     output: OutputFormat,
 ) -> Result<()> {
     run_request(
         workspace,
-        pico_home,
+        fiasco_home,
         config,
         RunRequest::root(prompt),
         output,
@@ -80,14 +80,14 @@ async fn run_task(
 
 async fn resume_task(
     workspace: &Path,
-    pico_home: &Path,
+    fiasco_home: &Path,
     config: AppConfig,
     run_id: String,
     output: OutputFormat,
 ) -> Result<()> {
     run_action(
         workspace,
-        pico_home,
+        fiasco_home,
         config,
         RunAction::Resume(run_id),
         output,
@@ -102,14 +102,14 @@ enum RunAction {
 
 async fn run_request(
     workspace: &Path,
-    pico_home: &Path,
+    fiasco_home: &Path,
     config: AppConfig,
     request: RunRequest,
     output: OutputFormat,
 ) -> Result<()> {
     run_action(
         workspace,
-        pico_home,
+        fiasco_home,
         config,
         RunAction::Start(request),
         output,
@@ -119,13 +119,13 @@ async fn run_request(
 
 async fn run_action(
     workspace: &Path,
-    pico_home: &Path,
+    fiasco_home: &Path,
     config: AppConfig,
     action: RunAction,
     output: OutputFormat,
 ) -> Result<()> {
-    let provider = build_provider(&config.provider, pico_home)?;
-    let memory_home = config.memory.global_root.as_deref().unwrap_or(pico_home);
+    let provider = build_provider(&config.provider, fiasco_home)?;
+    let memory_home = config.memory.global_root.as_deref().unwrap_or(fiasco_home);
     let memory = config
         .memory
         .enabled
@@ -202,14 +202,14 @@ async fn run_action(
             max_output_tokens: config.runtime.max_output_tokens,
             foreground_tool_timeout_seconds: config.tasks.foreground_tool_timeout_seconds,
             task_wait_timeout_seconds: config.tasks.wait_timeout_seconds,
-            compaction: picoagent::agent::CompactionOptions {
+            compaction: fiasco::agent::CompactionOptions {
                 compact_at_tokens: config.compaction.compact_at_tokens,
                 context_window_tokens: config.compaction.context_window_tokens,
                 keep_recent_tokens: config.compaction.keep_recent_tokens,
                 summary_max_output_tokens: config.compaction.summary_max_output_tokens,
                 history_search_max_matches: config.compaction.history_search_max_matches,
             },
-            general_task: picoagent::agent::GeneralTaskProfile {
+            general_task: fiasco::agent::GeneralTaskProfile {
                 model: config.agents.general_task.model.clone(),
                 max_output_tokens: config.agents.general_task.max_output_tokens,
             },
@@ -238,7 +238,7 @@ async fn run_action(
     Ok(())
 }
 
-fn build_provider(config: &ProviderConfig, pico_home: &Path) -> Result<Arc<dyn ModelProvider>> {
+fn build_provider(config: &ProviderConfig, fiasco_home: &Path) -> Result<Arc<dyn ModelProvider>> {
     let provider: Arc<dyn ModelProvider> = match config {
         ProviderConfig::Echo { .. } => Arc::new(EchoProvider),
         ProviderConfig::OpenaiOauth {
@@ -251,7 +251,7 @@ fn build_provider(config: &ProviderConfig, pico_home: &Path) -> Result<Arc<dyn M
                 .unwrap_or_else(|| DEFAULT_OPENAI_OAUTH_BASE_URL.to_owned());
             let auth_path = auth_file
                 .clone()
-                .unwrap_or_else(|| pico_home.join("auth.json"));
+                .unwrap_or_else(|| fiasco_home.join("auth.json"));
             Arc::new(OpenAiOAuthProvider::new(base_url, auth_path))
         }
         ProviderConfig::OpenaiCompatible {
@@ -321,7 +321,7 @@ async fn inspect_run(workspace: &Path, run_id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn login(pico_home: &Path, config: &AppConfig) -> Result<()> {
+async fn login(fiasco_home: &Path, config: &AppConfig) -> Result<()> {
     let ProviderConfig::OpenaiOauth {
         base_url,
         auth_file,
@@ -336,7 +336,7 @@ async fn login(pico_home: &Path, config: &AppConfig) -> Result<()> {
             .unwrap_or_else(|| DEFAULT_OPENAI_OAUTH_BASE_URL.to_owned()),
         auth_file
             .clone()
-            .unwrap_or_else(|| pico_home.join("auth.json")),
+            .unwrap_or_else(|| fiasco_home.join("auth.json")),
     );
     let device = provider.request_device_code().await?;
     println!(
@@ -350,13 +350,13 @@ async fn login(pico_home: &Path, config: &AppConfig) -> Result<()> {
 
 async fn memory_command(
     workspace: &Path,
-    pico_home: &Path,
+    fiasco_home: &Path,
     config: AppConfig,
     command: MemoryCommand,
 ) -> Result<()> {
     match command {
         MemoryCommand::Consolidate { scope } => {
-            let memory_home = config.memory.global_root.as_deref().unwrap_or(pico_home);
+            let memory_home = config.memory.global_root.as_deref().unwrap_or(fiasco_home);
             let paths = MemoryPaths::new(memory_home, workspace);
             let target = match scope {
                 Some(cli::ScopeArg::User) => {
@@ -376,7 +376,7 @@ async fn memory_command(
             );
             run_request(
                 workspace,
-                pico_home,
+                fiasco_home,
                 config,
                 RunRequest::root(prompt),
                 OutputFormat::Text,
@@ -397,19 +397,19 @@ fn list_skills(workspace: &Path) -> Result<()> {
     Ok(())
 }
 
-fn pico_home() -> Result<PathBuf> {
-    let path = match env::var_os("PICO_HOME") {
+fn fiasco_home() -> Result<PathBuf> {
+    let path = match env::var_os("FIASCO_HOME") {
         Some(path) => PathBuf::from(path),
-        None => {
-            PathBuf::from(env::var_os("HOME").context("HOME is not set; set PICO_HOME explicitly")?)
-                .join(".pico")
-        }
+        None => PathBuf::from(
+            env::var_os("HOME").context("HOME is not set; set FIASCO_HOME explicitly")?,
+        )
+        .join(".fiasco"),
     };
     if path.is_absolute() {
         Ok(path)
     } else {
         Ok(env::current_dir()
-            .context("resolve relative PICO_HOME")?
+            .context("resolve relative FIASCO_HOME")?
             .join(path))
     }
 }

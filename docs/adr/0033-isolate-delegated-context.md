@@ -12,7 +12,7 @@ delegate schema, run and task records, child launch and recovery, compaction
 projection, artifact resolution, prompts, and tests. It also made the child
 model choice depend on the parent.
 
-Picoagent is an internal harness whose parent and child already share a
+Fiasco is an internal harness whose parent and child already share a
 workspace. A parent can provide durable context through explicit paths and can
 put the task-specific facts in the delegated prompt. The extra inherited
 conversation mode is not valuable enough to justify its cross-module state.

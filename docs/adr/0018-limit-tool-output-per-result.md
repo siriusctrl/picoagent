@@ -13,7 +13,7 @@ background results as well.
 
 ## Context
 
-Picoagent originally combined a per-result inline threshold with a cumulative
+Fiasco originally combined a per-result inline threshold with a cumulative
 preview budget for the complete run. After enough ordinary tool output, even a
 later small result became a reference-only artifact. Compaction did not reset
 the budget, so a run with newly available context still hid later output. The

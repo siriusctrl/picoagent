@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use picoagent::{
+use fiasco::{
     artifact::{ArtifactRef, ResultMetadata},
     model::{ImageAttachment, Message, MessageContent, Role},
     storage::{MESSAGE_FORMAT, RunDirStore, RunRecord},
@@ -16,7 +16,7 @@ fn result_metadata(call_id: &str) -> ResultMetadata {
                 .to_owned(),
             run_id: "run-1".to_owned(),
             call_id: call_id.to_owned(),
-            path: ".pico/runs/run-1/artifacts/result.txt".to_owned(),
+            path: ".fiasco/runs/run-1/artifacts/result.txt".to_owned(),
             media_type: "text/plain; charset=utf-8".to_owned(),
             bytes: 100,
             sha256: "a".repeat(64),
@@ -82,7 +82,7 @@ async fn messages_are_self_contained_model_readable_records() {
                     MessageContent::ToolCall {
                         id: "call_1".into(),
                         name: "read".into(),
-                        arguments: picoagent::model::ToolArguments::from_raw("{\n  \"path\":"),
+                        arguments: fiasco::model::ToolArguments::from_raw("{\n  \"path\":"),
                     },
                 ],
             },
@@ -125,7 +125,7 @@ async fn messages_are_self_contained_model_readable_records() {
     assert!(lines.iter().all(|line| line.get("seq").is_none()));
     for (index, line) in lines.iter().enumerate() {
         assert_eq!(
-            line["_pico"]["checkpoint"],
+            line["_fiasco"]["checkpoint"],
             json!({
                 "first_message_ref": format!("m{}", index + 1),
                 "index": 0,
@@ -196,7 +196,7 @@ async fn appends_a_multi_message_checkpoint_with_contiguous_refs() {
     let lines = read_jsonl(&paths.messages).await;
     for (index, line) in lines[1..].iter().enumerate() {
         assert_eq!(
-            line["_pico"]["checkpoint"],
+            line["_fiasco"]["checkpoint"],
             json!({
                 "first_message_ref": "m2",
                 "index": index,

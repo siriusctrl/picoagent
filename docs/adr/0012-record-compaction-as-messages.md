@@ -12,7 +12,7 @@ assistant state in normal projected context. The durable request/state message
 decision below is unchanged.
 
 ADR 0032 later moves compaction classification from a metadata sidecar to the
-same message record's `_pico` field. Recording the request and state as
+same message record's `_fiasco` field. Recording the request and state as
 append-only messages remains accepted.
 
 ## Context
@@ -24,7 +24,7 @@ result in `compactions.jsonl`, and later wrapped it in a synthetic user
 state and a visible gap between the durable Chat trajectory, history tools, and
 the context sent to the model.
 
-Picoagent is an internal harness with no deployed run-format compatibility
+Fiasco is an internal harness with no deployed run-format compatibility
 requirement. A smaller persistence model and directly inspectable trajectories
 are more valuable than preserving the separate checkpoint format.
 

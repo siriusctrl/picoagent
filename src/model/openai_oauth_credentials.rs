@@ -53,7 +53,7 @@ impl<'a> CredentialStore<'a> {
             Err(error) => {
                 return Err(error).with_context(|| {
                     format!(
-                        "failed to load Picoagent auth file `{}`",
+                        "failed to load Fiasco auth file `{}`",
                         self.auth_path.display()
                     )
                 });

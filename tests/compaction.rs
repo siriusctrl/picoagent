@@ -5,7 +5,7 @@ use std::sync::{
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     agent::{
         CompactionOptions,
         runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
@@ -255,7 +255,7 @@ async fn estimated_context_window_applies_before_the_first_normal_request() {
     let run = only_run_id(&workspace).await;
     assert_eq!(
         store.load_run(&run).await.unwrap().state,
-        picoagent::storage::RunState::Failed
+        fiasco::storage::RunState::Failed
     );
 }
 
@@ -352,7 +352,7 @@ async fn resume_after_a_durable_compacted_state_continues_instead_of_finalizing_
 }
 
 async fn only_run_id(workspace: &TempDir) -> String {
-    tokio::fs::read_dir(workspace.path().join(".pico/runs"))
+    tokio::fs::read_dir(workspace.path().join(".fiasco/runs"))
         .await
         .unwrap()
         .next_entry()
@@ -509,22 +509,22 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     assert_eq!(messages[6]["role"], "assistant");
     assert!(messages[5].get("type").is_none());
     assert!(messages[6].get("type").is_none());
-    assert_eq!(messages[5]["_pico"]["compaction"]["kind"], "request");
-    assert_eq!(messages[6]["_pico"]["compaction"]["kind"], "state");
+    assert_eq!(messages[5]["_fiasco"]["compaction"]["kind"], "request");
+    assert_eq!(messages[6]["_fiasco"]["compaction"]["kind"], "state");
     for (index, message) in messages[5..7].iter().enumerate() {
-        assert_eq!(message["_pico"]["checkpoint"]["first_message_ref"], "m6");
-        assert_eq!(message["_pico"]["checkpoint"]["index"], index);
-        assert_eq!(message["_pico"]["checkpoint"]["count"], 2);
+        assert_eq!(message["_fiasco"]["checkpoint"]["first_message_ref"], "m6");
+        assert_eq!(message["_fiasco"]["checkpoint"]["index"], index);
+        assert_eq!(message["_fiasco"]["checkpoint"]["count"], 2);
     }
     assert_eq!(
-        messages[6]["_pico"]["compaction"]["state"]
+        messages[6]["_fiasco"]["compaction"]["state"]
             .as_object()
             .unwrap()
             .len(),
         2
     );
     assert_eq!(
-        messages[6]["_pico"]["compaction"]["state"]["first_kept_message_ref"],
+        messages[6]["_fiasco"]["compaction"]["state"]["first_kept_message_ref"],
         trajectory[3].message_ref
     );
 

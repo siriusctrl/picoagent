@@ -1,11 +1,13 @@
 [package]
-name = "picoagent"
+name = "fiasco"
 version = "0.1.0"
 edition = "2024"
-description = "A small headless agent harness for cloud and local jobs"
+description = "A headless orchestrator for multiple agents and background jobs"
+repository = "https://github.com/siriusctrl/fiasco"
+homepage = "https://siriusctrl.github.io/projects/fiasco/"
 
 [[bin]]
-name = "pico"
+name = "fiasco"
 path = "src/main.rs"
 
 [dependencies]

@@ -35,7 +35,7 @@ the model would also couple retrieval to a writable local filesystem, while
 future run storage may be remote or database-backed.
 
 Provider-side compaction is not portable across the supported model adapters.
-Picoagent therefore needs a provider-neutral boundary that works with local run
+Fiasco therefore needs a provider-neutral boundary that works with local run
 directories now and can support another storage backend later.
 
 ## Decision

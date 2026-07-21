@@ -1,4 +1,4 @@
 /target/
-/.pico/
-**/.pico/runs/
+/.fiasco/
+**/.fiasco/runs/
 *.profraw

@@ -25,7 +25,7 @@ struct StoredMessage {
     #[serde(flatten)]
     message: Message,
     #[serde(
-        rename = "_pico",
+        rename = "_fiasco",
         default,
         skip_serializing_if = "LocalState::is_empty"
     )]

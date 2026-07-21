@@ -1,6 +1,6 @@
 use std::{fs, path::Path, sync::Arc};
 
-use picoagent::{
+use fiasco::{
     hooks::{CommandHook, HookEvent, HookPipeline},
     memory::MemoryPaths,
     skills::SkillRegistry,
@@ -48,7 +48,7 @@ async fn skills_load_on_demand_and_memory_uses_ordinary_paths() {
     assert_eq!(memory.user, home.path().join("memory/user"));
     assert_eq!(
         memory.project,
-        workspace.path().join(".pico/memory/project")
+        workspace.path().join(".fiasco/memory/project")
     );
     let prompt = memory.runtime_reminder_section();
     assert!(prompt.contains(memory.user.to_string_lossy().as_ref()));

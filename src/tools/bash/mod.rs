@@ -42,7 +42,7 @@ impl Tool for BashTool {
         let args: BashArgs = serde_json::from_value(arguments).context("invalid bash arguments")?;
         let artifact_dir = context
             .workspace
-            .join(".pico/runs")
+            .join(".fiasco/runs")
             .join(&context.run_id)
             .join("artifacts");
         tokio::fs::create_dir_all(&artifact_dir).await?;

@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::Result;
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     events::{EventSink, NoopEventSink, RuntimeEvent, RuntimeEventKind},
     model::{
         AnthropicCompatibleOptions, AnthropicCompatibleProvider, ImageAttachment, Message,
@@ -161,15 +161,15 @@ async fn chat_stream_reassembles_fragmented_tool_arguments_and_supplies_missing_
     assert_eq!(response.usage.reasoning_tokens, Some(7));
     assert!(matches!(
         &response.assistant.content[0],
-        picoagent::model::MessageContent::Reasoning { text } if text == "inspect first"
+        fiasco::model::MessageContent::Reasoning { text } if text == "inspect first"
     ));
     assert!(matches!(
         &response.assistant.content[1],
-        picoagent::model::MessageContent::Text { text } if text == "checking "
+        fiasco::model::MessageContent::Text { text } if text == "checking "
     ));
     assert!(matches!(
         &response.assistant.content[2],
-        picoagent::model::MessageContent::ToolCall { id, .. } if id == &tool_calls[0].id
+        fiasco::model::MessageContent::ToolCall { id, .. } if id == &tool_calls[0].id
     ));
     let recorded = events.0.lock().expect("recording lock poisoned");
     assert_eq!(recorded.reasoning, ["inspect ", "first"]);
@@ -240,7 +240,7 @@ async fn chat_stream_preserves_provider_tool_call_id() {
     assert_eq!(response.tool_calls()[0].id, "call_provider_1");
     assert!(matches!(
         &response.assistant.content[0],
-        picoagent::model::MessageContent::ToolCall { id, .. } if id == "call_provider_1"
+        fiasco::model::MessageContent::ToolCall { id, .. } if id == "call_provider_1"
     ));
 }
 

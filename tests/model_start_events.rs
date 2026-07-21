@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::Result;
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
     artifact::ArtifactStore,
     events::{EventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
@@ -359,13 +359,13 @@ async fn model_transport_and_validation_failures_close_the_started_request() {
             store: store.clone(),
             hooks: HookPipeline::new(),
             memory: None,
-            extra_events: Arc::new(picoagent::events::NoopEventSink),
+            extra_events: Arc::new(fiasco::events::NoopEventSink),
             options: RunnerOptions::default(),
         });
 
         let error = runner.run(RunRequest::root("fail once")).await.unwrap_err();
         assert!(format!("{error:#}").contains(expected));
-        let mut runs = tokio::fs::read_dir(workspace.path().join(".pico/runs"))
+        let mut runs = tokio::fs::read_dir(workspace.path().join(".fiasco/runs"))
             .await
             .unwrap();
         let run_id = runs

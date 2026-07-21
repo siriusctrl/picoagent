@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Result, bail, ensure};
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunnerOptions},
     artifact::ArtifactStore,
     events::{NoopEventSink, SharedEventSink},
@@ -180,7 +180,7 @@ async fn resume_recovers_delegate_ack_child_and_delivery_exactly_once() {
     .unwrap();
     assert_eq!(task["state"], "completed");
     assert_eq!(task["origin_call_id"], DELEGATE_CALL_ID);
-    let run_count = std::fs::read_dir(workspace.path().join(".pico/runs"))
+    let run_count = std::fs::read_dir(workspace.path().join(".fiasco/runs"))
         .unwrap()
         .count();
     assert_eq!(run_count, 2);
@@ -243,7 +243,7 @@ async fn create_crash_window(
                         call_id: DELEGATE_CALL_ID.to_owned(),
                         content: "<runtime-reminder>\n<background_task task_id=\"t1\" name=\"inspect_child\">\nThe task is now running in the background.\n</background_task>\n</runtime-reminder>".to_owned(),
                         is_error: false,
-                        metadata: picoagent::artifact::ResultMetadata::empty(),
+                        metadata: fiasco::artifact::ResultMetadata::empty(),
                     }],
                 },
             ],

@@ -1,11 +1,15 @@
-# picoagent
+# Fiasco
 
-Picoagent is a small headless agent harness written in Rust. It is designed for
-local automation and cloud jobs where another service owns the eventual web UI.
+> Orchestrate the agents. Contain the fiasco.
 
-The launch runtime deliberately has one agent loop, one tool registry, portable
-run directories, and no embedded TUI, database, scheduler, sandbox, or approval
-system.
+Fiasco is a headless multi-agent orchestrator written in Rust. It coordinates
+delegated agents and long-running background jobs through one durable runtime
+for local automation and cloud workloads.
+
+The runtime deliberately shares one `AgentRunner` implementation and one tool
+contract across root and child agents. Runs are portable, resumable, and
+inspectable without an embedded TUI, database, distributed scheduler, sandbox,
+or approval system.
 
 ## Features
 
@@ -32,39 +36,39 @@ system.
 
 ## Important Security Boundary
 
-Picoagent does not provide a security sandbox in this release. Built-in tools,
+Fiasco does not provide a security sandbox in this release. Built-in tools,
 MCP servers, hooks, and child agents run with the same permissions as the
-picoagent process. Run it only in environments where that access is appropriate.
+fiasco process. Run it only in environments where that access is appropriate.
 
 ## Install
 
-Picoagent requires Rust and `rg` (ripgrep). Artifact-backed compacted-history
+Fiasco requires Rust and `rg` (ripgrep). Artifact-backed compacted-history
 search invokes `rg` directly and expects it on `PATH`.
 
 ```bash
 cargo install --path .
 ```
 
-The binary is named `pico`.
+The binary is named `fiasco`.
 
 ## Quick Start
 
-Without a config file, picoagent uses a deterministic echo provider:
+Without a config file, fiasco uses a deterministic echo provider:
 
 ```bash
-pico run "hello"
+fiasco run "hello"
 ```
 
 Run a task with machine-readable events:
 
 ```bash
-pico run --output ndjson "inspect this repository and run its tests"
+fiasco run --output ndjson "inspect this repository and run its tests"
 ```
 
 Runtime output is stored beneath the current project:
 
 ```text
-.pico/runs/<run-id>/
+.fiasco/runs/<run-id>/
   run.json
   messages.jsonl
   pending_inputs.jsonl # created when a running child is steered
@@ -78,13 +82,13 @@ Runtime output is stored beneath the current project:
 Inspect a previous result:
 
 ```bash
-pico inspect <run-id>
+fiasco inspect <run-id>
 ```
 
 Resume an interrupted or failed run from its last complete checkpoint:
 
 ```bash
-pico resume <run-id>
+fiasco resume <run-id>
 ```
 
 An assistant tool turn is one checkpoint containing the assistant message, all
@@ -94,15 +98,15 @@ side effects may already have occurred. It never replays that discarded tool
 turn automatically. Committed background ordinary tools are marked
 `interrupted`; committed GeneralTask children keep their own transcripts and
 continue when their parent is resumed. Resume the parent run rather than
-invoking `pico resume` on a child id directly.
+invoking `fiasco resume` on a child id directly.
 
 Before resume, the process supervisor, cgroup, or container must have killed
-the previous picoagent process and all locally managed descendants. Remote
+the previous fiasco process and all locally managed descendants. Remote
 jobs and other external side effects are not covered by that assumption.
 
 ## Prompt Layout
 
-Picoagent keeps its built-in system prompt independent of the workspace and
+Fiasco keeps its built-in system prompt independent of the workspace and
 unchanged across normal agent calls. At the start of each run, the first user
 message contains a synthetic `<runtime-reminder>` block before the original
 request. The reminder snapshots the workspace path, `AGENTS.md`, discovered
@@ -117,12 +121,12 @@ agent not to request an absent modality. Compaction reuses this stable
 system/tool prefix and adds one final user instruction only to the compaction
 request.
 
-`messages.jsonl` uses the self-contained `pico-message` format. Each line has a
+`messages.jsonl` uses the self-contained `fiasco-message` format. Each line has a
 short `ref` (`m1`, `m2`, ...), `created_at`, `role`, and typed `content` blocks.
 Those blocks are the exact provider-neutral messages replayed by the runner, so
 tool failures, artifact refs, images, reasoning, and opaque provider
 continuation items need no sidecar or reconstruction layout. Optional steering,
-compaction, and checkpoint membership live under `_pico` on the same line. The
+compaction, and checkpoint membership live under `_fiasco` on the same line. The
 sequence is derived from `ref` and the line position rather than duplicated.
 
 The single process holding the run execution lease is the only writer; any
@@ -130,7 +134,7 @@ number of viewers may read complete checkpoints without taking a message-log
 lock. A viewer publishes a multi-line checkpoint only after every declared
 newline-terminated record exists, and the writer trims an incomplete tail group
 before resuming appends. `run.json` declares
-`"message_format": "pico-message"`, retains the original user prompt, and
+`"message_format": "fiasco-message"`, retains the original user prompt, and
 freezes the stored profile plus remaining delegation depth. Compaction never
 rewrites or deletes committed trajectory records.
 
@@ -147,7 +151,7 @@ provider description and owns validation, assembly, and execution.
 
 For a complex task, `graph_init` accepts the goal and complete initial node map,
 validates the DAG, and creates a short run-local path such as
-`.pico/runs/<run-id>/graphs/g1.yaml`. Invalid initialization creates no file.
+`.fiasco/runs/<run-id>/graphs/g1.yaml`. Invalid initialization creates no file.
 The graph is durable coordination state, not a scheduler: nodes are work items,
 dependencies are accepted-outcome dependencies, and a node is resolved only
 when the main agent writes a resolution. Use ordinary `read` and `write` for
@@ -192,7 +196,7 @@ nodes:
       summary: >-
         The request contract is documented.
       evidence:
-        - .pico/runs/<run-id>/artifacts/api-contract.txt
+        - .fiasco/runs/<run-id>/artifacts/api-contract.txt
   implement:
     objective: >-
       Implement the accepted contract.
@@ -214,8 +218,8 @@ direct dependencies remains unresolved.
 Configuration is loaded from the first existing path:
 
 1. `--config <path>`
-2. `<workspace>/.pico/config.toml`
-3. `$HOME/.pico/config.toml`
+2. `<workspace>/.fiasco/config.toml`
+3. `$HOME/.fiasco/config.toml`
 4. built-in echo defaults
 
 Config files are not merged, and unknown fields are rejected so misspelled
@@ -233,11 +237,11 @@ modalities = ["text"]
 Authenticate once:
 
 ```bash
-pico auth login
+fiasco auth login
 ```
 
-Credentials are stored at `$PICO_HOME/auth.json` (default
-`$HOME/.pico/auth.json`). If no picoagent credentials exist, the provider can
+Credentials are stored at `$FIASCO_HOME/auth.json` (default
+`$HOME/.fiasco/auth.json`). If no fiasco credentials exist, the provider can
 import a compatible `$CODEX_HOME/auth.json` or `$HOME/.codex/auth.json`.
 
 ### OpenAI-compatible
@@ -255,12 +259,12 @@ reasoning_effort = "medium" # optional; provider/model-specific
 
 `api_key` accepts either a literal key or a whole environment reference such as
 `${OPENAI_API_KEY}`. Keep a literal key in the user config at
-`$HOME/.pico/config.toml` with restrictive file permissions rather than in a
-workspace file that may be shared. If `api_key` is omitted, picoagent reads
+`$HOME/.fiasco/config.toml` with restrictive file permissions rather than in a
+workspace file that may be shared. If `api_key` is omitted, fiasco reads
 `OPENAI_API_KEY`. The removed OpenAI-compatible `api_key_env` field is rejected;
 write `api_key = "${OPENAI_API_KEY}"` instead.
 
-`reasoning_effort` is optional. Picoagent sends it as `reasoning_effort` for
+`reasoning_effort` is optional. Fiasco sends it as `reasoning_effort` for
 Chat Completions and as `reasoning.effort` for Responses. If omitted, the
 provider's model default is used. Common values include `none`, `minimal`,
 `low`, `medium`, `high`, and `xhigh`; accepted values depend on the endpoint and
@@ -274,7 +278,7 @@ with bounded exponential backoff. Parent and child requests also share the
 runtime model-concurrency limit described below.
 
 If a Chat Completions stream explicitly returns `delta.reasoning_content`,
-picoagent stores it in the assistant message's optional `reasoning_content`
+fiasco stores it in the assistant message's optional `reasoning_content`
 field in `messages.jsonl` and
 emits transient `model_reasoning_delta` events to live event sinks. Per-chunk
 text and reasoning events are not written to `events.jsonl`; the complete
@@ -287,12 +291,12 @@ that the provider does not return.
 Inspect the persisted reasoning for a run with:
 
 ```bash
-jq -c 'select(.role == "assistant" and has("reasoning_content")) | {role, reasoning_content}' .pico/runs/<run-id>/messages.jsonl
-jq -c '.' .pico/runs/<run-id>/events.jsonl
+jq -c 'select(.role == "assistant" and has("reasoning_content")) | {role, reasoning_content}' .fiasco/runs/<run-id>/messages.jsonl
+jq -c '.' .fiasco/runs/<run-id>/events.jsonl
 ```
 
 `reasoning_content` is an OpenAI-compatible endpoint extension, not an official
-OpenAI Chat Completions message field. Picoagent writes it only when the
+OpenAI Chat Completions message field. Fiasco writes it only when the
 endpoint explicitly returns reasoning text, and replays it as the same separate
 field on later requests to that compatible Chat endpoint.
 
@@ -327,7 +331,7 @@ summary_max_output_tokens = 4096
 history_search_max_matches = 50
 ```
 
-Picoagent estimates the complete input from the first request and replaces that
+Fiasco estimates the complete input from the first request and replaces that
 estimate with provider-reported input usage whenever available. It can make an
 additional model call when the tracked input reaches `compact_at_tokens`. The
 call receives the original initial message, any previous compacted state, the
@@ -338,7 +342,7 @@ normal requests omit the compaction instruction and contain that exact
 assistant message plus the exact recent suffix.
 
 `context_window_tokens` is the model's configured nominal full window. Before
-normal and compaction requests, picoagent checks its provider-neutral estimate
+normal and compaction requests, fiasco checks its provider-neutral estimate
 of system, schemas, active messages, and configured output allowance. It must
 be greater than `compact_at_tokens`; if compaction cannot reduce the estimate
 below it, the run fails locally. This is an early safety check, not a
@@ -413,7 +417,7 @@ The launch tool surface is intentionally small:
 - `write`: full-file creation/replacement or an atomic list of targeted edits
 - `bash`: local discovery, `rg`, tests, builds, and other Bash commands; returns
   combined stdout/stderr and adds a status line only for unsuccessful
-  completion. It uses a non-login shell and inherits picoagent's environment
+  completion. It uses a non-login shell and inherits fiasco's environment
   without loading profile files
 - `history_search`: regex search over the compacted trajectory prefix
 - `history_read`: a bounded message window around a returned history ref
@@ -440,7 +444,7 @@ indentation normalization. It does not use broad fuzzy similarity that could
 silently modify the wrong code.
 
 All direct tool calls in one assistant message start concurrently and share one
-foreground window. If all finish early, picoagent returns immediately. At the
+foreground window. If all finish early, fiasco returns immediately. At the
 configured deadline, it preserves each unfinished exact future, moves only
 those calls into the background task lifecycle, and returns their task ids; no
 tool is stopped or restarted. The assistant message, tool-result messages in
@@ -479,7 +483,7 @@ durable-storage identities.
 
 ## Skills
 
-Picoagent discovers Agent Skills from lowest to highest precedence:
+Fiasco discovers Agent Skills from lowest to highest precedence:
 
 1. `$HOME/.agents/skills/*/SKILL.md`
 2. `<workspace>/.agents/skills/*/SKILL.md`
@@ -490,10 +494,10 @@ returns the instruction body without repeating that metadata, plus the absolute
 skill-directory path needed to resolve referenced files.
 
 ```bash
-pico skills list
+fiasco skills list
 ```
 
-## Subagents
+## Multi-Agent Orchestration
 
 `delegate` asynchronously starts the sole model-facing `general-task` role;
 there is no model-facing profile choice. The runtime reminder states the exact
@@ -546,8 +550,8 @@ Memory is durable knowledge about the user and projects, not the current
 conversation. It is ordinary Markdown at two locations which are included in
 an ordinary agent's initial runtime reminder:
 
-- `$PICO_HOME/memory/user/` for cross-project user knowledge
-- `<workspace>/.pico/memory/project/` for project-specific knowledge
+- `$FIASCO_HOME/memory/user/` for cross-project user knowledge
+- `<workspace>/.fiasco/memory/project/` for project-specific knowledge
 
 There are no special memory tools. The model uses `read`, `write`, and `bash`
 for small focused changes. For a large independent update, it can delegate an
@@ -555,13 +559,13 @@ ordinary `general-task` child, continue useful work, and reconcile the child
 result before finishing.
 
 ```bash
-pico memory consolidate
+fiasco memory consolidate
 ```
 
 Use an external scheduler instead of embedding cron into the harness:
 
 ```cron
-15 3 * * * /usr/local/bin/pico --workspace /workspace/project memory consolidate
+15 3 * * * /usr/local/bin/fiasco --workspace /workspace/project memory consolidate
 ```
 
 See [memory.md](docs/memory.md).
@@ -604,6 +608,6 @@ Run a complete local smoke task:
 
 ```bash
 tmp=$(mktemp -d)
-target/debug/pico --workspace "$tmp" run --output ndjson "smoke"
-find "$tmp/.pico/runs" -maxdepth 3 -type f -print
+target/debug/fiasco --workspace "$tmp" run --output ndjson "smoke"
+find "$tmp/.fiasco/runs" -maxdepth 3 -type f -print
 ```

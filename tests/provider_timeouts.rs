@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use picoagent::{
+use fiasco::{
     events::NoopEventSink,
     model::{
         AnthropicCompatibleProvider, Message, ModelProvider, ModelRequest,

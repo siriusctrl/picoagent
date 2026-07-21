@@ -484,6 +484,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "fiasco"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "chrono",
+ "clap",
+ "eventsource-stream",
+ "futures-util",
+ "image",
+ "libc",
+ "regex",
+ "reqwest",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "shell-words",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
+ "walkdir",
+ "wiremock",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1254,38 +1286,6 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
-
-[[package]]
-name = "picoagent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64",
- "chrono",
- "clap",
- "eventsource-stream",
- "futures-util",
- "image",
- "libc",
- "regex",
- "reqwest",
- "rmcp",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2",
- "shell-words",
- "tempfile",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "url",
- "walkdir",
- "wiremock",
-]
 
 [[package]]
 name = "pin-project-lite"

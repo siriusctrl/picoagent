@@ -5,7 +5,7 @@ use std::sync::{
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     agent::{
         CompactionOptions,
         runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},

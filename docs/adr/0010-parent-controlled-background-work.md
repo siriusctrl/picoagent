@@ -39,7 +39,7 @@ being copied wholesale into the parent context.
   provider errors, explicit cancellation, and process failure remain real run
   boundaries.
 - Direct ordinary tools start in the foreground. If the configured foreground
-  window expires, picoagent preserves the same in-flight future, records it as
+  window expires, fiasco preserves the same in-flight future, records it as
   a running background task, and returns an acknowledgement with its task id.
   It does not stop or restart the tool.
 - Explicitly spawned tools and child agents have no hard harness execution
@@ -66,7 +66,7 @@ being copied wholesale into the parent context.
 - Parents can inspect and redirect children without injecting complete child
   transcripts into every parent request.
 - A model can still loop indefinitely. Operators retain provider request
-  deadlines and external process/job cancellation; picoagent does not pretend
+  deadlines and external process/job cancellation; fiasco does not pretend
   an arbitrary model-call count proves failure.
 - Pending steering input is append-only and idempotently committed into the
   child's ordinary message trajectory. This adds one small per-run input log.

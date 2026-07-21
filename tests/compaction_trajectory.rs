@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     agent::{
         CompactionOptions,
         runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
@@ -232,7 +232,7 @@ fn runner(
 
 #[tokio::test]
 async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
-    let retained_workspace = std::env::var_os("PICOAGENT_TRAJECTORY_DIR")
+    let retained_workspace = std::env::var_os("FIASCO_TRAJECTORY_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
     let temporary_workspace = retained_workspace

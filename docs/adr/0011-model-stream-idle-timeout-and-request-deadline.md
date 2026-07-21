@@ -6,7 +6,7 @@
 
 ## Context
 
-Picoagent originally wrapped every complete provider future in one 300-second
+Fiasco originally wrapped every complete provider future in one 300-second
 timeout. The deadline included response headers, server-side reasoning,
 streamed text and tool-call construction. It did not reset when the provider
 made progress. A healthy reasoning model could therefore stream continuously

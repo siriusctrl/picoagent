@@ -84,7 +84,7 @@ workspace, provider wire configuration, model, and compatible current
 capability configuration.
 
 A process can stop after the tool itself changed external state but before its
-result committed. Picoagent cannot infer that outcome; the explicit interrupted
+result committed. Fiasco cannot infer that outcome; the explicit interrupted
 message makes that uncertainty part of the trajectory.
 
 ## Alternatives Considered

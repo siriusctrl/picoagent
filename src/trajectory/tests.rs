@@ -93,7 +93,7 @@ async fn write_artifact(
 ) -> ArtifactRef {
     let sha256 = format!("{:x}", Sha256::digest(content.as_bytes()));
     let stable_name = format!("{call_id}-{}", &sha256[..12]);
-    let artifact_directory = workspace.join(format!(".pico/runs/{run_id}/artifacts"));
+    let artifact_directory = workspace.join(format!(".fiasco/runs/{run_id}/artifacts"));
     tokio::fs::create_dir_all(&artifact_directory)
         .await
         .unwrap();
@@ -104,7 +104,7 @@ async fn write_artifact(
         artifact_id: format!("sha256:{sha256}"),
         run_id: run_id.to_owned(),
         call_id: call_id.to_owned(),
-        path: format!(".pico/runs/{run_id}/artifacts/{stable_name}.txt"),
+        path: format!(".fiasco/runs/{run_id}/artifacts/{stable_name}.txt"),
         media_type: "text/plain; charset=utf-8".to_owned(),
         bytes: content.len() as u64,
         sha256,

@@ -24,7 +24,7 @@ patch protocol, or workflow engine.
 ## Decision
 
 Each graph is a versioned YAML file at
-`.pico/runs/<run-id>/graphs/g<N>.yaml`, where `g<N>` is a short sequential
+`.fiasco/runs/<run-id>/graphs/g<N>.yaml`, where `g<N>` is a short sequential
 run-local id. `graph_init({goal})` safely allocates a new version-1 `wip`
 skeleton without overwriting an existing file. `graph_list({})` parses every
 graph independently and groups valid summaries as `wip`, `completed`, or

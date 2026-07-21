@@ -1,4 +1,4 @@
-use picoagent::{
+use fiasco::{
     artifact::{ArtifactPolicy, ArtifactRef, ArtifactStore},
     tools::{RawToolOutput, ToolContext},
 };
@@ -27,7 +27,7 @@ async fn keeps_small_results_inline() {
     assert!(!output.truncated);
     assert!(output.artifact.is_none());
     assert_eq!(output.model_content(), "small result");
-    assert!(!workspace.path().join(".pico").exists());
+    assert!(!workspace.path().join(".fiasco").exists());
 }
 
 #[tokio::test]
@@ -167,7 +167,7 @@ async fn spills_large_results_with_versioned_sidecar_and_head_tail_preview() {
     assert!(
         artifact
             .path
-            .starts_with(".pico/runs/run-1/artifacts/call_1-")
+            .starts_with(".fiasco/runs/run-1/artifacts/call_1-")
     );
     assert!(artifact.path.ends_with(".txt"));
 

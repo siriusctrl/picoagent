@@ -137,7 +137,7 @@ mod tests {
     }
 
     async fn write_graph(workspace: &Path, name: &str, source: &str) {
-        let directory = workspace.join(".pico/runs/run-1/graphs");
+        let directory = workspace.join(".fiasco/runs/run-1/graphs");
         tokio::fs::create_dir_all(&directory).await.unwrap();
         tokio::fs::write(directory.join(name), source)
             .await

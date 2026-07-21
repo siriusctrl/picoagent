@@ -252,7 +252,7 @@ impl TaskManager {
             if record.kind == "tool" {
                 self.interrupt(
                     &record.id,
-                    "picoagent stopped while the tool was running; do not retry without checking its side effects"
+                    "fiasco stopped while the tool was running; do not retry without checking its side effects"
                         .to_owned(),
                 )
                 .await?;

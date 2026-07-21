@@ -297,7 +297,7 @@ mod tests {
         let value = json!({
             "role": "user",
             "content": "hello",
-            "message_id": "pico-private-field"
+            "message_id": "fiasco-private-field"
         });
 
         assert!(serde_json::from_value::<ChatMessage>(value).is_err());

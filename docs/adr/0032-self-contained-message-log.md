@@ -16,7 +16,7 @@ wire shape, so every durable message became a coordinated pair across
 hashes, byte-span content layouts, two-file recovery, a per-run message-log
 lock, and cursors validated against both file lengths.
 
-Picoagent is an internal harness without released-run compatibility
+Fiasco is an internal harness without released-run compatibility
 requirements. A run has one process that interacts with it and may have many
 read-only viewers. The provider-neutral `Message` is already small, typed, and
 understandable when serialized. Provider adapters already own their wire
@@ -24,13 +24,13 @@ projections, so the durable format does not need to imitate one provider.
 
 ## Decision
 
-- `run.json` identifies the durable format as `pico-message` and uses run record
+- `run.json` identifies the durable format as `fiasco-message` and uses run record
   version 9. Older development runs are intentionally not decoded.
 - Each `messages.jsonl` line is one self-contained record with:
   - `ref`, equal to `m<N>` for its one-based line number;
   - `created_at`;
   - `role` and the exact provider-neutral typed `content` blocks;
-  - optional `_pico` state for pending-input idempotency and compaction
+  - optional `_fiasco` state for pending-input idempotency and compaction
     classification/boundaries.
 - Sequence is derived from `ref` and line position rather than duplicated.
   Tool-error state, artifact refs, provider continuation items, background-task
@@ -74,11 +74,11 @@ only after every declared line is present.
 
 ## Alternatives Considered
 
-- **Put the old sidecar under `_pico` unchanged.** Rejected because one file
+- **Put the old sidecar under `_fiasco` unchanged.** Rejected because one file
   would remove the commit join but retain hashes, spans, and reconstruction
   complexity without a real boundary requiring them.
 - **Keep OpenAI Chat fields and store only exceptional internal blocks under
-  `_pico`.** Rejected because reconstruction would still need ordering rules and
+  `_fiasco`.** Rejected because reconstruction would still need ordering rules and
   provider-specific exceptions for images, opaque items, and background tasks.
 - **Persist both provider-neutral and Chat projections.** Rejected because it
   creates duplicate message bodies and ambiguity over which copy is canonical.

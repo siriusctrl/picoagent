@@ -147,7 +147,7 @@ mod tests {
             .unwrap();
         let result: Value = serde_json::from_slice(&output.content).unwrap();
         assert_eq!(result["id"], "g1");
-        assert_eq!(result["path"], ".pico/runs/run-1/graphs/g1.yaml");
+        assert_eq!(result["path"], ".fiasco/runs/run-1/graphs/g1.yaml");
         assert_eq!(result["resolved"], 0);
         assert_eq!(result["unresolved"], 2);
         assert_eq!(result["ready"], json!(["inspect_api"]));
@@ -183,6 +183,6 @@ mod tests {
                     .is_err()
             );
         }
-        assert!(!workspace.path().join(".pico/runs/run-1/graphs").exists());
+        assert!(!workspace.path().join(".fiasco/runs/run-1/graphs").exists());
     }
 }

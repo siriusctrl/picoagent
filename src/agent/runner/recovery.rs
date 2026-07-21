@@ -12,7 +12,7 @@ use crate::{
 use super::{AgentRunner, RunRequest, RunResult, lifecycle::RunMode};
 use crate::agent::{compaction::estimate_message_tokens, task::BackgroundTaskRecord};
 
-const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous picoagent process stopped after the last complete checkpoint. Any uncommitted model/tool turn was discarded, but its workspace or external side effects may already have occurred. Inspect the current state before retrying any operation.\n</runtime-reminder>";
+const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous fiasco process stopped after the last complete checkpoint. Any uncommitted model/tool turn was discarded, but its workspace or external side effects may already have occurred. Inspect the current state before retrying any operation.\n</runtime-reminder>";
 
 impl AgentRunner {
     pub async fn resume(self: &Arc<Self>, run_id: impl Into<String>) -> Result<RunResult> {

@@ -10,7 +10,7 @@
 ## Context
 
 The original `messages.jsonl` envelope mixed conversation content with
-picoagent-only fields and tagged internal content variants. It was useful to the
+fiasco-only fields and tagged internal content variants. It was useful to the
 Rust runtime, but a developer opening the trajectory did not see the familiar
 OpenAI message shape. In particular, the synthetic runtime reminder appeared as
 a `runtime_reminder` JSON type even though providers receive it as user text.
@@ -41,7 +41,7 @@ real user workflow.
   adapter supplies a unique `call_<ULID>` id before the completed assistant
   message is persisted.
 - The `<runtime-reminder>` block is ordinary text at the start of the first
-  user message. No picoagent content type or local identity field is added to a
+  user message. No fiasco content type or local identity field is added to a
   message line.
 - `reasoning_content` is an explicitly documented OpenAI-compatible endpoint
   extension, not an official OpenAI Chat Completions field. It is omitted when
@@ -73,7 +73,7 @@ real user workflow.
 ## Consequences
 
 - Developers can inspect or search `messages.jsonl` using familiar Chat fields,
-  and the file contains no `runtime_reminder` variant or picoagent identity
+  and the file contains no `runtime_reminder` variant or fiasco identity
   fields.
 - `messages.jsonl` remains useful across OpenAI-compatible, Responses,
   Anthropic-compatible, and echo runs because it is the chosen durable
@@ -91,10 +91,10 @@ real user workflow.
 ## Alternatives Considered
 
 - **Keep the provider-neutral envelope in `messages.jsonl`.** Rejected because
-  it makes routine trajectory inspection require knowledge of picoagent's
+  it makes routine trajectory inspection require knowledge of fiasco's
   internal enum and caused the reminder to look like a provider-visible custom
   message type.
-- **Add picoagent fields directly to Chat messages.** Rejected because the
+- **Add fiasco fields directly to Chat messages.** Rejected because the
   resulting lines would no longer be clean Chat-compatible messages.
 - **Use the OpenAI Responses item format.** Rejected as the durable projection
   because the configured launch workflow uses Chat Completions and the desired

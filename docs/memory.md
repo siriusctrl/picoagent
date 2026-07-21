@@ -1,14 +1,14 @@
 # Long-Term Memory
 
-Picoagent memory is durable knowledge accumulated across runs. It is not the
+Fiasco memory is durable knowledge accumulated across runs. It is not the
 live context window, transcript persistence, or a run summary.
 
 ## Scopes And Files
 
-- Global user memory: `$PICO_HOME/memory/user/`
-- Project memory: `<workspace>/.pico/memory/project/`
+- Global user memory: `$FIASCO_HOME/memory/user/`
+- Project memory: `<workspace>/.fiasco/memory/project/`
 
-Both locations contain ordinary human-editable Markdown. Picoagent does not
+Both locations contain ordinary human-editable Markdown. Fiasco does not
 define a database schema, vector index, or dedicated memory read/search API.
 An ordinary agent run's initial runtime reminder names the resolved paths; the
 model uses `read` for known files and `bash` with `rg` for discovery.
@@ -35,12 +35,12 @@ GeneralTask mechanism used for any other
 delegated work; the harness does not need memory-specific execution or recovery
 logic.
 
-Picoagent deliberately does not auto-record every successful run. That would
+Fiasco deliberately does not auto-record every successful run. That would
 turn transcripts into noisy memory without model judgment.
 
 ## Consolidation
 
-`pico memory consolidate` starts an ordinary root run for the selected memory
+`fiasco memory consolidate` starts an ordinary root run for the selected memory
 paths. It may delegate to a general-task child when available and useful. The
 agent may merge related facts, remove stale duplication, preserve provenance,
 and rewrite the Markdown for clarity. The harness does no similarity scoring or
@@ -49,7 +49,7 @@ domain judgment.
 Use an external cron, systemd timer, or cloud scheduler:
 
 ```cron
-15 3 * * * /usr/local/bin/pico --workspace /workspace/project memory consolidate
+15 3 * * * /usr/local/bin/fiasco --workspace /workspace/project memory consolidate
 ```
 
 Markdown remains the source of truth. A future index can be a rebuildable

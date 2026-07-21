@@ -10,7 +10,7 @@ impl MemoryPaths {
     pub fn new(home: impl Into<PathBuf>, workspace: impl Into<PathBuf>) -> Self {
         Self {
             user: home.into().join("memory/user"),
-            project: workspace.into().join(".pico/memory/project"),
+            project: workspace.into().join(".fiasco/memory/project"),
         }
     }
 

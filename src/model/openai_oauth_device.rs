@@ -30,7 +30,7 @@ pub(crate) async fn request_device_code(
 ) -> Result<DeviceCode> {
     let response = client
         .post(join_url(auth_base_url, "api/accounts/deviceauth/usercode"))
-        .header("originator", "picoagent")
+        .header("originator", "fiasco")
         .json(&json!({"client_id": CODEX_CLIENT_ID}))
         .send()
         .await
@@ -80,7 +80,7 @@ pub(crate) async fn poll_device_code(
     while now_seconds() < device.expires_at {
         let response = client
             .post(join_url(auth_base_url, "api/accounts/deviceauth/token"))
-            .header("originator", "picoagent")
+            .header("originator", "fiasco")
             .json(&json!({
                 "device_auth_id": device.device_auth_id,
                 "user_code": device.user_code,

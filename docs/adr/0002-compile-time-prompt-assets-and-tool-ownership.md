@@ -19,7 +19,7 @@ base tools also lived beneath a `builtin/` category with no sibling tool family,
 adding navigation without expressing a useful ownership boundary.
 
 Prompt and tool assets must remain deterministic and easy to package in the
-single picoagent binary. A model-visible schema must not drift from the Rust
+single fiasco binary. A model-visible schema must not drift from the Rust
 arguments and behavior that implement it. Tools coupled to task supervision,
 memory, skills, or MCP also should not move into a central module merely because
 they implement the common `Tool` trait.
@@ -37,7 +37,7 @@ they implement the common `Tool` trait.
 - Static descriptions for subsystem tools live beside their owning subsystem;
   their implementation is not moved into `src/tools/`.
 - MCP remains the extension boundary for externally packaged executable tools.
-  Picoagent does not scan directories or load a native dynamic plugin ABI.
+  Fiasco does not scan directories or load a native dynamic plugin ABI.
 - Prompt and description assets are compile-time inputs. Runtime customization
   or replacement is a separate product decision.
 
@@ -48,7 +48,7 @@ they implement the common `Tool` trait.
 - Missing assets fail compilation, and asset changes trigger a rebuild.
 - Built-in tool navigation is flatter, while subsystem dependency direction
   remains intact.
-- Changing embedded prose still requires rebuilding picoagent.
+- Changing embedded prose still requires rebuilding fiasco.
 - Source packaging must include the referenced Markdown assets; release checks
   should inspect `cargo package --list`.
 

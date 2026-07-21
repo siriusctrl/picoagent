@@ -3,7 +3,7 @@
 ## Run
 
 A run is one task executed by `AgentRunner`. Its states are queued, running,
-completed, or failed. `pico resume <run-id>` continues a non-completed root run
+completed, or failed. `fiasco resume <run-id>` continues a non-completed root run
 from its last complete checkpoint. The implementation does not resume inside a
 provider stream or shell command.
 One per-run execution lease prevents two processes from advancing the same
@@ -15,14 +15,14 @@ modalities and rejects resume when they change.
 
 ## Durable Messages
 
-`run.json` declares `message_format` as `pico-message`. `messages.jsonl`
+`run.json` declares `message_format` as `fiasco-message`. `messages.jsonl`
 contains one complete provider-neutral message per line. Each record has its
 run-local `m<N>` ref, timestamp, role, and typed content blocks. The blocks
 directly represent runtime reminders, text, images, reasoning, tool calls and
 results, provider continuation items, and background-task notices. Tool errors
 and `ArtifactRef` values remain attached to their result blocks. Optional
 pending-input idempotency, compaction state, and checkpoint membership use
-`_pico` on the same line.
+`_fiasco` on the same line.
 
 This self-contained representation is not a provider wire format. OpenAI Chat,
 OpenAI Responses, and Anthropic adapters project it independently. Keeping the
@@ -58,7 +58,7 @@ For each model step:
    `final.md` when no tool calls or tasks remain.
 
 On resume, a complete final assistant checkpoint is finalized without another
-model call. An incomplete tool-turn checkpoint is discarded in full. Picoagent
+model call. An incomplete tool-turn checkpoint is discarded in full. Fiasco
 appends a user/runtime reminder that uncommitted work may have changed the
 workspace or external systems, and the model must inspect state before retrying.
 It does not synthesize missing tool results or automatically replay the turn.
@@ -68,7 +68,7 @@ It does not synthesize missing tool results or automatically replay the turn.
 Automatic local compaction is off unless `compaction.compact_at_tokens` is set.
 That option controls compacted-state creation only: every agent profile has
 both history tool schemas from its first call, and neither its system prompt nor
-toolset changes when a compacted state appears. Picoagent estimates the system,
+toolset changes when a compacted state appears. Fiasco estimates the system,
 frozen schemas, and active messages before the first request, then adopts
 provider-reported input usage whenever available. Between calls it estimates
 new content adapters replay, including compatible Chat `reasoning_content` and
@@ -83,7 +83,7 @@ compacting without exact retrieval.
 
 Compaction does not mutate committed messages. After a successful response, it
 commits the compaction user message and exact assistant compacted-state message
-together; each record's `_pico` state distinguishes control from ordinary
+together; each record's `_fiasco` state distinguishes control from ordinary
 conversation. Normal
 context assembly excludes the compaction instruction and older compaction
 records, using the initial runtime message, latest exact assistant state, one
@@ -121,7 +121,7 @@ The initial runtime reminder states the current model's supported modalities.
 When `image` is absent, an image `read` returns a model-visible tool error before
 loading the file, creating an artifact, or attaching content.
 
-## Subagents
+## Delegated Agents
 
 `delegate` starts a general-task child asynchronously. Each child creates a
 normal run with a parent id. Children share the workspace, provider, and base
@@ -174,7 +174,7 @@ the same child. Large memory updates use this same child path and need no
 separate recovery case.
 
 Resume has a process-domain precondition: the supervisor, cgroup, or container
-has terminated the old picoagent process and all locally managed descendants.
+has terminated the old fiasco process and all locally managed descendants.
 A busy run lease is therefore an invariant violation, not a condition to poll.
 Remote jobs and side effects outside that process tree may remain and are why
 the restart reminder requires inspection.
@@ -203,7 +203,7 @@ continues with the uncompacted context.
 
 If a provider explicitly reports a structurally incomplete normal response
 (for example, an output-token stop or a stream ending without its terminal
-event), picoagent discards that partial assistant content and makes one repair
+event), fiasco discards that partial assistant content and makes one repair
 request. The second request reuses the same system prompt, frozen tools, and
 existing messages with one non-durable runtime reminder appended at the tail.
 Each real request emits its own started/failed or started/completed lifecycle,

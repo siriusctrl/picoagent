@@ -30,7 +30,7 @@ simplicity and inspectability over a broader specialized API.
 - Use the existing asynchronous GeneralTask path for a large independent
   consolidation. It receives the same memory paths and follows the ordinary
   durable child-run and parent-resume contract.
-- Keep `pico memory consolidate` as a convenience command, implemented as an
+- Keep `fiasco memory consolidate` as a convenience command, implemented as an
   ordinary root task that may delegate and verifies the consolidation.
 
 ## Consequences
