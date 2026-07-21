@@ -2,7 +2,9 @@ name: history_search
 description: >-
   Regex-search completed messages omitted from active context, including full
   text in linked foreground and background result artifacts. `pattern` uses
-  Rust regex; use inline flags such as `(?i)`.
+  Rust regex; use inline flags such as `(?i)`. Use this only when an active
+  compacted state has omitted an exact fact needed for current work; it does
+  not search messages still present in active context.
 returns: >-
   One JSON object with `matches`, `truncated`, and `instruction`.
   `matches` is newest-first; each match has:

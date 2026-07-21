@@ -34,8 +34,9 @@ description: |-
   inspect the subsequent `graph_list` result, and issue dependent `delegate`
   calls in separate assistant turns; never batch dependent stages. Finish with
   top-level `status: completed` plus non-empty `summary` after every node is
-  resolved, or `status: aborted` plus non-empty `abort_reason`; omit both
-  terminal fields while status is `wip`.
+  resolved and the goal's required verification has succeeded, or `status:
+  aborted` plus non-empty `abort_reason`; omit both terminal fields while
+  status is `wip`.
 returns: >-
   JSON containing the short run-local graph `id`, project-relative YAML `path`,
   and initial `wip` status. Read or write that path with ordinary file tools.

@@ -92,3 +92,5 @@ Use these sections:
   execution](0026-file-backed-planning-graphs.md)
 - [ADR 0027: Correlate delegate recovery with its originating
   call](0027-correlate-delegate-recovery-with-originating-call.md)
+- [ADR 0028: Keep cross-tool workflow in the stable system
+  prompt](0028-stable-cross-tool-workflow.md)

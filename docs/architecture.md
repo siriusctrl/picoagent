@@ -307,14 +307,17 @@ The system prompt contains only stable built-in instructions loaded from
 the typed `prompts/agents.yaml` registry. YAML folded scalars remove source-only
 line wrapping before Rust receives each value. `src/prompts.rs` parses the
 embedded registry once and rejects unknown or empty fields. Rust owns prompt
-precedence, section ordering, dynamic values, and runtime-reminder framing. The
-first user message's ordinary text `content` carries a `<runtime-reminder>`
-block with the workspace `AGENTS.md`, sorted skill metadata, memory paths, and
-optional delegated instructions, followed by the original request. A skill
-body enters the conversation only after the model calls `load_skill`. That
-result omits the already-catalogued name and description, and includes the
-absolute skill directory so relative references remain resolvable. The
-`SKILL.md` entry path is implied by that directory and is not repeated.
+precedence, section ordering, dynamic values, and runtime-reminder framing.
+Stable task-control relationships, compacted-history recovery guidance, and
+planning-graph workflow live in that system prefix rather than Rust string
+literals. The first user message's ordinary text `content` carries a
+`<runtime-reminder>` block with model/workspace state, the workspace
+`AGENTS.md`, sorted skill metadata, memory paths, and optional delegated
+instructions, followed by the original request. A skill body enters the
+conversation only after the model calls `load_skill`. That result omits the
+already-catalogued name and description, and includes the absolute skill
+directory so relative references remain resolvable. The `SKILL.md` entry path
+is implied by that directory and is not repeated.
 
 ### Memory
 
@@ -403,12 +406,13 @@ uses this same path rather than a special direct-tool child.
 
 Agent and compaction calls use one invariant built-in system prompt and one
 sorted, frozen tool-schema set. The history schemas are included from the first
-call; automatic compaction never mutates this prefix. Project instructions,
-skill metadata, memory paths, and delegated instructions form a deterministic
-runtime reminder at the start of each run. That persisted reminder is frozen
-for the run. Optional startup schemas are selected before the run starts. Agent
-role and remaining delegation depth change only the initial runtime-reminder
-tail. Nonterminal background-task state is a non-durable synthetic reminder in
+call; automatic compaction never mutates this prefix. Stable tool-family
+workflow is part of the shared system prose, while project instructions, skill
+metadata, memory paths, and delegated instructions form a deterministic runtime
+reminder at the start of each run. That persisted reminder is frozen for the
+run. Optional startup schemas are selected before the run starts. Agent role
+and remaining delegation depth change only the initial runtime-reminder tail.
+Nonterminal background-task state is a non-durable synthetic reminder in
 normal requests, while a compaction request changes only the message tail.
 
 The durable trajectory remains append-only; before a normal model call, an

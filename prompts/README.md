@@ -10,13 +10,14 @@ Runtime assembly, precedence, dynamic values, argument validation, and
 execution contracts remain in Rust. Project `AGENTS.md`, model modalities,
 runtime role, remaining delegation depth, skill metadata, memory paths, and
 delegated instructions are dynamic inputs and are not copied into this
-registry. The stable system prompt defines universal cross-tool behavior. The
-initial runtime reminder carries concrete capabilities and concise GeneralTask
-role guidance. Its child guidance points to the paired delegated task; the
-stable system rule makes inherited fork messages background and gives the
-delegated task precedence over conflicting ancestor workflow. Keeping that
-precedence rule in the shared system prefix preserves byte-identical Root and
-GeneralTask prefixes.
+registry. The stable system prompt defines universal cross-tool behavior,
+including task lifecycle, compacted-history recovery, and file-backed graph
+workflow. The initial runtime reminder carries only concrete run state and
+concise GeneralTask role guidance. Its child guidance points to the paired
+delegated task; the stable system rule makes inherited fork messages background
+and gives the delegated task precedence over conflicting ancestor workflow.
+Keeping those rules in the shared system prefix preserves byte-identical Root
+and GeneralTask prefixes.
 
 Every local model-facing tool adapter keeps a typed `tool.yaml` beside its Rust
 module. Standalone adapters live at `src/tools/<tool>/`; cohesive task, history,

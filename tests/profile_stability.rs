@@ -215,12 +215,16 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
             "write"
         ]
     );
-    assert!(!requests[0].system.contains("history_search"));
-    for tool_name in ["`bash`", "`delegate`", "`load_skill`", "`write`"] {
-        assert!(!requests[0].system.contains(tool_name));
-    }
+    assert!(
+        requests[0]
+            .system
+            .contains("`history_search` and `history_read`")
+    );
+    assert!(requests[0].system.contains("`delegate` starts"));
+    assert!(requests[0].system.contains("`graph_list`"));
     let reminder = text_content(&requests[0].messages[0]);
     assert!(!reminder.contains("<context-management>"));
+    assert!(!reminder.contains("<tool-guidance>"));
     assert!(!reminder.contains("history_search"));
 }
 

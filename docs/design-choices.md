@@ -119,6 +119,20 @@ tool contract, vector retrieval without a demonstrated need, and relying on a
 provider-specific server-side compaction API. See
 [ADR 0012](adr/0012-record-compaction-as-messages.md).
 
+## Stable Cross-Tool Workflow
+
+Universal relationships between built-in tool families live once in the
+stable system prompt: task lifecycle and run-local ids, exact recovery from
+compacted history, and the separation of graph topology from delegated
+execution. Dynamic run facts such as remaining delegation depth and active task
+state stay in runtime reminders; complete arguments and result contracts stay
+in each `tool.yaml`. Benchmark prompts should state the task outcome rather
+than repeat harness workflow merely to force tool coverage.
+
+Rejected: hard-coded Rust prose in every initial reminder, duplicating complete
+tool schemas in the system prompt, and appending harness-validation steps to
+ordinary user tasks. See [ADR 0028](adr/0028-stable-cross-tool-workflow.md).
+
 ## Uniform Background Delivery
 
 Delegated children and promoted tools use one runtime notice shape. A

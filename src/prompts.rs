@@ -59,7 +59,11 @@ mod tests {
         );
         assert!(prompts.compaction_request.contains("# Compacted state"));
         assert!(!prompts.compaction_request.ends_with('\n'));
+        assert!(!prompts.compaction_request.contains("history_search"));
+        assert!(!prompts.compaction_request.contains("history_read"));
         assert!(prompts.compaction_resume.contains("not a final answer"));
+        assert!(!prompts.compaction_resume.contains("history_search"));
+        assert!(!prompts.compaction_resume.contains("history_read"));
         assert!(
             prompts
                 .general_task

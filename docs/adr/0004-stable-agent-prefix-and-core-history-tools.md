@@ -24,6 +24,10 @@ explicit durable identities but expose one identical built-in schema set.
 Remaining delegation depth moves to persisted runtime state and the initial
 reminder.
 
+ADR 0028 refines guidance placement again: one concise, unconditional history
+mental model now lives in the invariant system prefix, while the active
+compaction reminder only identifies the continuation boundary.
+
 ## Context
 
 ADR 0003 established append-only local compaction and exact history retrieval.

@@ -255,8 +255,8 @@ observed by the next run rather than rewriting the stored trajectory. When
 enabled, the latest stored assistant compacted state replaces an older prefix
 only in the projected provider context; the stored compaction instruction is
 not replayed in normal requests. A synthetic runtime reminder immediately after
-the state tells the model to continue the task and use the history tools only
-when omitted detail is needed. Large results remain behind stable artifact
-references.
+the state only identifies it as continuation context rather than a final answer
+or another compaction request. The stable system prompt owns history-tool
+guidance. Large results remain behind stable artifact references.
 These choices reduce context growth and improve the opportunity for provider-side
 prefix-cache reuse without coupling the loop to one cache API.

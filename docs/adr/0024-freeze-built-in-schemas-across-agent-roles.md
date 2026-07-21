@@ -5,6 +5,10 @@
 - Refines: ADR 0004 (agent-role schema stability)
 - Refines: ADR 0017 (delegate availability)
 
+ADR 0028 refines only guidance placement below. Stable cross-tool workflow now
+lives in the shared system prompt; concrete role, delegation depth, and active
+task state remain runtime-reminder data.
+
 ## Context
 
 Root, delegating GeneralTask, and leaf GeneralTask were durable capability
