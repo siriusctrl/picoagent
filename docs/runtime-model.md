@@ -160,8 +160,9 @@ requires them; later direct steering may refine that scope.
 Once the frozen prefix is complete, child recovery validates and uses only its
 local run files; an interrupted partial copy can be completed from the recorded
 parent boundary. Fork inherits the parent's selected model. Provider-reported
-cached input usage remains observable in `model_completed` events, but the
-harness neither predicts nor fabricates a cache hit.
+cached input usage remains observable in `model_completed` and
+`compaction_completed` events, but the harness neither predicts nor fabricates
+a cache hit.
 
 `task_inspect` returns a child's latest durable Chat-compatible messages and
 can page backward by sequence. `task_steer` queues a normal user message after
@@ -191,13 +192,15 @@ separate recovery case.
 Parent, child, and compaction requests share one model-call semaphore. Its
 default capacity is one so a child can run against single-concurrency compatible
 endpoints without racing the parent; deployments can raise it explicitly. Once
-a call acquires a permit, its hard request deadline covers the entire provider
-call without resetting. A separate stream-idle interval covers response headers
-and the request opening that precedes them, then restarts after every valid SSE
-event, so a healthy long reasoning response can outlive one idle interval.
-Neither timer includes later tool execution. An expired normal call fails that
-run; an expired compaction call records `compaction_failed` and continues with
-the uncompacted context.
+a call acquires a permit, the corresponding `model_started` or
+`compaction_started` event is emitted and its hard request deadline covers the
+entire provider call without resetting. Waiting for a permit does not emit a
+started event. A separate stream-idle interval covers response headers and the
+request opening that precedes them, then restarts after every valid SSE event,
+so a healthy long reasoning response can outlive one idle interval. Neither
+timer includes later tool execution. An expired normal call fails that run; an
+expired compaction call records `compaction_failed` and continues with the
+uncompacted context.
 
 ## Streaming
 

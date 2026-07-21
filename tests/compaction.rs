@@ -132,7 +132,8 @@ impl ModelProvider for ScriptedCompactionProvider {
                 ModelUsage {
                     input_tokens: Some(42),
                     output_tokens: Some(9),
-                    ..ModelUsage::default()
+                    cached_input_tokens: Some(21),
+                    reasoning_tokens: Some(4),
                 },
             ));
         }
@@ -256,6 +257,42 @@ async fn estimated_context_window_applies_before_the_first_normal_request() {
         store.load_run(&run).await.unwrap().state,
         picoagent::storage::RunState::Failed
     );
+}
+
+#[tokio::test]
+async fn rejected_compaction_preflight_does_not_emit_started() {
+    let workspace = TempDir::new().unwrap();
+    let provider = ScriptedCompactionProvider::new(false);
+    let (runner, store) = runner_with_compaction(
+        &workspace,
+        provider.clone(),
+        true,
+        CompactionOptions {
+            compact_at_tokens: Some(10),
+            context_window_tokens: Some(100_000),
+            keep_recent_tokens: 1,
+            // This alone exhausts the window, while the normal request keeps
+            // its independent 64-token output reservation and can continue.
+            summary_max_output_tokens: 100_000,
+            history_search_max_matches: 7,
+        },
+    );
+
+    let result = runner
+        .run(RunRequest::root("reject compaction before request"))
+        .await
+        .unwrap();
+    assert_eq!(result.final_output, "finished after compaction");
+    assert!(provider.requests().iter().all(|request| {
+        !request.messages.last().is_some_and(|message| {
+            text_content(message).contains("Compact the conversation state before this message")
+        })
+    }));
+
+    let events = load_events(&store, &result.run_id).await;
+    assert_eq!(count_events(&events, EventClass::Started), 0);
+    assert_eq!(count_events(&events, EventClass::Completed), 0);
+    assert_eq!(count_events(&events, EventClass::Failed), 1);
 }
 
 #[tokio::test]
@@ -491,11 +528,18 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
             state_message_ref,
             covered_through_message_ref,
             first_kept_message_ref,
-            ..
+            input_tokens,
+            output_tokens,
+            cached_input_tokens,
+            reasoning_tokens,
         } => Some((
             state_message_ref,
             covered_through_message_ref,
             first_kept_message_ref,
+            input_tokens,
+            output_tokens,
+            cached_input_tokens,
+            reasoning_tokens,
         )),
         _ => None,
     });
@@ -505,6 +549,10 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
             &trajectory[6].message_ref,
             &checkpoint.covered_through_message_ref,
             &checkpoint.first_kept_message_ref,
+            &Some(42),
+            &Some(9),
+            &Some(21),
+            &Some(4),
         ))
     );
 }

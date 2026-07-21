@@ -69,8 +69,10 @@ assistant `content`. `reasoning_content` is an OpenAI-compatible endpoint
 extension, not an official OpenAI Chat Completions message field. Empty deltas
 are ignored. If usage includes
 `completion_tokens_details.reasoning_tokens`, that count is written to the
-`model_completed` event. Responses usage reports the equivalent count under
-`output_tokens_details.reasoning_tokens`.
+`model_completed` or `compaction_completed` event for the corresponding
+request. Responses usage reports the equivalent count under
+`output_tokens_details.reasoning_tokens`. Both completed event types likewise
+retain provider-reported cached input token counts.
 
 Some compatible endpoints omit the required id from a streamed tool call.
 Picoagent assigns a unique `call_<ULID>` id at the provider boundary so the

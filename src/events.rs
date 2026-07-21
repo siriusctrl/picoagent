@@ -58,6 +58,8 @@ pub enum RuntimeEventKind {
         first_kept_message_ref: String,
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
+        cached_input_tokens: Option<u64>,
+        reasoning_tokens: Option<u64>,
     },
     CompactionFailed {
         state_message_ref: String,

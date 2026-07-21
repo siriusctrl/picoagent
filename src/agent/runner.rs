@@ -361,17 +361,17 @@ impl AgentRunner {
                     }
                 }
 
+                let model_permit = self
+                    .model_slots
+                    .acquire()
+                    .await
+                    .context("model concurrency limiter closed")?;
                 events
                     .emit(&RuntimeEvent::new(
                         &run_id,
                         RuntimeEventKind::ModelStarted { step },
                     ))
                     .await?;
-                let model_permit = self
-                    .model_slots
-                    .acquire()
-                    .await
-                    .context("model concurrency limiter closed")?;
                 let response = tokio::time::timeout(
                     Duration::from_secs(self.options.model_request_deadline_seconds),
                     self.provider.complete(

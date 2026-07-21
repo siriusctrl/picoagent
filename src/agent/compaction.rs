@@ -70,16 +70,6 @@ pub(crate) async fn maybe_compact(
             .seq
             .saturating_add(2),
     );
-    events
-        .emit(&RuntimeEvent::new(
-            run_id,
-            RuntimeEventKind::CompactionStarted {
-                state_message_ref: state_message_ref.clone(),
-                tokens_before,
-            },
-        ))
-        .await?;
-
     let compaction_request = Message::text(
         Role::User,
         agent_prompts().compaction_request.trim().to_owned(),
@@ -116,6 +106,15 @@ pub(crate) async fn maybe_compact(
         .acquire()
         .await
         .map_err(|_| anyhow!("model concurrency limiter closed"))?;
+    events
+        .emit(&RuntimeEvent::new(
+            run_id,
+            RuntimeEventKind::CompactionStarted {
+                state_message_ref: state_message_ref.clone(),
+                tokens_before,
+            },
+        ))
+        .await?;
     let mut accepted = None;
     for attempt_index in 1..=MAX_INVALID_COMPACTION_RESPONSES {
         let response = tokio::time::timeout(
@@ -231,6 +230,8 @@ pub(crate) async fn maybe_compact(
                 first_kept_message_ref: state.first_kept_message_ref,
                 input_tokens: response.usage.input_tokens,
                 output_tokens: response.usage.output_tokens,
+                cached_input_tokens: response.usage.cached_input_tokens,
+                reasoning_tokens: response.usage.reasoning_tokens,
             },
         ))
         .await?;
@@ -427,10 +428,50 @@ pub(crate) fn estimate_request_input_tokens(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use async_trait::async_trait;
     use chrono::Utc;
     use serde_json::json;
+    use tempfile::TempDir;
 
     use super::*;
+
+    struct FailingSummaryProvider {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModelProvider for FailingSummaryProvider {
+        fn name(&self) -> &str {
+            "failing-summary"
+        }
+
+        async fn complete(
+            &self,
+            _request: ModelRequest,
+            _events: SharedEventSink,
+        ) -> Result<crate::model::ModelResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            bail!("intentional summary failure")
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingEventSink {
+        events: Mutex<Vec<RuntimeEventKind>>,
+    }
+
+    #[async_trait]
+    impl crate::events::EventSink for RecordingEventSink {
+        async fn emit(&self, event: &RuntimeEvent) -> Result<()> {
+            self.events.lock().unwrap().push(event.kind.clone());
+            Ok(())
+        }
+    }
 
     fn record(seq: u64, role: Role, content: MessageContent) -> TrajectoryMessage {
         TrajectoryMessage {
@@ -460,6 +501,89 @@ mod tests {
                 },
             }),
         }
+    }
+
+    #[tokio::test]
+    async fn compaction_started_waits_for_the_model_slot() {
+        let trajectory = vec![
+            record(
+                1,
+                Role::User,
+                MessageContent::Text {
+                    text: "initial".into(),
+                },
+            ),
+            record(
+                2,
+                Role::Assistant,
+                MessageContent::Text {
+                    text: "old work".repeat(100),
+                },
+            ),
+            record(
+                3,
+                Role::User,
+                MessageContent::Text {
+                    text: "recent".repeat(100),
+                },
+            ),
+        ];
+        let options = CompactionOptions {
+            compact_at_tokens: Some(10),
+            context_window_tokens: None,
+            keep_recent_tokens: 1,
+            summary_max_output_tokens: 64,
+            history_search_max_matches: 7,
+        };
+        let workspace = TempDir::new().unwrap();
+        let store = RunDirStore::new(workspace.path());
+        let provider = Arc::new(FailingSummaryProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let provider_dyn: Arc<dyn ModelProvider> = provider.clone();
+        let recorder = Arc::new(RecordingEventSink::default());
+        let events: SharedEventSink = recorder.clone();
+        let model_slots = tokio::sync::Semaphore::new(1);
+        let held_permit = model_slots.acquire().await.unwrap();
+        let tools = Vec::new();
+
+        let attempt = maybe_compact(CompactionAttempt {
+            provider: &provider_dyn,
+            model: "test-model",
+            run_id: "run",
+            system: "system",
+            tools: &tools,
+            trajectory: &trajectory,
+            tokens_before: 1_000,
+            options: &options,
+            store: &store,
+            events: &events,
+            model_slots: &model_slots,
+            stream_idle_timeout_seconds: 30,
+            request_deadline_seconds: 30,
+        });
+        tokio::pin!(attempt);
+
+        tokio::select! {
+            biased;
+            _ = &mut attempt => panic!("compaction completed while its model slot was held"),
+            _ = tokio::task::yield_now() => {}
+        }
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert!(recorder.events.lock().unwrap().is_empty());
+
+        drop(held_permit);
+        assert!(attempt.await.unwrap().is_none());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        let events = recorder.events.lock().unwrap();
+        assert!(matches!(
+            events[0],
+            RuntimeEventKind::CompactionStarted { .. }
+        ));
+        assert!(matches!(
+            events[1],
+            RuntimeEventKind::CompactionFailed { .. }
+        ));
     }
 
     #[test]
