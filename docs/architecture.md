@@ -86,21 +86,22 @@ remain in `mcp.rs`.
 
 `build_app_tools` assembles process-wide local capabilities. `RunToolAssembly`
 is the single path that adds run-scoped history, task controls, and `delegate`
-for depth-eligible profiles. The `history` and `task` family modules explicitly
-register their complete member sets; assembly does not repeat each leaf
-constructor. Ordinary tools are called directly; only an unfinished direct
+for every Root and GeneralTask run. The `history` and `task` family modules
+explicitly register their complete member sets; assembly does not repeat each
+leaf constructor. Ordinary tools are called directly; only an unfinished direct
 call can enter task control through foreground promotion.
 The model-visible schema set and resume hash therefore commit the same fixed
 capability contract without a dynamic spawn allowlist.
 
-Root and delegating/leaf GeneralTask have explicit capability sets. Each normal
-profile registers `history_search` and
+Root and the persisted delegating/leaf GeneralTask profiles have one identical
+built-in capability set. Both GeneralTask profiles appear to the model as the
+common GeneralTask role. Each normal run registers `history_search` and
 `history_read` before its first call regardless of whether automatic compaction
-is configured. A GeneralTask's delegating or leaf variant is selected from its
-remaining depth before the run starts. Delegation depends on the selected
-profile; optional `web_search` and MCP tools depend on startup configuration.
-Memory paths do not add a tool schema. The selected schemas do not appear or
-disappear during one run.
+is configured, plus `delegate` and all task controls. Remaining delegation
+depth is persisted, shown in the runtime reminder, and checked by `delegate`
+before task creation; zero returns a local error. Optional `web_search` and MCP
+tools depend on startup configuration. Memory paths do not add a tool schema.
+The selected schemas do not appear or disappear during one run.
 
 The provider config declares one capability set for the selected model rather
 than maintaining a model-name registry or probing endpoints. The stable system
@@ -138,8 +139,10 @@ present. Tool-error state and opaque provider continuation items also remain
 there, as do structured result artifact refs. Compaction request/state
 classification and state boundaries also live only in the sidecar. None of these
 private fields are added to the Chat message. `run.json` identifies the format
-as `openai-chat-compatible` and records the model modality declaration. Resume
-requires the current declaration to match that run snapshot.
+as `openai-chat-compatible` and records the model modality declaration,
+persisted profile, and remaining delegation depth. Resume requires the current
+model declaration to match and restores delegation authority from that run
+snapshot rather than current depth configuration.
 
 Only complete messages are resumable. Stream deltas are emitted to live sinks
 but omitted from the persisted `events.jsonl` and are never appended as partial
@@ -341,8 +344,9 @@ sorted, frozen tool-schema set. The history schemas are included from the first
 call; automatic compaction never mutates this prefix. Project instructions,
 skill metadata, memory paths, and delegated instructions form a deterministic
 runtime reminder at the start of each run. The reminder is frozen for that run.
-Optional schemas and a GeneralTask's delegating/leaf variant are selected before
-the run starts. A compaction request changes only the message tail.
+Optional startup schemas are selected before the run starts. Agent role and
+remaining delegation depth change only the runtime-reminder tail, while a
+compaction request changes only the message tail.
 
 The durable trajectory remains append-only; before a normal model call, an
 optional assistant compacted-state message can replace its older active prefix

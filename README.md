@@ -101,9 +101,11 @@ unchanged across normal agent calls. At the start of each run, the first user
 message contains a synthetic `<runtime-reminder>` block before the original
 request. The reminder snapshots the workspace path, `AGENTS.md`, discovered
 skill metadata, memory locations, and any delegated-task instructions that
-apply to the profile. Tool schemas are sorted, and both the schemas and
-reminder are frozen for that run; configuration or file changes take effect on
-the next run. The environment section also states `current model supported
+apply to the role. It also records the role and remaining delegation depth;
+GeneralTask guidance lives here rather than in a second system prompt. Built-in
+tool schemas are identical for Root and GeneralTask, sorted, and frozen for the
+run; configuration or file changes take effect on the next run. The environment
+section also states `current model supported
 modalities: [text]` (or `[text, image]`); the stable system prompt tells the
 agent not to request an absent modality. Compaction reuses this stable
 system/tool prefix and adds one final user instruction only to the compaction
@@ -122,8 +124,9 @@ timestamp, exact-message and reconstruction-metadata hashes, internal content
 layout, tool-error state, compaction purpose and boundaries, and any opaque
 provider continuation items are stored in the paired
 `message_metadata.jsonl` sidecar. `run.json` declares
-`"message_format": "openai-chat-compatible"` and retains the original user
-prompt. The metadata line is written last and commits its corresponding
+`"message_format": "openai-chat-compatible"`, retains the original user
+prompt, and freezes the stored profile plus remaining delegation depth. The
+metadata line is written last and commits its corresponding
 message. Compaction never rewrites or deletes committed trajectory records; its
 user request and assistant compacted state are ordinary Chat-compatible message
 lines.
@@ -307,7 +310,7 @@ an artifact and can be inspected with `read`, continuing from the returned
 `line_offset` or `byte_offset`; `bash`/`rg` is also useful for targeted searches. Query-limit
 omissions are not present in that artifact.
 
-Each assembled agent profile has a sorted, frozen toolset. A profile compacts
+Each assembled agent run has a sorted, frozen toolset. A run compacts
 only when both history tools and at least one artifact inspection tool (`read`
 or `bash`) are present. The compaction request reuses the same system prompt and
 tool schemas; a tool-call response is rejected rather than executed.
@@ -352,9 +355,10 @@ The launch tool surface is intentionally small:
 - `task_stop`: cancel one background task
 - `web_search`: optional Brave-backed public web search
 
-Root and depth-eligible GeneralTask delegation capabilities are selected before
-the run starts; a leaf GeneralTask cannot delegate another child but retains
-task control for automatically backgrounded tools. Memory adds paths to
+Root and GeneralTask receive the same built-in schemas, including `delegate`
+and every task control. Remaining delegation depth is frozen in run state and
+shown in the runtime reminder. At zero, `delegate` returns a local tool error
+without creating a task; its schema does not disappear. Memory adds paths to
 the reminder, not a tool schema. `web_search` and MCP tools depend on startup
 configuration. The resulting schemas are sorted and frozen before the run's
 first normal provider call.
@@ -419,11 +423,12 @@ pico skills list
 
 ## Subagents
 
-`delegate` asynchronously starts the sole `general-task` profile; there is no
-model-facing profile choice. Before the child starts, the
-runtime fixes it as delegating or leaf from the remaining depth. With the
-default `max_subagent_depth = 1`, it is a leaf. A child is another invocation of
-the same runner, not a second agent class. Each child:
+`delegate` asynchronously starts the sole model-facing `general-task` role;
+there is no model-facing profile choice. The runtime reminder states the exact
+remaining delegation depth. With the default `max_subagent_depth = 1`, the
+first child has
+zero remaining depth; `delegate` stays visible there but fails locally. A child
+is another invocation of the same runner, not a second agent class. Each child:
 
 - invokes the same `AgentRunner` and provider
 - has a separate run id, transcript, events, and artifacts

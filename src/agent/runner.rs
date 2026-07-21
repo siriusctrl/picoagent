@@ -128,6 +128,8 @@ impl AgentRunner {
                 &self.skill_catalog,
                 self.memory.as_ref(),
                 request.additional_instructions.as_deref(),
+                request.profile,
+                plan.remaining_delegation_depth,
             )?;
             let user_message = Message {
                 role: Role::User,
@@ -161,7 +163,7 @@ impl AgentRunner {
             workspace: self.workspace.clone(),
             parent_run_id: run_id.clone(),
             parent_depth: request.depth,
-            child_can_delegate: request.depth + 1 < self.options.max_subagent_depth,
+            remaining_delegation_depth: plan.remaining_delegation_depth,
             events: events.clone(),
             max_parallel_subagents: self.options.max_parallel_subagents,
             wait_timeout_seconds: self.options.task_wait_timeout_seconds,
@@ -172,7 +174,7 @@ impl AgentRunner {
             TaskManager::new(task_config)
         };
         let task_manager = manager;
-        let registry = tool_assembly.finish(task_manager.clone(), plan.may_delegate)?;
+        let registry = tool_assembly.finish(task_manager.clone())?;
         // Freeze the model-facing schema set once per run. Tool execution keeps
         // using the registry, but every normal model request receives the exact
         // same sorted schema prefix.

@@ -15,6 +15,10 @@ static schema; profile selection changes membership only.
 ADR 0019 later groups related adapter directories. Each leaf manifest still
 declares the complete provider-visible name; paths do not derive names.
 
+ADR 0024 later removes agent depth as a built-in membership choice. Root and
+both GeneralTask profiles now expose the same complete local schemas; optional
+startup integrations can still add complete specs.
+
 ## Context
 
 ADR 0014 put every local model-facing adapter in one predictable directory,

@@ -36,6 +36,7 @@ async fn persists_run_messages_events_and_final_output() {
         .unwrap();
 
     assert_eq!(updated.state, RunState::Completed);
+    assert_eq!(updated.remaining_delegation_depth, 0);
     assert_eq!(
         updated.model_modalities,
         std::collections::BTreeSet::from([ModelModality::Text])

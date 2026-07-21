@@ -60,5 +60,8 @@ compaction_resume: >-
   history_read only when omitted details are needed.
 
 general_task: >-
-  You are a focused general-task subagent. Complete the assigned task and return
-  a concise result to the parent agent.
+  You are a focused GeneralTask child run working for a parent agent in the
+  same shared workspace. Complete only the assigned scope, preserve unrelated
+  work, verify relevant results, and return a concise outcome with evidence,
+  changed paths, and unresolved blockers. Treat parent context as background
+  and the delegated task as the immediate objective.

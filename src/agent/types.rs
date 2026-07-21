@@ -80,6 +80,9 @@ pub struct RunRequest {
     pub(crate) depth: usize,
     pub(crate) additional_instructions: Option<String>,
     pub(crate) profile: RunProfile,
+    /// Frozen for durable runs. `None` is used only by a new root request,
+    /// whose initial value comes from `RunnerOptions` before the run is stored.
+    pub(crate) remaining_delegation_depth: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +100,7 @@ impl RunRequest {
             depth: 0,
             additional_instructions: None,
             profile: RunProfile::Root,
+            remaining_delegation_depth: None,
         }
     }
 
@@ -105,18 +109,19 @@ impl RunRequest {
         parent_run_id: String,
         depth: usize,
         additional_instructions: String,
-        can_delegate: bool,
+        remaining_delegation_depth: usize,
     ) -> Self {
         Self {
             prompt: prompt.into(),
             parent_run_id: Some(parent_run_id),
             depth,
             additional_instructions: Some(additional_instructions),
-            profile: if can_delegate {
+            profile: if remaining_delegation_depth > 0 {
                 RunProfile::GeneralTaskDelegating
             } else {
                 RunProfile::GeneralTaskLeaf
             },
+            remaining_delegation_depth: Some(remaining_delegation_depth),
         }
     }
 
@@ -126,6 +131,7 @@ impl RunRequest {
         depth: usize,
         additional_instructions: Option<String>,
         profile: &str,
+        remaining_delegation_depth: usize,
     ) -> anyhow::Result<Self> {
         let profile = match profile {
             "root" => RunProfile::Root,
@@ -133,12 +139,24 @@ impl RunRequest {
             "general_task_leaf" => RunProfile::GeneralTaskLeaf,
             value => anyhow::bail!("unknown stored run profile `{value}`"),
         };
+        match profile {
+            RunProfile::Root => {}
+            RunProfile::GeneralTaskDelegating => anyhow::ensure!(
+                remaining_delegation_depth > 0,
+                "stored delegating GeneralTask has no remaining delegation depth"
+            ),
+            RunProfile::GeneralTaskLeaf => anyhow::ensure!(
+                remaining_delegation_depth == 0,
+                "stored leaf GeneralTask has remaining delegation depth {remaining_delegation_depth}"
+            ),
+        }
         Ok(Self {
             prompt,
             parent_run_id,
             depth,
             additional_instructions,
             profile,
+            remaining_delegation_depth: Some(remaining_delegation_depth),
         })
     }
 }
@@ -149,6 +167,13 @@ impl RunProfile {
             Self::Root => "root",
             Self::GeneralTaskDelegating => "general_task_delegating",
             Self::GeneralTaskLeaf => "general_task_leaf",
+        }
+    }
+
+    pub(crate) fn runtime_role(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::GeneralTaskDelegating | Self::GeneralTaskLeaf => "general_task",
         }
     }
 }

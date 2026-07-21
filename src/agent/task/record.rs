@@ -7,7 +7,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::artifact::ResultMetadata;
 
-const TASK_RECORD_VERSION: u32 = 6;
+const TASK_RECORD_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -52,7 +52,7 @@ pub struct BackgroundTaskRecord {
     pub child_run_id: Option<String>,
     /// Capability fixed before an agent child starts. Recovery must not derive
     /// it again from the current runtime depth configuration.
-    pub child_can_delegate: Option<bool>,
+    pub child_remaining_delegation_depth: Option<usize>,
     /// Needed only when an agent task was durably queued but its child run was
     /// not created before the process stopped.
     pub prompt: Option<String>,
@@ -78,7 +78,7 @@ impl BackgroundTaskRecord {
             result: None,
             error: None,
             child_run_id: None,
-            child_can_delegate: None,
+            child_remaining_delegation_depth: None,
             prompt: None,
             created_at: Utc::now(),
         }
@@ -89,7 +89,7 @@ impl BackgroundTaskRecord {
         name: String,
         child_run_id: String,
         prompt: String,
-        child_can_delegate: bool,
+        child_remaining_delegation_depth: usize,
     ) -> Self {
         Self {
             version: TASK_RECORD_VERSION,
@@ -101,7 +101,7 @@ impl BackgroundTaskRecord {
             result: None,
             error: None,
             child_run_id: Some(child_run_id),
-            child_can_delegate: Some(child_can_delegate),
+            child_remaining_delegation_depth: Some(child_remaining_delegation_depth),
             prompt: Some(prompt),
             created_at: Utc::now(),
         }
@@ -179,7 +179,7 @@ impl BackgroundTaskRecord {
                 );
                 ensure!(
                     self.child_run_id.is_none()
-                        && self.child_can_delegate.is_none()
+                        && self.child_remaining_delegation_depth.is_none()
                         && self.prompt.is_none(),
                     "tool task {} cannot reference child state",
                     self.id
@@ -193,7 +193,7 @@ impl BackgroundTaskRecord {
                 );
                 ensure!(
                     self.child_run_id.is_some()
-                        && self.child_can_delegate.is_some()
+                        && self.child_remaining_delegation_depth.is_some()
                         && self.prompt.is_some(),
                     "agent task {} must reference a child run, capability, and prompt",
                     self.id
@@ -313,7 +313,7 @@ mod tests {
             "general-task".to_owned(),
             "child-1".to_owned(),
             "inspect the workspace".to_owned(),
-            false,
+            0,
         );
         record.state = BackgroundTaskState::Completed;
         record.result = Some(BackgroundTaskOutput {
@@ -401,7 +401,7 @@ mod tests {
             "general-task".to_owned(),
             "child-1".to_owned(),
             "inspect".to_owned(),
-            false,
+            0,
         );
         agent.origin_call_id = Some("provider-call-8".to_owned());
         assert!(

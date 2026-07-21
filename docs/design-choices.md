@@ -194,11 +194,12 @@ instructions are snapshotted into a synthetic runtime reminder at the start of
 each run. Tool
 descriptions remain in sorted tool schemas rather than being duplicated in the
 system prompt. Core history schemas are present from the first normal call.
-Root and delegating/leaf GeneralTask each freeze their assembled registry for
-the run; compaction reuses the same system and schemas. Optional
-capabilities and a GeneralTask's depth variant are resolved before its run
-starts rather than changing its schema set mid-run. Memory paths do not alter
-the tool schema.
+Root and GeneralTask use the same built-in schema set and freeze it for the run;
+compaction reuses the same system and schemas. Remaining delegation depth is
+persisted runtime state and never changes schema membership. Optional startup
+capabilities are resolved before the run starts. Memory paths do not alter the
+tool schema. See
+[ADR 0024](adr/0024-freeze-built-in-schemas-across-agent-roles.md).
 
 The system prompt contains one stable rule for model modalities, while the
 runtime reminder snapshots the configured values. The provider config defaults

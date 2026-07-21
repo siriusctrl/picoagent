@@ -133,10 +133,10 @@ impl TaskManager {
             child.depth,
             self.parent_depth.saturating_add(1)
         );
-        let expected_profile = if task
-            .child_can_delegate
-            .context("agent task is missing child capability")?
-        {
+        let child_remaining_delegation_depth = task
+            .child_remaining_delegation_depth
+            .context("agent task is missing child delegation depth")?;
+        let expected_profile = if child_remaining_delegation_depth > 0 {
             "general_task_delegating"
         } else {
             "general_task_leaf"
@@ -145,6 +145,12 @@ impl TaskManager {
             child.profile == expected_profile,
             "child run `{child_run_id}` has profile `{}`, expected `{expected_profile}`",
             child.profile
+        );
+        anyhow::ensure!(
+            child.remaining_delegation_depth == child_remaining_delegation_depth,
+            "child run `{child_run_id}` has remaining delegation depth {}, expected {}",
+            child.remaining_delegation_depth,
+            child_remaining_delegation_depth
         );
         anyhow::ensure!(
             child.prompt == prompt,

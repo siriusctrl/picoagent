@@ -24,7 +24,7 @@ pub(super) struct RunPlan {
     pub(super) model: String,
     pub(super) modalities: BTreeSet<ModelModality>,
     pub(super) max_output_tokens: Option<u32>,
-    pub(super) may_delegate: bool,
+    pub(super) remaining_delegation_depth: usize,
 }
 
 impl AgentRunner {
@@ -50,6 +50,7 @@ impl AgentRunner {
             request.profile.as_str(),
             request.depth,
             request.additional_instructions.clone(),
+            plan.remaining_delegation_depth,
         )
         .with_model_modalities(plan.modalities.clone())
         .with_provider_resume_fingerprint(self.provider.resume_fingerprint());
@@ -106,16 +107,14 @@ impl AgentRunner {
                 self.options.general_task.max_output_tokens,
             ),
         };
-        let may_delegate = match request.profile {
-            RunProfile::Root => request.depth < self.options.max_subagent_depth,
-            RunProfile::GeneralTaskDelegating => true,
-            RunProfile::GeneralTaskLeaf => false,
-        };
+        let remaining_delegation_depth = request
+            .remaining_delegation_depth
+            .unwrap_or(self.options.max_subagent_depth);
         RunPlan {
             model,
             modalities: self.options.model_modalities.clone(),
             max_output_tokens,
-            may_delegate,
+            remaining_delegation_depth,
         }
     }
 

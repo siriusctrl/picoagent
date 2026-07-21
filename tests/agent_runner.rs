@@ -332,7 +332,7 @@ async fn resume_reconstructs_a_missing_promotion_ack_from_its_terminal_task() {
     tokio::fs::write(
         tasks.join("t1.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 6,
+            "version": 7,
             "id": "t1",
             "kind": "tool",
             "name": "side_effect",
@@ -344,7 +344,7 @@ async fn resume_reconstructs_a_missing_promotion_ack_from_its_terminal_task() {
             },
             "error": null,
             "child_run_id": null,
-            "child_can_delegate": null,
+            "child_remaining_delegation_depth": null,
             "prompt": null,
             "created_at": chrono::Utc::now()
         }))
@@ -461,7 +461,7 @@ async fn resume_schema_mismatch_does_not_reconcile_background_tasks() {
         workspace: workspace.path().to_owned(),
         parent_run_id: "resume-schema-preflight".to_owned(),
         parent_depth: 0,
-        child_can_delegate: false,
+        remaining_delegation_depth: 1,
         events: Arc::new(NoopEventSink),
         max_parallel_subagents: 1,
         wait_timeout_seconds: 1,
@@ -553,7 +553,7 @@ async fn public_resume_rejects_a_child_run_in_favor_of_parent_recovery() {
                 workspace.path().to_path_buf(),
                 Some("parent".to_owned()),
             )
-            .with_execution_context("general_task_leaf", 1, None)
+            .with_execution_context("general_task_leaf", 1, None, 0)
             .with_provider_resume_fingerprint(
                 ResumeProvider {
                     calls: Arc::new(AtomicUsize::new(0)),

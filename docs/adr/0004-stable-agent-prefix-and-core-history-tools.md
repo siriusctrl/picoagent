@@ -19,6 +19,11 @@ ADR 0023 adds one stable rule for interpreting model modalities while keeping
 the concrete configured set in the initial runtime reminder. The stable-prefix
 decision remains accepted.
 
+ADR 0024 refines profile membership: Root and both GeneralTask profiles remain
+explicit durable identities but expose one identical built-in schema set.
+Remaining delegation depth moves to persisted runtime state and the initial
+reminder.
+
 ## Context
 
 ADR 0003 established append-only local compaction and exact history retrieval.

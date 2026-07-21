@@ -18,6 +18,9 @@ ADR 0023 adds the configured model modality set to run identity and advances
 the pre-release run record to version 6. Complete-message resume remains
 accepted.
 
+ADR 0024 advances the pre-release run and task record formats to version 7 so
+exact remaining delegation depth survives recovery.
+
 ADR 0020 later refines model-facing task delivery into unified runtime notices
 whose terminal bodies contain only complete artifact paths. The durable
 parent/child coordination and transcript-derived delivery decision here remain

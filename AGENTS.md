@@ -89,10 +89,12 @@ navigation, invariants, verification, and handoff.
 - Register `history_search` and `history_read` before the first normal provider
   call regardless of `compaction.compact_at_tokens`. That setting controls
   compacted-state creation only; sorted tool schemas stay frozen per run.
-- Keep Root and delegating/leaf GeneralTask as explicit capability profiles,
-  and use the run's existing profile for compaction. Select the GeneralTask
-  variant from remaining depth before its run starts; do not add or remove
-  schemas during a run.
+- Keep Root and delegating/leaf GeneralTask as explicit persisted capability
+  profiles, but expose one identical frozen built-in tool-schema set to all of
+  them, including `delegate` and all task controls. Persist remaining
+  delegation depth as run state, show it in the runtime reminder, and make
+  `delegate` fail locally at zero rather than removing its schema. Compaction
+  reuses the same system prompt and schemas.
 - Keep stable agent prose in the typed compile-time prompt registry and every
   local tool's static name, purpose description, return guidance, and input
   schema in its typed compile-time `tool.yaml`. Compose the two prose fields

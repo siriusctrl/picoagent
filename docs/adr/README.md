@@ -85,3 +85,5 @@ Use these sections:
 - [ADR 0022: Send native image attachments after ordered tool
   results](0022-native-image-attachments-after-tool-results.md)
 - [ADR 0023: Declare model input modalities](0023-declare-model-input-modalities.md)
+- [ADR 0024: Freeze built-in schemas across agent
+  roles](0024-freeze-built-in-schemas-across-agent-roles.md)

@@ -33,7 +33,7 @@ pub struct TaskManager {
     workspace: PathBuf,
     parent_run_id: String,
     parent_depth: usize,
-    child_can_delegate: bool,
+    remaining_delegation_depth: usize,
     events: SharedEventSink,
     records: Mutex<BTreeMap<String, BackgroundTaskRecord>>,
     delivered: Mutex<BTreeSet<String>>,
@@ -51,7 +51,7 @@ pub struct TaskManagerConfig {
     pub workspace: PathBuf,
     pub parent_run_id: String,
     pub parent_depth: usize,
-    pub child_can_delegate: bool,
+    pub remaining_delegation_depth: usize,
     pub events: SharedEventSink,
     pub max_parallel_subagents: usize,
     pub wait_timeout_seconds: u64,
@@ -82,7 +82,7 @@ impl TaskManager {
             workspace: config.workspace,
             parent_run_id: config.parent_run_id,
             parent_depth: config.parent_depth,
-            child_can_delegate: config.child_can_delegate,
+            remaining_delegation_depth: config.remaining_delegation_depth,
             events: config.events,
             records: Mutex::new(records),
             delivered: Mutex::new(delivered),
@@ -120,7 +120,7 @@ impl TaskManager {
             name,
             child_run_id,
             prompt,
-            self.child_can_delegate,
+            self.remaining_delegation_depth.saturating_sub(1),
         );
         self.persist(&record).await?;
         records.insert(task_id.clone(), record);

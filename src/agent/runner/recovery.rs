@@ -80,6 +80,7 @@ impl AgentRunner {
             record.depth,
             record.additional_instructions,
             &record.profile,
+            record.remaining_delegation_depth,
         )?;
         let plan = self.plan(&request);
         ensure!(

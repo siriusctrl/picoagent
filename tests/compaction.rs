@@ -386,6 +386,7 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
             .collect();
         assert!(names.contains(&"history_search"));
         assert!(names.contains(&"history_read"));
+        assert!(names.contains(&"delegate"));
         assert!(names.contains(&"marker"));
     }
     let stable_system = &normal_requests[0].system;

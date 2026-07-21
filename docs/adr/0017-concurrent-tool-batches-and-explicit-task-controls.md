@@ -15,6 +15,11 @@ ADR 0022 later specifies that native image inputs follow the complete ordered
 tool-result batch in one user message. The concurrency and correlation decisions
 here remain accepted.
 
+ADR 0024 later makes `delegate` present in every Root and GeneralTask schema.
+Remaining depth is persisted runtime state, and a depth-zero call fails locally
+before task creation. The task-control and asynchronous execution decisions
+here remain accepted.
+
 ## Context
 
 The runner executed tool calls from one assistant message sequentially. This

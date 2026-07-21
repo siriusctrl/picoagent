@@ -46,11 +46,9 @@ impl RunToolAssembly {
         self.registry.contains(name)
     }
 
-    pub fn finish(mut self, manager: Arc<TaskManager>, may_delegate: bool) -> Result<ToolRegistry> {
-        if may_delegate {
-            self.registry
-                .register(Arc::new(DelegateTool::new(manager.clone())))?;
-        }
+    pub fn finish(mut self, manager: Arc<TaskManager>) -> Result<ToolRegistry> {
+        self.registry
+            .register(Arc::new(DelegateTool::new(manager.clone())))?;
         task::register_controls(&mut self.registry, manager)?;
         Ok(self.registry)
     }

@@ -172,13 +172,15 @@ A fixed profile without both history tools and at least one of `read` or `bash`
 would keep its full context instead of compacting without an exact-recovery
 path.
 
-Root and a delegating or leaf GeneralTask each assemble a sorted tool registry
-and freeze it before their first provider call. A GeneralTask's variant is
-selected from the remaining delegation depth before its run starts. Compaction
-reuses that profile but never executes a returned tool call. Delegation depends
-on the selected depth variant; optional `web_search` and MCP schemas depend on
-startup configuration. Memory uses the ordinary file tools and adds no schema.
-None changes during the run.
+Root and GeneralTask each assemble the same sorted built-in registry and freeze
+it before their first provider call. `delegate` and all task controls remain in
+that registry at every depth. Delegating and leaf remain separate persisted
+profiles for recovery, but do not change schema membership. The exact remaining
+delegation depth is frozen in run metadata and shown in the runtime reminder;
+`delegate` returns a local error at zero. Compaction reuses the same schemas but
+never executes a returned tool call. Optional `web_search` and MCP schemas
+depend on startup configuration. Memory uses the ordinary file tools and adds
+no schema. None changes during the run.
 
 `history_search_max_matches` is a positive, per-query cap for newest-first
 regex matches over messages removed from the active context. It is not an

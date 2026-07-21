@@ -8,10 +8,11 @@ prompts directly.
 
 Runtime assembly, precedence, dynamic values, argument validation, and
 execution contracts remain in Rust. Project `AGENTS.md`, model modalities,
-skill metadata, memory paths, and delegated instructions are dynamic inputs and
-are not copied into this registry. The stable system prompt defines how to
-interpret the current-model modality line; the initial runtime reminder carries
-its frozen value.
+runtime role, remaining delegation depth, skill metadata, memory paths, and
+delegated instructions are dynamic inputs and are not copied into this
+registry. The stable system prompt defines universal cross-tool behavior. The
+initial runtime reminder carries concrete capabilities and concise GeneralTask
+role guidance.
 
 Every local model-facing tool adapter keeps a typed `tool.yaml` beside its Rust
 module. Standalone adapters live at `src/tools/<tool>/`; cohesive task and
@@ -37,14 +38,13 @@ being copied into every manifest. This authoring split does not add a private
 provider field or claim a formal output schema.
 
 Tool descriptions are sent through the provider's sorted tool-schema field.
-Core history schemas are present from the first normal call regardless of the
-automatic compaction trigger. A frozen registry may include delegation, web, or
-MCP capabilities selected during the single run-assembly path. Memory uses
-ordinary file tools and therefore adds no schema. GeneralTask is assigned a
-delegating or leaf variant from its remaining depth before it starts; every
-assembled profile is then frozen for the run. Compaction reuses that system/tool
-prefix and adds the `compaction_request` prompt as the final user message.
+Core history, delegation, and task-control schemas are present in every Root
+and GeneralTask run. Optional web or MCP capabilities are selected during the
+single run-assembly path. Memory uses ordinary file tools and therefore adds no
+schema. Remaining delegation depth is runtime state, not schema membership.
+Compaction reuses that system/tool prefix and adds the `compaction_request`
+prompt as the final user message.
 Normal context after a successful checkpoint adds `compaction_resume` inside a
 synthetic user runtime reminder immediately after the exact assistant state.
-Every local manifest is static; runtime profile selection changes which
-complete tool specs are present, not their schemas.
+Every local manifest is static. Startup integrations may add complete external
+or optional specs, but agent depth never changes built-in membership.

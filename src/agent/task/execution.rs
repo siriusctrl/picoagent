@@ -152,6 +152,10 @@ impl TaskManager {
         name: String,
         prompt: String,
     ) -> Result<BackgroundTaskRecord> {
+        ensure!(
+            self.remaining_delegation_depth > 0,
+            "delegate is unavailable because remaining delegation depth is 0"
+        );
         let name = name.trim().to_owned();
         if name.is_empty() {
             bail!("agent task name must not be empty");
@@ -174,7 +178,7 @@ impl TaskManager {
             name,
             child_run_id,
             prompt,
-            self.child_can_delegate,
+            self.remaining_delegation_depth.saturating_sub(1),
         );
         self.track(task_id.clone(), handle);
         self.get(&task_id).await
@@ -211,8 +215,8 @@ impl TaskManager {
             task.child_run_id,
             task.prompt,
             record
-                .child_can_delegate
-                .context("agent task is missing child capability")?,
+                .child_remaining_delegation_depth
+                .context("agent task is missing child delegation depth")?,
         );
         self.track(task.task_id, handle);
         Ok(())
@@ -224,7 +228,7 @@ impl TaskManager {
         task_name: String,
         child_run_id: String,
         prompt: String,
-        child_can_delegate: bool,
+        child_remaining_delegation_depth: usize,
     ) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
@@ -266,7 +270,7 @@ impl TaskManager {
                 manager.parent_run_id.clone(),
                 manager.parent_depth + 1,
                 agent_prompts().general_task.clone(),
-                child_can_delegate,
+                child_remaining_delegation_depth,
             );
             let child_exists =
                 match tokio::fs::try_exists(manager.store.paths(&child_run_id).metadata).await {

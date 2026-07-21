@@ -21,7 +21,7 @@ mod message_log;
 mod trajectory;
 
 pub const MESSAGE_FORMAT: &str = "openai-chat-compatible";
-const RUN_RECORD_VERSION: u32 = 6;
+const RUN_RECORD_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +43,9 @@ pub struct RunRecord {
     /// Stable agent capability profile used to rebuild the same run on resume.
     pub profile: String,
     pub depth: usize,
+    /// Delegation capacity frozen when this run is created. The delegate
+    /// schema remains present at zero; execution then returns a local error.
+    pub remaining_delegation_depth: usize,
     pub additional_instructions: Option<String>,
     pub tool_schema_sha256: String,
     pub provider: String,
@@ -74,6 +77,7 @@ impl RunRecord {
             prompt: prompt.into(),
             profile: "root".to_owned(),
             depth: 0,
+            remaining_delegation_depth: 0,
             additional_instructions: None,
             tool_schema_sha256: String::new(),
             provider: provider.into(),
@@ -92,10 +96,12 @@ impl RunRecord {
         profile: impl Into<String>,
         depth: usize,
         additional_instructions: Option<String>,
+        remaining_delegation_depth: usize,
     ) -> Self {
         self.profile = profile.into();
         self.depth = depth;
         self.additional_instructions = additional_instructions;
+        self.remaining_delegation_depth = remaining_delegation_depth;
         self
     }
 

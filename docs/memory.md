@@ -27,7 +27,8 @@ model to inspect existing memory, keep user and project scopes distinct, and
 record curated durable knowledge rather than dumping a transcript.
 
 For a small focused change, the current agent edits the Markdown directly. For
-a large independent consolidation, a depth-eligible agent can use `delegate`,
+a large independent consolidation, an agent with remaining delegation depth
+can use `delegate`,
 continue other useful work, then use `task_wait` or accept the completed
 background result before verifying the files. This is the same durable
 GeneralTask mechanism used for any other

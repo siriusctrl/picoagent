@@ -119,6 +119,7 @@ impl ModelProvider for ProfileContractProvider {
         let already_delegated = request.messages.iter().any(|message| {
             has_tool_result(message, "delegate-delegating")
                 || has_tool_result(message, "delegate-leaf")
+                || has_tool_result(message, "delegate-depth-zero")
         });
         self.requests.lock().unwrap().push(request);
 
@@ -130,6 +131,10 @@ impl ModelProvider for ProfileContractProvider {
             "delegating profile contract" if !already_delegated => {
                 Ok(delegate_response("delegate-leaf", "leaf profile contract"))
             }
+            "leaf profile contract" if !already_delegated => Ok(delegate_response(
+                "delegate-depth-zero",
+                "must not start beyond the depth limit",
+            )),
             "root profile contract" | "delegating profile contract" | "leaf profile contract" => {
                 Ok(final_response(&format!("finished {prompt}")))
             }
@@ -175,6 +180,11 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
 
     let requests = provider.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| tool_names(request).contains(&"delegate"))
+    );
     assert_eq!(
         serialized(&requests[0].system),
         serialized(&requests[1].system)
@@ -268,10 +278,13 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
     };
     let runner = runner(workspace.path(), provider.clone(), Some(memory), options);
 
-    runner
+    let root_result = runner
         .run(RunRequest::root("root profile contract"))
         .await
         .unwrap();
+    let root_record = runner.store().load_run(&root_result.run_id).await.unwrap();
+    assert_eq!(root_record.profile, "root");
+    assert_eq!(root_record.remaining_delegation_depth, 2);
     let requests = provider.requests.lock().unwrap();
     let root = requests_for_prompt(&requests, "root profile contract");
     let delegating = requests_for_prompt(&requests, "delegating profile contract");
@@ -318,6 +331,7 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
         &leaf,
         &[
             "bash",
+            "delegate",
             "history_read",
             "history_search",
             "marker",
@@ -331,14 +345,39 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
         ],
     );
     assert_eq!(serialized(&root[0].tools), serialized(&delegating[0].tools));
+    assert_eq!(serialized(&root[0].tools), serialized(&leaf[0].tools));
+    assert_eq!(
+        serialized(&root[0].system),
+        serialized(&delegating[0].system)
+    );
+    assert_eq!(serialized(&root[0].system), serialized(&leaf[0].system));
     let root_reminder = text_content(&root[0].messages[0]);
     let delegating_reminder = text_content(&delegating[0].messages[0]);
     let leaf_reminder = text_content(&leaf[0].messages[0]);
-    for reminder in [root_reminder, delegating_reminder, leaf_reminder] {
+    for reminder in [&root_reminder, &delegating_reminder, &leaf_reminder] {
         assert!(reminder.contains("<memory>\nuser:"));
         assert!(reminder.contains("project:"));
         assert!(!reminder.contains("memory_update"));
     }
+    assert!(root_reminder.contains("profile: root\nremaining delegation depth: 2"));
+    assert!(delegating_reminder.contains("profile: general_task\nremaining delegation depth: 1"));
+    assert!(leaf_reminder.contains("profile: general_task\nremaining delegation depth: 0"));
+    assert!(leaf.iter().any(|request| {
+        request.messages.iter().any(|message| {
+            message.content.iter().any(|content| {
+                matches!(
+                    content,
+                    MessageContent::ToolResult {
+                        call_id,
+                        content,
+                        is_error: true,
+                        ..
+                    } if call_id == "delegate-depth-zero"
+                        && content.contains("remaining delegation depth is 0")
+                )
+            })
+        })
+    }));
 }
 
 #[tokio::test]
@@ -371,6 +410,15 @@ async fn history_search_without_a_checkpoint_returns_an_empty_result() {
     assert!(trajectory.iter().all(|record| record.compaction.is_none()));
     let requests = provider.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| tool_names(request).contains(&"delegate"))
+    );
+    assert!(
+        text_content(&requests[0].messages[0])
+            .contains("profile: root\nremaining delegation depth: 0")
+    );
     assert_eq!(
         serialized(&requests[0].system),
         serialized(&requests[1].system)

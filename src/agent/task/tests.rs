@@ -43,7 +43,7 @@ async fn create_child_run(
                 store.workspace().to_path_buf(),
                 Some(parent.to_owned()),
             )
-            .with_execution_context("general_task_leaf", 1, None)
+            .with_execution_context("general_task_leaf", 1, None, 0)
             .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
         )
         .await
@@ -77,7 +77,7 @@ fn config(
         workspace: workspace.to_path_buf(),
         parent_run_id: parent_run_id.to_owned(),
         parent_depth: 0,
-        child_can_delegate: false,
+        remaining_delegation_depth: 0,
         events: Arc::new(NoopEventSink),
         max_parallel_subagents: 2,
         wait_timeout_seconds: 30,
@@ -99,6 +99,31 @@ async fn task_ids_are_short_and_sequential_within_the_parent_run() {
     ids.sort();
 
     assert_eq!(ids, ["t1", "t2"]);
+}
+
+#[tokio::test]
+async fn delegate_at_zero_remaining_depth_fails_without_creating_a_task() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
+
+    let error = manager
+        .delegate("too-deep".to_owned(), "must not start".to_owned())
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("remaining delegation depth is 0")
+    );
+    assert!(manager.status(&[]).await.unwrap().is_empty());
+    assert!(
+        !tokio::fs::try_exists(store.paths("parent").directory.join("tasks"))
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -264,7 +289,7 @@ async fn restore_reconciles_tools_and_completed_children() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
-        false,
+        0,
     );
     agent.state = BackgroundTaskState::Running;
     task_store.write(&agent).await.unwrap();
@@ -308,7 +333,7 @@ async fn restore_prefers_a_durable_completed_child_regardless_of_task_age() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
-        false,
+        0,
     );
     agent.state = BackgroundTaskState::Running;
     agent.created_at = chrono::Utc::now() - chrono::Duration::minutes(10);
@@ -342,7 +367,7 @@ async fn restore_and_repeated_stop_repair_a_cancelled_tasks_live_child() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
-        false,
+        0,
     );
     task.state = BackgroundTaskState::Cancelled;
     task_store.write(&task).await.unwrap();
@@ -383,7 +408,7 @@ async fn restore_validates_a_live_child_against_its_stored_capability() {
                 store.workspace().to_path_buf(),
                 Some("parent".to_owned()),
             )
-            .with_execution_context("general_task_delegating", 1, None)
+            .with_execution_context("general_task_delegating", 1, None, 1)
             .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
         )
         .await
@@ -398,7 +423,7 @@ async fn restore_validates_a_live_child_against_its_stored_capability() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
-        true,
+        1,
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
@@ -410,8 +435,12 @@ async fn restore_validates_a_live_child_against_its_stored_capability() {
         .unwrap();
     assert_eq!(recoverable.len(), 1);
     assert_eq!(
-        manager.get("agent-task").await.unwrap().child_can_delegate,
-        Some(true)
+        manager
+            .get("agent-task")
+            .await
+            .unwrap()
+            .child_remaining_delegation_depth,
+        Some(1)
     );
 }
 
@@ -430,7 +459,12 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
                 store.workspace().to_path_buf(),
                 Some("parent".to_owned()),
             )
-            .with_execution_context("general_task_leaf", 1, Some("resume the child".to_owned()))
+            .with_execution_context(
+                "general_task_leaf",
+                1,
+                Some("resume the child".to_owned()),
+                0,
+            )
             .with_provider_resume_fingerprint(EchoProvider.resume_fingerprint()),
         )
         .await
@@ -449,7 +483,7 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
         "general-task".to_owned(),
         "child".to_owned(),
         "resume me".to_owned(),
-        false,
+        0,
     );
     agent.state = BackgroundTaskState::Running;
     task_store.write(&agent).await.unwrap();
@@ -537,7 +571,7 @@ async fn resume_agent_task_creates_a_missing_child_run() {
         "general-task".to_owned(),
         "missing-child".to_owned(),
         "start after recovery".to_owned(),
-        true,
+        1,
     );
     task_store.write(&task).await.unwrap();
 
@@ -578,7 +612,7 @@ async fn recovered_child_retries_a_busy_lease_and_reconciles_completion() {
         "general-task".to_owned(),
         "child".to_owned(),
         "resume me".to_owned(),
-        false,
+        0,
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
@@ -637,7 +671,7 @@ async fn recovery_rejects_a_child_owned_by_another_parent() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
-        false,
+        0,
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
@@ -672,7 +706,7 @@ async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
-        false,
+        0,
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
@@ -948,7 +982,7 @@ async fn committed_steering_succeeds_when_its_observation_event_fails() {
         "general-task".to_owned(),
         "child".to_owned(),
         "do work".to_owned(),
-        false,
+        0,
     );
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();

@@ -132,9 +132,11 @@ loading the file, creating an artifact, or attaching content.
 
 `delegate` starts a general-task child asynchronously. Each child creates a
 normal run with a parent id. Children share the workspace, provider, and base
-tools. The default maximum depth of one keeps the initial execution model
-predictable. `task_wait` is a bounded join; a wait timeout does not cancel the
-task. `task_stop` is the explicit cancellation operation.
+tools. The persisted delegating/leaf profile and exact remaining delegation
+depth protect resume semantics; both profiles expose the same built-in schemas.
+The default maximum depth of one gives the initial child zero remaining depth.
+`task_wait` is a bounded join; a wait timeout does not cancel the task.
+`task_stop` is the explicit cancellation operation.
 
 `task_inspect` returns a child's latest durable Chat-compatible messages and
 can page backward by sequence. `task_steer` queues a normal user message after
@@ -189,10 +191,11 @@ The normal agent's built-in system prompt is workspace-independent, loaded from
 the embedded typed YAML registry, and invariant across its calls. Sorted tool
 schemas form the other stable request prefix and are frozen before the first
 call. Core history schemas are included regardless of `compact_at_tokens`. Root
-and a depth-eligible GeneralTask may include delegation schemas; each
-GeneralTask is assigned a delegating or leaf variant before it starts. Optional
-web and MCP schemas depend on startup configuration. Memory adds reminder paths,
-not a schema. A compaction call reuses the same stable prefix.
+and GeneralTask receive identical built-in schemas, including delegation and
+task controls. Remaining delegation depth is runtime state; it appears in the
+initial reminder and a zero-depth `delegate` call fails before task creation.
+Optional web and MCP schemas depend on startup configuration. Memory adds
+reminder paths, not a schema. A compaction call reuses the same stable prefix.
 
 The first user message begins with a `<runtime-reminder>` text block containing
 the workspace snapshot: path, `AGENTS.md`, sorted skill metadata, memory paths,
