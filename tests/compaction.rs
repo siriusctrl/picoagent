@@ -205,7 +205,7 @@ fn runner_with_compaction(
     let mut tools = ToolRegistry::default();
     tools.register(Arc::new(MarkerTool)).unwrap();
     if exact_recovery_available {
-        tools.register(Arc::new(ReadTool)).unwrap();
+        tools.register(Arc::new(ReadTool::default())).unwrap();
     }
     let options = RunnerOptions {
         max_output_tokens: Some(64),

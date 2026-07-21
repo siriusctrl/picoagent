@@ -1,6 +1,6 @@
 use picoagent::{
     events::{EventSink, RuntimeEvent, RuntimeEventKind},
-    model::{Message, Role},
+    model::{Message, ModelModality, Role},
     storage::{RunDirStore, RunRecord, RunState},
 };
 use tempfile::tempdir;
@@ -36,6 +36,10 @@ async fn persists_run_messages_events_and_final_output() {
         .unwrap();
 
     assert_eq!(updated.state, RunState::Completed);
+    assert_eq!(
+        updated.model_modalities,
+        std::collections::BTreeSet::from([ModelModality::Text])
+    );
     assert_eq!(
         updated.provider_resume_fingerprint,
         "sha256:test-provider-fingerprint"

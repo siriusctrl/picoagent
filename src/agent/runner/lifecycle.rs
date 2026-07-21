@@ -1,9 +1,10 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use anyhow::Result;
 use serde_json::json;
 use ulid::Ulid;
 
+use crate::model::ModelModality;
 use crate::{
     events::{CompositeEventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::HookEvent,
@@ -21,6 +22,7 @@ pub(super) enum RunMode {
 
 pub(super) struct RunPlan {
     pub(super) model: String,
+    pub(super) modalities: BTreeSet<ModelModality>,
     pub(super) max_output_tokens: Option<u32>,
     pub(super) may_delegate: bool,
 }
@@ -49,6 +51,7 @@ impl AgentRunner {
             request.depth,
             request.additional_instructions.clone(),
         )
+        .with_model_modalities(plan.modalities.clone())
         .with_provider_resume_fingerprint(self.provider.resume_fingerprint());
         self.store.create_run(&record).await?;
 
@@ -110,6 +113,7 @@ impl AgentRunner {
         };
         RunPlan {
             model,
+            modalities: self.options.model_modalities.clone(),
             max_output_tokens,
             may_delegate,
         }

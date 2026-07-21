@@ -10,7 +10,8 @@ One per-run execution lease prevents two processes from advancing the same
 trajectory concurrently. Resume also requires the same non-secret provider
 fingerprint: endpoint and wire protocol, plus provider-specific continuation
 settings such as reasoning effort or Anthropic version. Credentials are never
-part of that fingerprint.
+part of that fingerprint. The run separately records its configured model
+modalities and rejects resume when they change.
 
 ## Durable Messages
 
@@ -123,6 +124,9 @@ The runtime places attachments after every paired result from the assistant's
 tool-call batch. Text reads return at most 400 lines under a 65,536-byte cap;
 if a multi-line selection hits that cap, the partial trailing line is omitted
 and the truncation marker gives the exact next offset.
+The initial runtime reminder states the current model's supported modalities.
+When `image` is absent, an image `read` returns a model-visible tool error before
+loading the file, creating an artifact, or attaching content.
 
 ## Subagents
 

@@ -46,7 +46,7 @@ async fn bash_text(workspace: &std::path::Path, call_id: &str, command: &str) ->
 
 #[test]
 fn app_registry_uses_the_embedded_tool_manifests() {
-    let registry = build_app_tools(Arc::new(Default::default()), None).unwrap();
+    let registry = build_app_tools(Arc::new(Default::default()), None, true).unwrap();
 
     assert_eq!(
         registry.names().collect::<Vec<_>>(),
@@ -82,7 +82,7 @@ async fn read_returns_a_bounded_line_range() {
     tokio::fs::write(workspace.path().join("sample.txt"), &content)
         .await
         .unwrap();
-    let output = ReadTool
+    let output = ReadTool::default()
         .execute(
             context(workspace.path(), "read"),
             json!({ "path": "sample.txt", "line_offset": 1 }),
@@ -109,7 +109,7 @@ async fn read_does_not_report_truncation_at_exact_line_ending_eof() {
     tokio::fs::write(workspace.path().join("exact.txt"), "zero\none\n")
         .await
         .unwrap();
-    let output = ReadTool
+    let output = ReadTool::default()
         .execute(
             context(workspace.path(), "read-exact"),
             json!({ "path": "exact.txt" }),
@@ -127,7 +127,7 @@ async fn read_continues_a_single_long_utf8_line_by_bytes() {
     tokio::fs::write(workspace.path().join("long.txt"), &content)
         .await
         .unwrap();
-    let first = ReadTool
+    let first = ReadTool::default()
         .execute(
             context(workspace.path(), "read-long"),
             json!({ "path": "long.txt" }),
@@ -145,7 +145,7 @@ async fn read_continues_a_single_long_utf8_line_by_bytes() {
     );
     assert!(!first.contains('\u{fffd}'));
 
-    let second = ReadTool
+    let second = ReadTool::default()
         .execute(
             context(workspace.path(), "read-long-next"),
             json!({ "path": "long.txt", "byte_offset": 65_535 }),
@@ -166,7 +166,7 @@ async fn read_rounds_byte_limited_multiline_text_to_a_complete_line() {
         .await
         .unwrap();
 
-    let output = ReadTool
+    let output = ReadTool::default()
         .execute(
             context(workspace.path(), "read-multiline"),
             json!({ "path": "multiline.txt" }),
@@ -186,7 +186,7 @@ async fn read_rounds_byte_limited_multiline_text_to_a_complete_line() {
         )
     );
 
-    let remainder = ReadTool
+    let remainder = ReadTool::default()
         .execute(
             context(workspace.path(), "read-multiline-next"),
             json!({ "path": "multiline.txt", "line_offset": selected_lines }),
@@ -204,7 +204,7 @@ async fn read_rejects_combined_line_and_byte_offsets() {
         .await
         .unwrap();
 
-    let error = ReadTool
+    let error = ReadTool::default()
         .execute(
             context(workspace.path(), "read-offsets"),
             json!({ "path": "sample.txt", "line_offset": 1, "byte_offset": 1 }),
@@ -221,7 +221,7 @@ async fn read_attaches_png_and_normalizes_bmp_to_png() {
     tokio::fs::write(workspace.path().join("image.png"), png)
         .await
         .unwrap();
-    let png_output = ReadTool
+    let png_output = ReadTool::new(true)
         .execute(
             context(workspace.path(), "read-png"),
             json!({ "path": "image.png" }),
@@ -239,7 +239,7 @@ async fn read_attaches_png_and_normalizes_bmp_to_png() {
     tokio::fs::write(workspace.path().join("image.bmp"), bmp.into_inner())
         .await
         .unwrap();
-    let bmp_output = ReadTool
+    let bmp_output = ReadTool::new(true)
         .execute(
             context(workspace.path(), "read-bmp"),
             json!({ "path": "image.bmp" }),
@@ -258,7 +258,7 @@ async fn read_rejects_offsets_for_images() {
         .await
         .unwrap();
 
-    let error = ReadTool
+    let error = ReadTool::new(true)
         .execute(
             context(workspace.path(), "read-image-offset"),
             json!({ "path": "image.webp", "byte_offset": 1 }),
@@ -266,6 +266,24 @@ async fn read_rejects_offsets_for_images() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("do not accept"));
+}
+
+#[tokio::test]
+async fn read_rejects_images_when_the_model_is_text_only() {
+    let workspace = tempdir().unwrap();
+    tokio::fs::write(workspace.path().join("image.png"), b"image")
+        .await
+        .unwrap();
+
+    let error = ReadTool::new(false)
+        .execute(
+            context(workspace.path(), "read-image-text-model"),
+            json!({ "path": "image.png" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("cannot inspect images"));
+    assert!(error.to_string().contains("provider.modalities"));
 }
 
 #[tokio::test]

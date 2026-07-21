@@ -14,8 +14,22 @@ use crate::{
 
 use super::paths::resolve_path;
 
-#[derive(Debug, Default)]
-pub struct ReadTool;
+#[derive(Debug)]
+pub struct ReadTool {
+    image_enabled: bool,
+}
+
+impl ReadTool {
+    pub fn new(image_enabled: bool) -> Self {
+        Self { image_enabled }
+    }
+}
+
+impl Default for ReadTool {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct ReadArgs {
@@ -42,6 +56,10 @@ impl Tool for ReadTool {
         }
         let path = resolve_path(&context.workspace, &args.path);
         if let Some(image) = image_kind(&path) {
+            ensure!(
+                self.image_enabled,
+                "configured model cannot inspect images; add `image` to `provider.modalities` only when the selected model supports it"
+            );
             ensure!(
                 args.line_offset == 0 && args.byte_offset == 0,
                 "read image attachments do not accept line_offset or byte_offset"
@@ -221,7 +239,7 @@ mod tests {
 
     #[test]
     fn manifest_defaults_match_runtime_defaults() {
-        let spec = ReadTool.spec();
+        let spec = ReadTool::default().spec();
         assert_eq!(
             spec.input_schema.pointer("/properties/line_offset/default"),
             Some(&json!(usize::default()))

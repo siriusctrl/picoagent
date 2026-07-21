@@ -14,6 +14,7 @@ Exactly one `[provider]` table is active.
 [provider]
 kind = "openai-oauth"
 model = "gpt-5.6-sol"
+modalities = ["text"]
 # base_url = "https://chatgpt.com/backend-api/codex"
 # auth_file = "/custom/pico-auth.json"
 ```
@@ -22,11 +23,23 @@ model = "gpt-5.6-sol"
 [provider]
 kind = "openai-compatible"
 model = "local-model"
+modalities = ["text"] # or ["text", "image"] for a vision model
 base_url = "http://127.0.0.1:8000/v1"
 api_key = "${OPENAI_API_KEY}" # or a literal key
 protocol = "responses" # or "chat-completions"
 reasoning_effort = "medium" # optional; provider/model-specific
 ```
+
+`modalities` declares the selected model's input capabilities. It defaults to
+`["text"]`, must include `text`, and currently accepts only `text` and `image`.
+Picoagent does not infer capability from a model name or probe the endpoint.
+The first runtime reminder records the declaration as `current model supported
+modalities: [...]`, while the stable system prompt tells the agent not to use
+an absent modality. If a text-only model nevertheless calls `read` on an image,
+the tool returns an ordinary error before reading or attaching the image; no
+multimodal provider request is made. The declaration is stored in `run.json`
+and must match when the run resumes. It applies to the primary and optional
+GeneralTask model selected by this configuration.
 
 `api_key` accepts either a literal value or a whole environment reference such
 as `${OPENAI_API_KEY}`. Environment references are resolved when the runtime is
@@ -71,6 +84,7 @@ runtime does not infer or expose hidden chain-of-thought.
 [provider]
 kind = "anthropic-compatible"
 model = "claude-compatible-model"
+modalities = ["text"]
 base_url = "https://api.anthropic.com/v1"
 api_key_env = "ANTHROPIC_API_KEY"
 # anthropic_version = "2023-06-01"

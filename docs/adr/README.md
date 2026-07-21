@@ -84,3 +84,4 @@ Use these sections:
   context](0021-compacted-state-continuation-reminder.md)
 - [ADR 0022: Send native image attachments after ordered tool
   results](0022-native-image-attachments-after-tool-results.md)
+- [ADR 0023: Declare model input modalities](0023-declare-model-input-modalities.md)

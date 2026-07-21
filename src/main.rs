@@ -15,7 +15,7 @@ use picoagent::{
     mcp::{McpStdioClient, McpStdioConfig},
     memory::MemoryPaths,
     model::{
-        ModelProvider,
+        ModelModality, ModelProvider,
         anthropic_compatible::{AnthropicCompatibleOptions, AnthropicCompatibleProvider},
         echo::EchoProvider,
         openai_compatible::{OpenAiCompatibleOptions, OpenAiCompatibleProvider},
@@ -147,7 +147,12 @@ async fn run_action(
     } else {
         None
     };
-    let mut tools = build_app_tools(skills.clone(), web_search)?;
+    let model_modalities = config.provider.modalities().clone();
+    let mut tools = build_app_tools(
+        skills.clone(),
+        web_search,
+        model_modalities.contains(&ModelModality::Image),
+    )?;
 
     let mut mcp_clients = Vec::new();
     for (name, server) in &config.mcp {
@@ -188,6 +193,7 @@ async fn run_action(
         memory,
         extra_events,
         options: RunnerOptions {
+            model_modalities,
             max_subagent_depth: config.runtime.max_subagent_depth,
             max_parallel_subagents: config.runtime.max_parallel_subagents,
             max_parallel_model_calls: config.runtime.max_parallel_model_calls,

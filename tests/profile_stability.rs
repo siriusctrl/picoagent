@@ -406,7 +406,7 @@ fn runner_with_store(
     let mut tools = ToolRegistry::default();
     tools.register(Arc::new(BashTool)).unwrap();
     tools.register(Arc::new(MarkerTool)).unwrap();
-    tools.register(Arc::new(ReadTool)).unwrap();
+    tools.register(Arc::new(ReadTool::default())).unwrap();
     tools.register(Arc::new(WriteTool::default())).unwrap();
     AgentRunner::new(AgentRunnerConfig {
         provider,

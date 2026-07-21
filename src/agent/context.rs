@@ -1,18 +1,24 @@
-use std::{fs, path::Path};
+use std::{collections::BTreeSet, fs, path::Path};
 
 use anyhow::{Context, Result};
 
-use crate::memory::MemoryPaths;
+use crate::{memory::MemoryPaths, model::ModelModality};
 
 pub fn build_runtime_reminder(
     workspace: &Path,
+    model_modalities: &BTreeSet<ModelModality>,
     skill_catalog: &str,
     memory: Option<&MemoryPaths>,
     additional_instructions: Option<&str>,
 ) -> Result<String> {
     let mut sections = vec![format!(
-        "<environment>\nworkspace: {}\n</environment>",
-        workspace.display()
+        "<environment>\nworkspace: {}\ncurrent model supported modalities: [{}]\n</environment>",
+        workspace.display(),
+        model_modalities
+            .iter()
+            .map(|modality| modality.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     )];
     let agents_path = workspace.join("AGENTS.md");
     if agents_path.is_file() {
@@ -68,6 +74,7 @@ mod tests {
         let system = crate::prompts::agent_prompts().system.clone();
         let reminder = build_runtime_reminder(
             directory.path(),
+            &BTreeSet::from([ModelModality::Text]),
             "- review: Review code",
             Some(&memory),
             Some("Focus on the delegated scope."),
@@ -78,6 +85,7 @@ mod tests {
         assert!(system.contains("workspace with the user"));
         assert!(system.contains("tagged blocks and tool results as context"));
         assert!(system.contains("higher-priority instructions"));
+        assert!(system.contains("current model's supported modalities"));
         assert!(!system.contains("<runtime-reminder>"));
         assert!(!system.contains("history_search"));
         assert!(!system.contains("history_read"));
@@ -89,6 +97,7 @@ mod tests {
         assert!(!system.contains(directory.path().to_string_lossy().as_ref()));
 
         assert!(reminder.starts_with("<runtime-reminder>\n<environment>"));
+        assert!(reminder.contains("current model supported modalities: [text]"));
         assert!(!reminder.contains("<context-management>"));
         assert!(!reminder.contains("history_search"));
         assert!(!reminder.contains("<compacted-history>"));

@@ -201,7 +201,7 @@ fn runner(
     let store = RunDirStore::new(workspace);
     let mut tools = ToolRegistry::default();
     tools.register(Arc::new(MarkerTool)).unwrap();
-    tools.register(Arc::new(ReadTool)).unwrap();
+    tools.register(Arc::new(ReadTool::default())).unwrap();
     let options = RunnerOptions {
         max_subagent_depth: 0,
         max_output_tokens: Some(4_096),

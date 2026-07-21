@@ -103,8 +103,11 @@ request. The reminder snapshots the workspace path, `AGENTS.md`, discovered
 skill metadata, memory locations, and any delegated-task instructions that
 apply to the profile. Tool schemas are sorted, and both the schemas and
 reminder are frozen for that run; configuration or file changes take effect on
-the next run. Compaction reuses this stable system/tool prefix and adds one
-final user instruction only to the compaction request.
+the next run. The environment section also states `current model supported
+modalities: [text]` (or `[text, image]`); the stable system prompt tells the
+agent not to request an absent modality. Compaction reuses this stable
+system/tool prefix and adds one final user instruction only to the compaction
+request.
 
 `messages.jsonl` uses the `openai-chat-compatible` format: each line is one
 complete Chat message with ordinary `role` and `content` fields. The runtime
@@ -151,6 +154,7 @@ settings fail at startup.
 [provider]
 kind = "openai-oauth"
 model = "gpt-5.6-sol"
+modalities = ["text"]
 ```
 
 Authenticate once:
@@ -169,6 +173,7 @@ import a compatible `$CODEX_HOME/auth.json` or `$HOME/.codex/auth.json`.
 [provider]
 kind = "openai-compatible"
 model = "my-model"
+modalities = ["text"] # use ["text", "image"] only for a vision model
 base_url = "http://127.0.0.1:8000/v1"
 api_key = "${OPENAI_API_KEY}" # or a literal key
 protocol = "chat-completions" # or "responses"
@@ -224,6 +229,7 @@ field on later requests to that compatible Chat endpoint.
 [provider]
 kind = "anthropic-compatible"
 model = "my-model"
+modalities = ["text"]
 base_url = "https://api.anthropic.com/v1"
 api_key_env = "ANTHROPIC_API_KEY"
 ```

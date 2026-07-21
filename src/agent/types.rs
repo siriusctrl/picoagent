@@ -1,8 +1,13 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 use crate::{
-    artifact::ArtifactStore, events::SharedEventSink, hooks::HookPipeline, memory::MemoryPaths,
-    model::ModelProvider, storage::RunDirStore, tools::ToolRegistry,
+    artifact::ArtifactStore,
+    events::SharedEventSink,
+    hooks::HookPipeline,
+    memory::MemoryPaths,
+    model::{ModelModality, ModelProvider},
+    storage::RunDirStore,
+    tools::ToolRegistry,
 };
 
 #[derive(Debug, Clone)]
@@ -13,6 +18,7 @@ pub struct GeneralTaskProfile {
 
 #[derive(Debug, Clone)]
 pub struct RunnerOptions {
+    pub model_modalities: BTreeSet<ModelModality>,
     pub max_subagent_depth: usize,
     pub max_parallel_subagents: usize,
     pub max_parallel_model_calls: usize,
@@ -49,6 +55,7 @@ impl Default for CompactionOptions {
 impl Default for RunnerOptions {
     fn default() -> Self {
         Self {
+            model_modalities: BTreeSet::from([ModelModality::Text]),
             max_subagent_depth: 1,
             max_parallel_subagents: 4,
             max_parallel_model_calls: 1,

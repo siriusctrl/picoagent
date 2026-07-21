@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fmt, fs,
     path::{Path, PathBuf},
 };
@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-pub use crate::model::OpenAiProtocol;
+pub use crate::model::{ModelModality, OpenAiProtocol};
 
 const DEFAULT_OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
@@ -56,6 +56,8 @@ impl Default for CompactionConfig {
 pub enum ProviderConfig {
     OpenaiOauth {
         model: String,
+        #[serde(default = "default_model_modalities")]
+        modalities: BTreeSet<ModelModality>,
         #[serde(default)]
         base_url: Option<String>,
         #[serde(default)]
@@ -63,6 +65,8 @@ pub enum ProviderConfig {
     },
     OpenaiCompatible {
         model: String,
+        #[serde(default = "default_model_modalities")]
+        modalities: BTreeSet<ModelModality>,
         base_url: String,
         #[serde(default, skip_serializing)]
         api_key: Option<String>,
@@ -73,6 +77,8 @@ pub enum ProviderConfig {
     },
     AnthropicCompatible {
         model: String,
+        #[serde(default = "default_model_modalities")]
+        modalities: BTreeSet<ModelModality>,
         base_url: String,
         #[serde(default = "default_anthropic_key_env")]
         api_key_env: String,
@@ -82,6 +88,8 @@ pub enum ProviderConfig {
     Echo {
         #[serde(default = "default_echo_model")]
         model: String,
+        #[serde(default = "default_model_modalities")]
+        modalities: BTreeSet<ModelModality>,
     },
 }
 
@@ -90,16 +98,19 @@ impl fmt::Debug for ProviderConfig {
         match self {
             Self::OpenaiOauth {
                 model,
+                modalities,
                 base_url,
                 auth_file,
             } => formatter
                 .debug_struct("OpenaiOauth")
                 .field("model", model)
+                .field("modalities", modalities)
                 .field("base_url", base_url)
                 .field("auth_file", auth_file)
                 .finish(),
             Self::OpenaiCompatible {
                 model,
+                modalities,
                 base_url,
                 api_key,
                 protocol,
@@ -107,6 +118,7 @@ impl fmt::Debug for ProviderConfig {
             } => formatter
                 .debug_struct("OpenaiCompatible")
                 .field("model", model)
+                .field("modalities", modalities)
                 .field("base_url", base_url)
                 .field("api_key", &api_key.as_ref().map(|_| "[REDACTED]"))
                 .field("protocol", protocol)
@@ -114,19 +126,22 @@ impl fmt::Debug for ProviderConfig {
                 .finish(),
             Self::AnthropicCompatible {
                 model,
+                modalities,
                 base_url,
                 api_key_env,
                 anthropic_version,
             } => formatter
                 .debug_struct("AnthropicCompatible")
                 .field("model", model)
+                .field("modalities", modalities)
                 .field("base_url", base_url)
                 .field("api_key_env", api_key_env)
                 .field("anthropic_version", anthropic_version)
                 .finish(),
-            Self::Echo { model } => formatter
+            Self::Echo { model, modalities } => formatter
                 .debug_struct("Echo")
                 .field("model", model)
+                .field("modalities", modalities)
                 .finish(),
         }
     }
@@ -136,6 +151,7 @@ impl Default for ProviderConfig {
     fn default() -> Self {
         Self::Echo {
             model: default_echo_model(),
+            modalities: default_model_modalities(),
         }
     }
 }
@@ -146,7 +162,16 @@ impl ProviderConfig {
             Self::OpenaiOauth { model, .. }
             | Self::OpenaiCompatible { model, .. }
             | Self::AnthropicCompatible { model, .. }
-            | Self::Echo { model } => model,
+            | Self::Echo { model, .. } => model,
+        }
+    }
+
+    pub fn modalities(&self) -> &BTreeSet<ModelModality> {
+        match self {
+            Self::OpenaiOauth { modalities, .. }
+            | Self::OpenaiCompatible { modalities, .. }
+            | Self::AnthropicCompatible { modalities, .. }
+            | Self::Echo { modalities, .. } => modalities,
         }
     }
 }
@@ -308,6 +333,9 @@ impl AppConfig {
     }
 
     fn validate(&self) -> Result<()> {
+        if !self.provider.modalities().contains(&ModelModality::Text) {
+            bail!("`provider.modalities` must include `text`")
+        }
         if self.runtime.max_parallel_subagents == 0 {
             bail!("`runtime.max_parallel_subagents` must be greater than zero")
         }
@@ -436,6 +464,9 @@ fn default_anthropic_key_env() -> String {
 fn default_echo_model() -> String {
     "echo".to_owned()
 }
+fn default_model_modalities() -> BTreeSet<ModelModality> {
+    BTreeSet::from([ModelModality::Text])
+}
 
 #[cfg(test)]
 mod tests {
@@ -448,6 +479,7 @@ mod tests {
             [provider]
             kind = "openai-compatible"
             model = "local-model"
+            modalities = ["text", "image"]
             base_url = "http://localhost:8000/v1"
             api_key = "inline-token"
             protocol = "chat-completions"
@@ -458,6 +490,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.provider.model(), "local-model");
+        assert_eq!(
+            config.provider.modalities(),
+            &BTreeSet::from([ModelModality::Text, ModelModality::Image])
+        );
         let ProviderConfig::OpenaiCompatible {
             api_key,
             reasoning_effort,
@@ -468,6 +504,35 @@ mod tests {
         };
         assert_eq!(api_key.as_deref(), Some("inline-token"));
         assert_eq!(reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn model_modalities_default_to_text_and_require_text() {
+        let default: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            default.provider.modalities(),
+            &BTreeSet::from([ModelModality::Text])
+        );
+
+        let image_only: AppConfig = toml::from_str(
+            r#"
+            [provider]
+            kind = "echo"
+            modalities = ["image"]
+            "#,
+        )
+        .unwrap();
+        assert!(image_only.validate().is_err());
+        assert!(
+            toml::from_str::<AppConfig>(
+                r#"
+                [provider]
+                kind = "echo"
+                modalities = ["video"]
+                "#,
+            )
+            .is_err()
+        );
     }
 
     #[test]

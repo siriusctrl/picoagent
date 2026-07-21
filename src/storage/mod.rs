@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fmt,
     path::{Path, PathBuf},
     sync::Arc,
@@ -11,14 +11,17 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{fs::OpenOptions, io::AsyncWriteExt, sync::Mutex};
 
-use crate::events::{EventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink};
+use crate::{
+    events::{EventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
+    model::ModelModality,
+};
 
 mod input;
 mod message_log;
 mod trajectory;
 
 pub const MESSAGE_FORMAT: &str = "openai-chat-compatible";
-const RUN_RECORD_VERSION: u32 = 5;
+const RUN_RECORD_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +49,7 @@ pub struct RunRecord {
     /// Non-secret identity of provider settings that affect wire compatibility.
     pub provider_resume_fingerprint: String,
     pub model: String,
+    pub model_modalities: BTreeSet<ModelModality>,
     pub message_format: String,
     pub cwd: PathBuf,
     pub created_at: DateTime<Utc>,
@@ -75,6 +79,7 @@ impl RunRecord {
             provider: provider.into(),
             provider_resume_fingerprint: String::new(),
             model: model.into(),
+            model_modalities: BTreeSet::from([ModelModality::Text]),
             message_format: MESSAGE_FORMAT.to_owned(),
             cwd,
             created_at: now,
@@ -96,6 +101,11 @@ impl RunRecord {
 
     pub fn with_provider_resume_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
         self.provider_resume_fingerprint = fingerprint.into();
+        self
+    }
+
+    pub fn with_model_modalities(mut self, modalities: BTreeSet<ModelModality>) -> Self {
+        self.model_modalities = modalities;
         self
     }
 
@@ -187,6 +197,10 @@ impl RunDirStore {
             "unsupported run record version {}; expected {RUN_RECORD_VERSION}",
             run.version
         );
+        ensure!(
+            run.model_modalities.contains(&ModelModality::Text),
+            "run record model modalities must include text"
+        );
         if paths.metadata.exists() {
             bail!("run `{}` already exists", run.id);
         }
@@ -253,6 +267,10 @@ impl RunDirStore {
             run.message_format == MESSAGE_FORMAT,
             "unsupported message format {}; expected {MESSAGE_FORMAT}",
             run.message_format
+        );
+        ensure!(
+            run.model_modalities.contains(&ModelModality::Text),
+            "run record model modalities must include text"
         );
         Ok(run)
     }

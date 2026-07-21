@@ -200,6 +200,13 @@ capabilities and a GeneralTask's depth variant are resolved before its run
 starts rather than changing its schema set mid-run. Memory paths do not alter
 the tool schema.
 
+The system prompt contains one stable rule for model modalities, while the
+runtime reminder snapshots the configured values. The provider config defaults
+to text-only and does not guess from model names. `read` rejects image input at
+its execution boundary when `image` is absent. Rejected: endpoint probing,
+model-name allowlists, and per-agent dynamic vision routing. See
+[ADR 0023](adr/0023-declare-model-input-modalities.md).
+
 Rejected for launch: conditionally adding history tools and hot-reloading
 project context or tool definitions inside a run. Appending revisions would
 grow context, while replacing earlier messages would break the durable

@@ -4,6 +4,7 @@
 - Date: 2026-07-20
 - Refines: ADR 0005 (message identity)
 - Refines: ADR 0012 (compaction boundaries and history retrieval)
+- Refined by: ADR 0023 (run record version 6 model modalities)
 
 ## Context
 

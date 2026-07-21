@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -14,11 +15,11 @@ use picoagent::{
     events::{EventSink, NoopEventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::HookPipeline,
     model::{
-        Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
-        ToolCall,
+        Message, MessageContent, ModelModality, ModelProvider, ModelRequest, ModelResponse,
+        ModelUsage, Role, ToolCall,
     },
     storage::RunDirStore,
-    tools::{RawToolOutput, Tool, ToolContext, ToolRegistry},
+    tools::{RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -325,7 +326,10 @@ async fn concurrent_image_results_are_attached_after_all_tool_results() {
         hooks: HookPipeline::new(),
         memory: None,
         extra_events: Arc::new(NoopEventSink),
-        options: RunnerOptions::default(),
+        options: RunnerOptions {
+            model_modalities: BTreeSet::from([ModelModality::Text, ModelModality::Image]),
+            ..RunnerOptions::default()
+        },
     });
 
     let result = runner
@@ -342,6 +346,98 @@ async fn concurrent_image_results_are_attached_after_all_tool_results() {
             .count(),
         2
     );
+}
+
+struct TextOnlyImageReadProvider {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl ModelProvider for TextOnlyImageReadProvider {
+    fn name(&self) -> &str {
+        "text-only-image-read"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        match self.calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                ensure!(request.messages[0].content.iter().any(|content| {
+                    matches!(
+                        content,
+                        MessageContent::RuntimeReminder { text }
+                            if text.contains("current model supported modalities: [text]")
+                    )
+                }));
+                Ok(tool_response(vec![ToolCall {
+                    id: "read-image".into(),
+                    name: "read".into(),
+                    arguments: json!({"path": "image.png"}),
+                }]))
+            }
+            1 => {
+                ensure!(!request.messages.iter().any(|message| {
+                    message
+                        .content
+                        .iter()
+                        .any(|content| matches!(content, MessageContent::Image { .. }))
+                }));
+                ensure!(request.messages.iter().any(|message| {
+                    message.content.iter().any(|content| {
+                        matches!(
+                            content,
+                            MessageContent::ToolResult {
+                                is_error: true,
+                                content,
+                                ..
+                            } if content.contains("configured model cannot inspect images")
+                        )
+                    })
+                }));
+                Ok(text_response("unsupported image reported"))
+            }
+            call => anyhow::bail!("unexpected model call {call}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn text_only_image_read_returns_a_tool_error_without_an_attachment() {
+    let workspace = TempDir::new().unwrap();
+    tokio::fs::write(workspace.path().join("image.png"), b"not loaded")
+        .await
+        .unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let mut tools = ToolRegistry::default();
+    tools.register(Arc::new(ReadTool::new(false))).unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(TextOnlyImageReadProvider {
+            calls: AtomicUsize::new(0),
+        }),
+        model: "text-model".to_owned(),
+        workspace: workspace.path().to_owned(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions::default(),
+    });
+
+    let result = runner
+        .run(RunRequest::root("try to read an image"))
+        .await
+        .unwrap();
+    assert_eq!(result.final_output, "unsupported image reported");
+    let mut artifacts = tokio::fs::read_dir(store.paths(&result.run_id).artifacts)
+        .await
+        .unwrap();
+    assert!(artifacts.next_entry().await.unwrap().is_none());
 }
 
 struct PartialPromotionProvider {

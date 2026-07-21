@@ -7,9 +7,11 @@ embedded file once, rejects unknown or empty fields, and exposes the three named
 prompts directly.
 
 Runtime assembly, precedence, dynamic values, argument validation, and
-execution contracts remain in Rust. Project
-`AGENTS.md`, skill metadata, memory paths, and delegated instructions are
-dynamic inputs and are not copied into this registry.
+execution contracts remain in Rust. Project `AGENTS.md`, model modalities,
+skill metadata, memory paths, and delegated instructions are dynamic inputs and
+are not copied into this registry. The stable system prompt defines how to
+interpret the current-model modality line; the initial runtime reminder carries
+its frozen value.
 
 Every local model-facing tool adapter keeps a typed `tool.yaml` beside its Rust
 module. Standalone adapters live at `src/tools/<tool>/`; cohesive task and

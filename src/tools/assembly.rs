@@ -14,9 +14,10 @@ use super::{
 pub fn build_app_tools(
     skills: Arc<SkillRegistry>,
     web_search: Option<WebSearchTool>,
+    image_enabled: bool,
 ) -> Result<ToolRegistry> {
     let mut registry = ToolRegistry::default();
-    registry.register(Arc::new(ReadTool))?;
+    registry.register(Arc::new(ReadTool::new(image_enabled)))?;
     registry.register(Arc::new(WriteTool::default()))?;
     registry.register(Arc::new(BashTool))?;
     registry.register(Arc::new(LoadSkillTool::new(skills)))?;

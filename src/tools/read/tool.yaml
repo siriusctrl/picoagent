@@ -6,7 +6,9 @@ description: >-
   byte limit cuts a multi-line selection, the partial last line is omitted; a
   newline-free long line stops at a valid UTF-8 boundary. Images support jpg,
   jpeg, png, gif, webp, and bmp; GIF uses its first frame and GIF/BMP are
-  normalized to PNG. Use bash for directory listing or content discovery.
+  normalized to PNG. Image reads require `image` in the current model's
+  configured modalities; otherwise read returns an error. Use bash for
+  directory listing or content discovery.
 returns: >-
   The selected UTF-8 text or an image attachment. If unread text remains
   because a limit was reached, the truncation marker reports total_bytes and

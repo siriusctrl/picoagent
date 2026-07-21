@@ -15,6 +15,10 @@ schema stability remains accepted.
 ADR 0012 refines the compaction profile: compaction now reuses the normal
 system prompt and frozen schemas, while returned tool calls remain rejected.
 
+ADR 0023 adds one stable rule for interpreting model modalities while keeping
+the concrete configured set in the initial runtime reminder. The stable-prefix
+decision remains accepted.
+
 ## Context
 
 ADR 0003 established append-only local compaction and exact history retrieval.

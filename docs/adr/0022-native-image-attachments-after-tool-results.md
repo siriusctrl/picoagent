@@ -5,6 +5,10 @@
 - Refines: ADR 0005 (multimodal user content)
 - Refines: ADR 0017 (direct tool-batch result ordering)
 
+ADR 0023 later makes image availability explicit in provider configuration and
+causes text-only image reads to fail before attachment creation. The native
+attachment contract here remains accepted for image-capable runs.
+
 ## Context
 
 The `read` tool could inspect bounded UTF-8 text but not show an image to the

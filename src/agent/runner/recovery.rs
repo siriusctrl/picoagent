@@ -88,6 +88,12 @@ impl AgentRunner {
             record.model,
             plan.model
         );
+        ensure!(
+            record.model_modalities == plan.modalities,
+            "run `{run_id}` used model modalities {:?} but current configuration selects {:?}",
+            record.model_modalities,
+            plan.modalities
+        );
         self.run_with_mode(request, run_id, RunMode::Resume, lease.clone())
             .await
     }

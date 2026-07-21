@@ -102,6 +102,14 @@ profile; optional `web_search` and MCP tools depend on startup configuration.
 Memory paths do not add a tool schema. The selected schemas do not appear or
 disappear during one run.
 
+The provider config declares one capability set for the selected model rather
+than maintaining a model-name registry or probing endpoints. The stable system
+prompt defines absent modalities as unavailable; the initial runtime reminder
+records the concrete set as `current model supported modalities: [...]`.
+`read` receives the corresponding image-enabled flag during app-tool assembly
+and returns a normal tool error for an image under a text-only configuration.
+Its static YAML schema and description do not change.
+
 ### Run storage
 
 Each run is a portable directory beneath `<workspace>/.pico/runs/<run-id>/`.
@@ -130,7 +138,8 @@ present. Tool-error state and opaque provider continuation items also remain
 there, as do structured result artifact refs. Compaction request/state
 classification and state boundaries also live only in the sidecar. None of these
 private fields are added to the Chat message. `run.json` identifies the format
-as `openai-chat-compatible`.
+as `openai-chat-compatible` and records the model modality declaration. Resume
+requires the current declaration to match that run snapshot.
 
 Only complete messages are resumable. Stream deltas are emitted to live sinks
 but omitted from the persisted `events.jsonl` and are never appended as partial

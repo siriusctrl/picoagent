@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     path::Path,
     sync::{
         Arc,
@@ -18,8 +19,8 @@ use picoagent::{
     events::{NoopEventSink, SharedEventSink},
     hooks::{CommandHook, HookEvent, HookPipeline},
     model::{
-        Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
-        ToolCall, echo::EchoProvider,
+        Message, MessageContent, ModelModality, ModelProvider, ModelRequest, ModelResponse,
+        ModelUsage, Role, ToolCall, echo::EchoProvider,
     },
     storage::{RunDirStore, RunRecord, RunState},
     tools::{RawToolOutput, Tool, ToolContext, ToolRegistry},
@@ -381,6 +382,50 @@ async fn resume_reconstructs_a_missing_promotion_ack_from_its_terminal_task() {
             .iter()
             .any(|message| { message.visible_text().contains("side effects are unknown") })
     );
+}
+
+#[tokio::test]
+async fn resume_rejects_changed_model_modalities_before_calling_the_provider() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = ResumeProvider {
+        calls: calls.clone(),
+        require_interrupted_result: false,
+    };
+    store
+        .create_run(
+            &RunRecord::new(
+                "resume-modalities",
+                "resume me",
+                provider.name(),
+                "scripted",
+                workspace.path().to_path_buf(),
+                None,
+            )
+            .with_model_modalities(BTreeSet::from([ModelModality::Text, ModelModality::Image]))
+            .with_provider_resume_fingerprint(provider.resume_fingerprint()),
+        )
+        .await
+        .unwrap();
+    store
+        .update_state("resume-modalities", RunState::Running)
+        .await
+        .unwrap();
+
+    let runner = resume_runner(
+        workspace.path(),
+        &store,
+        ResumeProvider {
+            calls: calls.clone(),
+            require_interrupted_result: false,
+        },
+        ToolRegistry::default(),
+    );
+    let error = runner.resume("resume-modalities").await.unwrap_err();
+
+    assert!(error.to_string().contains("model modalities"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

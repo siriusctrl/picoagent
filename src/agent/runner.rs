@@ -124,6 +124,7 @@ impl AgentRunner {
         if needs_initial_message {
             let runtime_reminder = build_runtime_reminder(
                 &self.workspace,
+                &plan.modalities,
                 &self.skill_catalog,
                 self.memory.as_ref(),
                 request.additional_instructions.as_deref(),

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -26,6 +28,28 @@ pub use openai_oauth::{
     OpenAiOAuthProvider,
 };
 pub(crate) use runtime::{background_task_started_reminder, render_background_task_content};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelModality {
+    Text,
+    Image,
+}
+
+impl ModelModality {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+        }
+    }
+}
+
+impl fmt::Display for ModelModality {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
 pub mod echo;
 
