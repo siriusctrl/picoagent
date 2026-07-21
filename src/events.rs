@@ -48,14 +48,20 @@ pub enum RuntimeEventKind {
         cached_input_tokens: Option<u64>,
         reasoning_tokens: Option<u64>,
     },
+    ModelFailed {
+        step: usize,
+        error: String,
+    },
     CompactionStarted {
         state_message_ref: String,
         tokens_before: u64,
+        attempt: usize,
     },
     CompactionCompleted {
         state_message_ref: String,
         covered_through_message_ref: String,
         first_kept_message_ref: String,
+        attempt: usize,
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
         cached_input_tokens: Option<u64>,
@@ -63,7 +69,13 @@ pub enum RuntimeEventKind {
     },
     CompactionFailed {
         state_message_ref: String,
+        /// `None` means compaction was rejected before a provider request.
+        attempt: Option<usize>,
         error: String,
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        cached_input_tokens: Option<u64>,
+        reasoning_tokens: Option<u64>,
     },
     ToolStarted {
         call_id: String,

@@ -398,17 +398,55 @@ impl AgentRunner {
                 )
                 .await;
                 fork_first_request_pending = false;
-                drop(model_permit);
-                let response = response
-                    .with_context(|| {
-                        format!(
+                let response = match response {
+                    Ok(Ok(response)) => response,
+                    Ok(Err(error)) => {
+                        let error = error
+                            .context(format!("{} model call failed", self.provider.name()));
+                        events
+                            .emit(&RuntimeEvent::new(
+                                &run_id,
+                                RuntimeEventKind::ModelFailed {
+                                    step,
+                                    error: format!("{error:#}"),
+                                },
+                            ))
+                            .await?;
+                        drop(model_permit);
+                        return Err(error);
+                    }
+                    Err(_) => {
+                        let error = anyhow::anyhow!(
                             "{} model request deadline exceeded {} seconds",
                             self.provider.name(),
                             self.options.model_request_deadline_seconds
-                        )
-                    })?
-                    .with_context(|| format!("{} model call failed", self.provider.name()))?;
-                response.validate_completed()?;
+                        );
+                        events
+                            .emit(&RuntimeEvent::new(
+                                &run_id,
+                                RuntimeEventKind::ModelFailed {
+                                    step,
+                                    error: error.to_string(),
+                                },
+                            ))
+                            .await?;
+                        drop(model_permit);
+                        return Err(error);
+                    }
+                };
+                if let Err(error) = response.validate_completed() {
+                    events
+                        .emit(&RuntimeEvent::new(
+                            &run_id,
+                            RuntimeEventKind::ModelFailed {
+                                step,
+                                error: format!("{error:#}"),
+                            },
+                        ))
+                        .await?;
+                    drop(model_permit);
+                    return Err(error);
+                }
                 events
                     .emit(&RuntimeEvent::new(
                         &run_id,
@@ -421,6 +459,7 @@ impl AgentRunner {
                         },
                     ))
                     .await?;
+                drop(model_permit);
                 let final_text = response.text();
                 let tool_calls = response.tool_calls();
                 let assistant_message = response.assistant;

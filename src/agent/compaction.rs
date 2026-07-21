@@ -103,10 +103,15 @@ pub(crate) async fn maybe_compact(
                     run_id,
                     RuntimeEventKind::CompactionFailed {
                         state_message_ref,
+                        attempt: None,
                         error: format!(
                             "estimated compaction context is {estimated_total} tokens ({input_tokens} input + {} output), at or above context_window_tokens={context_window}",
                             options.summary_max_output_tokens
                         ),
+                        input_tokens: None,
+                        output_tokens: None,
+                        cached_input_tokens: None,
+                        reasoning_tokens: None,
                     },
                 ))
                 .await?;
@@ -117,17 +122,18 @@ pub(crate) async fn maybe_compact(
         .acquire()
         .await
         .map_err(|_| anyhow!("model concurrency limiter closed"))?;
-    events
-        .emit(&RuntimeEvent::new(
-            run_id,
-            RuntimeEventKind::CompactionStarted {
-                state_message_ref: state_message_ref.clone(),
-                tokens_before,
-            },
-        ))
-        .await?;
     let mut accepted = None;
     for attempt_index in 1..=MAX_INVALID_COMPACTION_RESPONSES {
+        events
+            .emit(&RuntimeEvent::new(
+                run_id,
+                RuntimeEventKind::CompactionStarted {
+                    state_message_ref: state_message_ref.clone(),
+                    tokens_before,
+                    attempt: attempt_index,
+                },
+            ))
+            .await?;
         let response = tokio::time::timeout(
             Duration::from_secs(request_deadline_seconds),
             provider.complete(request.clone(), Arc::new(NoopEventSink)),
@@ -145,7 +151,12 @@ pub(crate) async fn maybe_compact(
                         run_id,
                         RuntimeEventKind::CompactionFailed {
                             state_message_ref,
+                            attempt: Some(attempt_index),
                             error: format!("{error:#}"),
+                            input_tokens: None,
+                            output_tokens: None,
+                            cached_input_tokens: None,
+                            reasoning_tokens: None,
                         },
                     ))
                     .await?;
@@ -159,7 +170,12 @@ pub(crate) async fn maybe_compact(
                     run_id,
                     RuntimeEventKind::CompactionFailed {
                         state_message_ref,
+                        attempt: Some(attempt_index),
                         error: format!("{error:#}"),
+                        input_tokens: response.usage.input_tokens,
+                        output_tokens: response.usage.output_tokens,
+                        cached_input_tokens: response.usage.cached_input_tokens,
+                        reasoning_tokens: response.usage.reasoning_tokens,
                     },
                 ))
                 .await?;
@@ -174,7 +190,7 @@ pub(crate) async fn maybe_compact(
             None
         };
         let Some(error) = invalid else {
-            accepted = Some(response);
+            accepted = Some((response, attempt_index));
             break;
         };
         events
@@ -182,15 +198,20 @@ pub(crate) async fn maybe_compact(
                 run_id,
                 RuntimeEventKind::CompactionFailed {
                     state_message_ref: state_message_ref.clone(),
+                    attempt: Some(attempt_index),
                     error: format!(
                         "{error} (attempt {attempt_index}/{MAX_INVALID_COMPACTION_RESPONSES})"
                     ),
+                    input_tokens: response.usage.input_tokens,
+                    output_tokens: response.usage.output_tokens,
+                    cached_input_tokens: response.usage.cached_input_tokens,
+                    reasoning_tokens: response.usage.reasoning_tokens,
                 },
             ))
             .await?;
     }
-    drop(model_permit);
-    let Some(response) = accepted else {
+    let Some((response, accepted_attempt)) = accepted else {
+        drop(model_permit);
         return Ok(None);
     };
 
@@ -218,23 +239,48 @@ pub(crate) async fn maybe_compact(
     // The assistant state is the commit marker. A crash after the request
     // append but before this append leaves an inert, auditable request that is
     // excluded from normal context and can be retried on resume.
-    let request_record = store
-        .append_compaction_message(run_id, &compaction_request, CompactionMessage::Request)
-        .await?;
-    let state_record = store
-        .append_compaction_message(
-            run_id,
-            &response.assistant,
-            CompactionMessage::State {
-                state: state.clone(),
-            },
-        )
-        .await?;
-    ensure!(
-        state_record.message_ref == state_message_ref,
-        "compacted state ref changed from planned `{state_message_ref}` to `{}`",
-        state_record.message_ref
-    );
+    let records = async {
+        let request_record = store
+            .append_compaction_message(run_id, &compaction_request, CompactionMessage::Request)
+            .await?;
+        let state_record = store
+            .append_compaction_message(
+                run_id,
+                &response.assistant,
+                CompactionMessage::State {
+                    state: state.clone(),
+                },
+            )
+            .await?;
+        ensure!(
+            state_record.message_ref == state_message_ref,
+            "compacted state ref changed from planned `{state_message_ref}` to `{}`",
+            state_record.message_ref
+        );
+        Ok([request_record, state_record])
+    }
+    .await;
+    let records = match records {
+        Ok(records) => records,
+        Err(error) => {
+            let _ = events
+                .emit(&RuntimeEvent::new(
+                    run_id,
+                    RuntimeEventKind::CompactionFailed {
+                        state_message_ref,
+                        attempt: Some(accepted_attempt),
+                        error: format!("{error:#}"),
+                        input_tokens: response.usage.input_tokens,
+                        output_tokens: response.usage.output_tokens,
+                        cached_input_tokens: response.usage.cached_input_tokens,
+                        reasoning_tokens: response.usage.reasoning_tokens,
+                    },
+                ))
+                .await;
+            drop(model_permit);
+            return Err(error);
+        }
+    };
     events
         .emit(&RuntimeEvent::new(
             run_id,
@@ -242,6 +288,7 @@ pub(crate) async fn maybe_compact(
                 state_message_ref,
                 covered_through_message_ref: state.covered_through_message_ref,
                 first_kept_message_ref: state.first_kept_message_ref,
+                attempt: accepted_attempt,
                 input_tokens: response.usage.input_tokens,
                 output_tokens: response.usage.output_tokens,
                 cached_input_tokens: response.usage.cached_input_tokens,
@@ -249,8 +296,9 @@ pub(crate) async fn maybe_compact(
             },
         ))
         .await?;
+    drop(model_permit);
     Ok(Some(CompletedCompaction {
-        records: [request_record, state_record],
+        records,
         estimated_context_tokens,
     }))
 }

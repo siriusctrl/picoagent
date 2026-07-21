@@ -204,13 +204,21 @@ default capacity is one so a child can run against single-concurrency compatible
 endpoints without racing the parent; deployments can raise it explicitly. Once
 a call acquires a permit, the corresponding `model_started` or
 `compaction_started` event is emitted and its hard request deadline covers the
-entire provider call without resetting. Waiting for a permit does not emit a
-started event. A separate stream-idle interval covers response headers and the
-request opening that precedes them, then restarts after every valid SSE event,
-so a healthy long reasoning response can outlive one idle interval. Neither
-timer includes later tool execution. An expired normal call fails that run; an
-expired compaction call records `compaction_failed` and continues with the
-uncompacted context.
+entire provider call without resetting. Every started request closes with a
+completed or failed event before the permit is released, so event order also
+reflects the configured concurrency. A normal failure emits `model_failed`
+before the enclosing `run_failed`. Each real compaction retry is a separate
+numbered attempt: invalid responses retain their reported input, output,
+cached-input, and reasoning usage in `compaction_failed`, and a successful
+`compaction_completed` carries the accepted attempt number. A compaction
+rejected by the context-window preflight has no started event, a null attempt,
+and no usage because no provider request occurred. Waiting for a permit does
+not emit a started event. A separate stream-idle interval covers response
+headers and the request opening that precedes them, then restarts after every
+valid SSE event, so a healthy long reasoning response can outlive one idle
+interval. Neither timer includes later tool execution. An expired normal call
+fails that run; an expired compaction call records `compaction_failed` and
+continues with the uncompacted context.
 
 ## Streaming
 

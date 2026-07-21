@@ -154,8 +154,10 @@ provider-reported input usage replaces that estimate whenever available. When
 the tracked context reaches the threshold, picoagent uses the
 same provider, model, system prompt, and frozen tool schemas for an additional
 request ending in the `compaction_request` user instruction. A tool-call or
-empty state is rejected and retried once, with each invalid attempt recorded as
-a compaction failure event. A request error leaves the existing context or
+empty state is rejected and retried once. Every real request has a numbered
+started event and a matching completed or failed event; invalid-attempt failures
+retain provider-reported usage. A preflight rejection has no started event and
+uses a null attempt because no request occurred. A request error leaves the existing context or
 compacted state in use. Before each model call, picoagent adds
 the configured output allowance and fails if the estimate is at or above
 `context_window_tokens`. This provider-neutral estimate is a safety check, not

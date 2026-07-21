@@ -324,8 +324,9 @@ be greater than `compact_at_tokens`; if compaction cannot reduce the estimate
 below it, the run fails locally. This is an early safety check, not a
 tokenizer-exact provider guarantee. Setting the window requires an explicit
 nonzero `runtime.max_output_tokens`; GeneralTask uses its separately configured
-profile limit. Start/completion/failure records remain in
-`events.jsonl`. Compatible Chat `reasoning_content` and replayable opaque
+profile limit. Start/completion/failure records remain in `events.jsonl`;
+compaction retries have numbered attempts, while a preflight rejection has no
+started event or attempt because no provider request occurred. Compatible Chat `reasoning_content` and replayable opaque
 provider items are included in the between-call estimate.
 
 The normal agent receives the `history_search` and `history_read` schemas from

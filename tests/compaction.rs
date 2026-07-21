@@ -293,6 +293,17 @@ async fn rejected_compaction_preflight_does_not_emit_started() {
     assert_eq!(count_events(&events, EventClass::Started), 0);
     assert_eq!(count_events(&events, EventClass::Completed), 0);
     assert_eq!(count_events(&events, EventClass::Failed), 1);
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        RuntimeEventKind::CompactionFailed {
+            attempt: None,
+            input_tokens: None,
+            output_tokens: None,
+            cached_input_tokens: None,
+            reasoning_tokens: None,
+            ..
+        }
+    )));
 }
 
 #[tokio::test]
@@ -532,6 +543,7 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
             output_tokens,
             cached_input_tokens,
             reasoning_tokens,
+            attempt,
         } => Some((
             state_message_ref,
             covered_through_message_ref,
@@ -540,6 +552,7 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
             output_tokens,
             cached_input_tokens,
             reasoning_tokens,
+            attempt,
         )),
         _ => None,
     });
@@ -553,6 +566,7 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
             &Some(9),
             &Some(21),
             &Some(4),
+            &1,
         ))
     );
 }
@@ -627,9 +641,11 @@ async fn compaction_tool_call_is_rejected_without_execution() {
     }));
 
     let events = load_events(&store, &result.run_id).await;
-    assert_eq!(count_events(&events, EventClass::Started), 1);
+    assert_eq!(count_events(&events, EventClass::Started), 2);
     assert_eq!(count_events(&events, EventClass::Completed), 0);
     assert_eq!(count_events(&events, EventClass::Failed), 2);
+    assert_eq!(compaction_attempts(&events, EventClass::Started), [1, 2]);
+    assert_eq!(compaction_attempts(&events, EventClass::Failed), [1, 2]);
     assert!(events.iter().any(|event| matches!(
         &event.kind,
         RuntimeEventKind::CompactionFailed { error, .. }
@@ -665,9 +681,23 @@ async fn compaction_retries_one_invalid_tool_call_response() {
     );
 
     let events = load_events(&store, &result.run_id).await;
-    assert_eq!(count_events(&events, EventClass::Started), 1);
+    assert_eq!(count_events(&events, EventClass::Started), 2);
     assert_eq!(count_events(&events, EventClass::Failed), 1);
     assert_eq!(count_events(&events, EventClass::Completed), 1);
+    assert_eq!(compaction_attempts(&events, EventClass::Started), [1, 2]);
+    assert_eq!(compaction_attempts(&events, EventClass::Failed), [1]);
+    assert_eq!(compaction_attempts(&events, EventClass::Completed), [2]);
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        RuntimeEventKind::CompactionFailed {
+            attempt: Some(1),
+            input_tokens: Some(42),
+            output_tokens: Some(10),
+            cached_input_tokens: None,
+            reasoning_tokens: None,
+            ..
+        }
+    )));
 }
 
 #[tokio::test]
@@ -776,4 +806,24 @@ fn count_events(events: &[RuntimeEvent], class: EventClass) -> usize {
             )
         })
         .count()
+}
+
+fn compaction_attempts(events: &[RuntimeEvent], class: EventClass) -> Vec<usize> {
+    events
+        .iter()
+        .filter_map(|event| match (&event.kind, class) {
+            (RuntimeEventKind::CompactionStarted { attempt, .. }, EventClass::Started)
+            | (RuntimeEventKind::CompactionCompleted { attempt, .. }, EventClass::Completed) => {
+                Some(*attempt)
+            }
+            (
+                RuntimeEventKind::CompactionFailed {
+                    attempt: Some(attempt),
+                    ..
+                },
+                EventClass::Failed,
+            ) => Some(*attempt),
+            _ => None,
+        })
+        .collect()
 }
