@@ -149,6 +149,14 @@ child does not immediately compact that inherited first request again.
 Pending-input ids are intentionally cleared because they are run-local
 steering idempotency keys, not model context.
 
+Inherited user messages retain applicable facts and constraints, but are
+background rather than active child instructions. The common stable system
+prompt gives the appended delegated task precedence over conflicting ancestor
+workflow, while the dynamic GeneralTask reminder only identifies the child and
+its paired task. A child therefore does not repeat ancestor orchestration,
+delegation, task control, or edits unless its own delegated task explicitly
+requires them; later direct steering may refine that scope.
+
 Once the frozen prefix is complete, child recovery validates and uses only its
 local run files; an interrupted partial copy can be completed from the recorded
 parent boundary. Fork inherits the parent's selected model. Provider-reported

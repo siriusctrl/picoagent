@@ -175,8 +175,10 @@ tools. See [ADR 0026](adr/0026-file-backed-planning-graphs.md).
 Delegate calls explicitly choose fresh isolation or a fork of the exact parent
 input before the assistant delegate turn. Forked siblings from one batch share
 that boundary, persist self-contained child trajectories, retain compaction and
-history semantics, and inherit the parent's selected model. Provider cache
-usage is observed rather than inferred. See
+history semantics, and inherit the parent's selected model. Inherited messages
+remain background with applicable facts and constraints; the appended
+delegated task takes precedence over conflicting ancestor workflow. Provider
+cache usage is observed rather than inferred. See
 [ADR 0025](adr/0025-fork-or-isolate-delegated-context.md).
 
 ## Conservative File Mutation

@@ -348,9 +348,11 @@ sequence, materializes that entire prefix in its own Chat-compatible message
 log, and then appends its child-specific reminder and task. Same-batch sibling
 calls resolve to the same boundary. Copying the durable trajectory rather than
 only the active projection preserves compaction/history behavior; run-local
-pending-input ids are cleared. A complete child snapshot no longer reads the
-parent on resume, while a partial snapshot may finish copying through its
-already-recorded boundary.
+pending-input ids are cleared. The stable system prompt defines inherited
+messages as background; the appended delegated task defines the child's
+immediate scope and takes precedence over conflicting ancestor workflow. A
+complete child snapshot no longer reads the parent on resume, while a partial
+snapshot may finish copying through its already-recorded boundary.
 
 The copied prefix remains byte-identical even when it references artifacts, so
 provider cache shape does not change. Before each inherited message commits,

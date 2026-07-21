@@ -40,6 +40,13 @@ the prefix and record reported usage without claiming a hit.
   Its first model request reuses the parent's exact active messages and adds
   only the child suffix; automatic compaction is deferred until after that
   first request.
+- Define fork scope in the common stable system prompt: inherited messages are
+  background that retains applicable facts and constraints. The appended
+  delegated task defines the child's immediate scope and takes precedence over
+  conflicting ancestor workflow. It must explicitly request any ancestor
+  orchestration, delegation, task control, or edits the child should perform;
+  later direct steering may refine that scope. Keep the dynamic GeneralTask
+  reminder limited to identifying the role and paired task.
 - Persist context mode and fork boundary in both task coordination and child
   run records. A complete child snapshot resumes without reading parent
   trajectory files. If copying stopped before the boundary, recovery validates

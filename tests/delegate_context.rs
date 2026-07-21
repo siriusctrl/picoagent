@@ -29,6 +29,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+const FORK_A_TASK: &str = "Inspect stage A only. Do not modify files or delegate.";
+const FORK_B_TASK: &str = "Inspect stage B only. Do not modify files or delegate.";
+
 #[derive(Default)]
 struct ForkCaptureProvider {
     root_run_id: Mutex<Option<String>>,
@@ -73,8 +76,8 @@ impl ModelProvider for ForkCaptureProvider {
 
         if !has_tool_result(&request, "fork-a") {
             return Ok(tool_response(vec![
-                delegate_call("fork-a", "fork_a", "fork task a", "fork"),
-                delegate_call("fork-b", "fork_b", "fork task b", "fork"),
+                delegate_call("fork-a", "fork_a", FORK_A_TASK, "fork"),
+                delegate_call("fork-b", "fork_b", FORK_B_TASK, "fork"),
                 delegate_call("fresh-c", "fresh_c", "fresh task c", "fresh"),
             ]));
         }
@@ -105,7 +108,9 @@ async fn fork_siblings_share_the_exact_pre_assistant_request_and_fresh_is_isolat
     );
 
     let parent = runner
-        .run(RunRequest::root("parent inherited context"))
+        .run(RunRequest::root(
+            "Implement the parent workflow: delegate all inspections and edit every failing file.",
+        ))
         .await
         .unwrap();
     assert_eq!(parent.final_output, "parent complete");
@@ -115,8 +120,8 @@ async fn fork_siblings_share_the_exact_pre_assistant_request_and_fresh_is_isolat
         .iter()
         .find(|request| request.run_id == parent.run_id && !has_tool_result(request, "fork-a"))
         .unwrap();
-    let fork_a = child_request(&requests, "fork task a");
-    let fork_b = child_request(&requests, "fork task b");
+    let fork_a = child_request(&requests, FORK_A_TASK);
+    let fork_b = child_request(&requests, FORK_B_TASK);
     let fresh = child_request(&requests, "fresh task c");
 
     assert_eq!(fork_a.model, parent_request.model);
@@ -141,6 +146,32 @@ async fn fork_siblings_share_the_exact_pre_assistant_request_and_fresh_is_isolat
         serialized(&fork_b.messages[..parent_request.messages.len()])
     );
     for child in [fork_a, fork_b] {
+        assert!(
+            child
+                .system
+                .contains("takes precedence over conflicting ancestor requests")
+        );
+        assert!(
+            child.system.contains(
+                "do not repeat ancestor orchestration, delegation, task-control, or edits"
+            )
+        );
+        let child_suffix = child.messages.last().unwrap();
+        assert_eq!(child_suffix.role, Role::User);
+        let [
+            MessageContent::RuntimeReminder { text: reminder },
+            MessageContent::Text {
+                text: delegated_task,
+            },
+        ] = child_suffix.content.as_slice()
+        else {
+            panic!("child suffix must pair its runtime reminder before the delegated task");
+        };
+        assert!(
+            reminder.contains("task text paired with this reminder defines your immediate scope")
+        );
+        assert!(reminder.contains("including prohibitions on edits or delegation"));
+        assert!(delegated_task == FORK_A_TASK || delegated_task == FORK_B_TASK);
         assert!(!child.messages.iter().any(|message| {
             message.content.iter().any(|content| {
                 matches!(content, MessageContent::ToolCall { id, .. } if id == "fork-a" || id == "fork-b")
@@ -150,7 +181,7 @@ async fn fork_siblings_share_the_exact_pre_assistant_request_and_fresh_is_isolat
     assert_eq!(fresh.messages.len(), 1);
     assert_eq!(fresh.model, "different-general-model");
     assert_eq!(last_user_text(fresh), "fresh task c");
-    assert!(!serialized(&fresh.messages).contains("parent inherited context"));
+    assert!(!serialized(&fresh.messages).contains("edit every failing file"));
 
     let children = child_runs(&store, &parent.run_id).await;
     assert_eq!(children.len(), 3);

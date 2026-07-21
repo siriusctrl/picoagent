@@ -47,9 +47,24 @@ mod tests {
 
         assert!(prompts.system.contains("workspace with the user"));
         assert!(!prompts.system.contains("workspace with\nthe user"));
+        assert!(
+            prompts
+                .system
+                .contains("takes precedence over conflicting ancestor requests")
+        );
+        assert!(
+            prompts.system.contains(
+                "do not repeat ancestor orchestration, delegation, task-control, or edits"
+            )
+        );
         assert!(prompts.compaction_request.contains("# Compacted state"));
         assert!(!prompts.compaction_request.ends_with('\n'));
         assert!(prompts.compaction_resume.contains("not a final answer"));
+        assert!(
+            prompts
+                .general_task
+                .contains("task text paired with this reminder defines your immediate scope")
+        );
     }
 
     #[test]

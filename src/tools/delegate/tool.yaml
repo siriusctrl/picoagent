@@ -18,7 +18,10 @@ input_schema:
       description: Short stable label for recognizing this task later
     prompt:
       type: string
-      description: Task objective and any task-specific context the subagent needs
+      description: >-
+        Exact child objective and any task-specific context it needs. For fork,
+        inherited parent workflow is background; repeat any orchestration the
+        child itself must perform
     context:
       type: string
       enum: [fork, fresh]
