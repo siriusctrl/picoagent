@@ -102,7 +102,7 @@ fn responses_input(messages: &[Message]) -> Value {
                             "type": "function_call",
                             "call_id": id,
                             "name": name,
-                            "arguments": arguments.to_string(),
+                            "arguments": arguments.as_raw(),
                         })),
                         MessageContent::ProviderItem { provider, item } if provider == "openai" => {
                             input.push(item.clone())
@@ -243,7 +243,7 @@ mod tests {
                     MessageContent::ToolCall {
                         id: "call_1".into(),
                         name: "read".into(),
-                        arguments: json!({"path": "README.md"}),
+                        arguments: json!({"path": "README.md"}).into(),
                     },
                 ],
             }],
@@ -272,7 +272,7 @@ mod tests {
                 MessageContent::ToolCall {
                     id: "call_1".into(),
                     name: "read".into(),
-                    arguments: json!({"path": "README.md"}),
+                    arguments: json!({"path": "README.md"}).into(),
                 },
             ],
         };

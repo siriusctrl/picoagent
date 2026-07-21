@@ -33,6 +33,9 @@ whose terminal bodies contain only complete artifact paths. The durable
 parent/child coordination and transcript-derived delivery decision here remain
 accepted.
 
+ADR 0030 later changes those bodies to the ordinary per-result
+inline/preview/artifact representation without changing durable coordination.
+
 ## Context
 
 Main runs need to survive process loss. Subagents use the same runner and have

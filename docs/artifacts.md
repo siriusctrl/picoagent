@@ -93,20 +93,27 @@ than an unbounded exception string in the next model request.
 
 ### Background delivery
 
-Every terminal background result is persisted as an artifact, including small
-completed values and failure, cancellation, or interruption details. The parent
-receives one batched runtime message per ready set. Each `<background_task>`
-body is only the workspace-relative artifact path; it does not contain a
-preview or the original output. This keeps the runtime message bounded and
-makes reading the artifact an explicit model choice.
+Terminal background results use the same independent result policy as
+foreground tools. Small UTF-8 output stays inline. Large, binary, and non-UTF-8
+output is preserved as an artifact and the terminal body contains the ordinary
+bounded `[Tool output]` envelope with its path, digest, byte counts, read
+instruction, and any safe head/tail preview. The parent receives one batched
+runtime message per ready set.
+
+Payload limiting happens before picoagent adds the `<background_task>` status
+wrapper. The wrapper, artifact metadata, and inspection instruction are never
+part of the preview budget. Inline payload text is XML-escaped in the native
+Chat message and decoded through its paired layout metadata, so output that
+contains runtime-like tags cannot escape its task block.
 
 If an image read exceeds the foreground window and becomes a background task,
-its terminal notice follows this artifact-only rule. Reading that artifact
-again attaches the image on demand.
+its binary result remains artifact-backed. Reading that artifact again attaches
+the image on demand.
 
 A status-less background notice is only a running acknowledgement and has no
-result artifact. A terminal notice includes `status` and pairs its path with the
-same `ArtifactRef` in `message_metadata.jsonl`.
+result metadata. A terminal notice includes `status`; when its result is
+artifact-backed, the same `ArtifactRef` is paired with that block in
+`message_metadata.jsonl`.
 
 ### History-query boundaries
 

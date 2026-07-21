@@ -33,6 +33,13 @@ call `TaskManager`, and `load_skill` calls `SkillRegistry`. Other stable model
 instructions live with the behavior that assembles them, such as
 `src/artifact/model-instruction.md`.
 
+When one call needs a structured aggregate rather than incremental mutation,
+the manifest may include a concise representative example in both its prose and
+JSON Schema. For example, `graph_init` accepts the complete initial node map in
+one call so Rust can validate dependency references and cycles before creating
+the graph file. Examples explain shape only; Rust remains authoritative for
+semantic validation.
+
 These are compile-time assets, not runtime overrides or dynamically discovered
 plugins. External executable tools integrate through MCP and keep their
 server-provided dynamic schemas rather than using local manifests.

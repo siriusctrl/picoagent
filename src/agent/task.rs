@@ -232,52 +232,6 @@ impl TaskManager {
         self.artifacts.persist_output(context, output).await
     }
 
-    pub(crate) async fn prepare_delivery(
-        &self,
-        records: &[BackgroundTaskRecord],
-    ) -> Result<Vec<BackgroundTaskRecord>> {
-        let mut prepared = Vec::with_capacity(records.len());
-        for record in records {
-            if !record.state.is_terminal() || record.result_metadata().artifact.is_some() {
-                prepared.push(record.clone());
-                continue;
-            }
-            let content = record.model_content();
-            let context = crate::tools::ToolContext {
-                run_id: self.parent_run_id.clone(),
-                call_id: format!("background-{}", record.id),
-                workspace: self.workspace.clone(),
-            };
-            let mut raw = crate::tools::RawToolOutput::text(content.clone());
-            raw.is_error = record.state != BackgroundTaskState::Completed;
-            let output = self.artifacts.persist_artifact(&context, raw).await?;
-            let artifact = output
-                .artifact
-                .clone()
-                .context("forced background result persistence produced no artifact")?;
-            self.events
-                .emit(&RuntimeEvent::new(
-                    &self.parent_run_id,
-                    RuntimeEventKind::ArtifactCreated {
-                        call_id: context.call_id,
-                        path: artifact.path.clone(),
-                        bytes: artifact.bytes,
-                    },
-                ))
-                .await?;
-            let updated = self
-                .update(&record.id, |stored| {
-                    stored.result = Some(record::BackgroundTaskOutput {
-                        content,
-                        metadata: output.result_metadata(),
-                    });
-                })
-                .await?;
-            prepared.push(updated);
-        }
-        Ok(prepared)
-    }
-
     async fn get(&self, task_id: &str) -> Result<BackgroundTaskRecord> {
         self.records
             .lock()
@@ -382,7 +336,7 @@ impl TaskManager {
 
     /// Capture one coherent model-request view of background work. A task that
     /// finishes after this snapshot remains in `active`, so the current request
-    /// cannot briefly forget it before the terminal artifact notice is appended
+    /// cannot briefly forget it before the terminal result notice is appended
     /// on the next loop iteration.
     pub(crate) async fn snapshot_for_request(
         &self,

@@ -15,6 +15,10 @@ ADR 0020 later unifies running and terminal model-facing notices and makes every
 terminal background result artifact-only. The parent-control decision remains
 accepted.
 
+ADR 0030 later replaces that artifact-only presentation with the ordinary
+per-result inline/preview/artifact policy. Parent-controlled delivery remains
+accepted.
+
 ## Context
 
 The original runtime bounded Root and GeneralTask runs with model-step counts and

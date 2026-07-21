@@ -172,6 +172,7 @@ fn encode_background_tasks(message: &Message, expected: &str) -> Result<Vec<Cont
         let start = cursor;
         let end = start + rendered.len();
         let content_start = start + content_offset;
+        let escaped_content = crate::model::runtime::escape_xml_text(content);
         layout.push(ContentLayout::BackgroundTask {
             task_id: task_id.clone(),
             name: name.clone(),
@@ -179,7 +180,7 @@ fn encode_background_tasks(message: &Message, expected: &str) -> Result<Vec<Cont
             start,
             end,
             content_start,
-            content_end: content_start + content.len(),
+            content_end: content_start + escaped_content.len(),
             metadata: metadata.clone(),
         });
         cursor = end;
@@ -332,7 +333,8 @@ fn decode_user(
                     start <= content_start && content_end <= end,
                     "background result content span lies outside its block"
                 );
-                let raw = span(text, content_start, content_end)?.to_owned();
+                let encoded = span(text, content_start, content_end)?;
+                let raw = crate::model::runtime::unescape_xml_text(encoded);
                 let expected = crate::model::runtime::render_background_task_block(
                     &task_id,
                     &name,
@@ -412,12 +414,12 @@ fn decode_assistant(
                     call.kind == ChatToolCallKind::Function,
                     "only function tool calls are supported"
                 );
-                let arguments = serde_json::from_str(&call.function.arguments)
-                    .context("parse Chat tool arguments as JSON")?;
                 Ok(MessageContent::ToolCall {
                     id: call.id.clone(),
                     name: call.function.name.clone(),
-                    arguments,
+                    arguments: crate::model::ToolArguments::from_raw(
+                        call.function.arguments.clone(),
+                    ),
                 })
             }
             ContentLayout::ProviderItem { provider, item } => {

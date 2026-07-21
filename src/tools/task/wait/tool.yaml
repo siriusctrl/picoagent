@@ -6,7 +6,8 @@ returns: >-
   JSON `{tasks:[{task_id,name,status}]}`. A task may still be queued or
   running when the bounded wait interval expires. Terminal content is not
   included here; it arrives separately as a terminal `<background_task>`
-  runtime notice containing the complete artifact path.
+  runtime notice. Small text is inline; larger or binary output uses the
+  ordinary bounded artifact envelope.
 input_schema:
   type: object
   properties:

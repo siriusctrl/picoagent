@@ -391,7 +391,7 @@ async fn model_transport_and_validation_failures_close_the_started_request() {
             .position(|event| {
                 matches!(
                     &event.kind,
-                    RuntimeEventKind::ModelFailed { step: 1, error }
+                    RuntimeEventKind::ModelFailed { step: 1, error, .. }
                         if error.contains(expected)
                 )
             })

@@ -480,6 +480,9 @@ fn compaction_input(
 }
 
 pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
+    if let Some(rendered) = crate::model::render_background_task_content(&message.content) {
+        return (rendered.len() as u64).div_ceil(4);
+    }
     let bytes = message
         .content
         .iter()
@@ -493,7 +496,7 @@ pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
                 id,
                 name,
                 arguments,
-            } => id.len() + name.len() + arguments.to_string().len(),
+            } => id.len() + name.len() + arguments.as_raw().len(),
             MessageContent::ToolResult {
                 call_id, content, ..
             } => call_id.len() + content.len(),
@@ -504,9 +507,13 @@ pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
                 status,
                 content,
                 ..
-            } => {
-                task_id.len() + name.len() + status.as_ref().map_or(0, String::len) + content.len()
-            }
+            } => crate::model::runtime::render_background_task_block(
+                task_id,
+                name,
+                status.as_deref(),
+                content,
+            )
+            .len(),
         })
         .sum::<usize>();
     (bytes as u64).div_ceil(4)
@@ -587,7 +594,7 @@ mod tests {
                 MessageContent::ToolCall {
                     id: "call-1".into(),
                     name: "bash".into(),
-                    arguments: json!({}),
+                    arguments: json!({}).into(),
                 },
             ),
             record(
@@ -606,7 +613,7 @@ mod tests {
                 MessageContent::ToolCall {
                     id: "call-2".into(),
                     name: "bash".into(),
-                    arguments: json!({}),
+                    arguments: json!({}).into(),
                 },
             ),
             record(
@@ -623,6 +630,27 @@ mod tests {
         let plan = plan_compaction(&trajectory, None, 160).unwrap().unwrap();
         assert_eq!(plan.first_kept.message_ref, "m4");
         assert_eq!(plan.covered_through.message_ref, "m3");
+    }
+
+    #[test]
+    fn background_result_estimate_counts_the_escaped_runtime_envelope() {
+        let message = Message {
+            role: Role::User,
+            content: vec![MessageContent::BackgroundTask {
+                task_id: "t1".into(),
+                name: "entity-heavy".into(),
+                status: Some("completed".into()),
+                content: "&<>".repeat(10_000),
+                metadata: crate::artifact::ResultMetadata::empty(),
+            }],
+        };
+        let rendered = crate::model::render_background_task_content(&message.content).unwrap();
+
+        assert_eq!(
+            estimate_message_tokens(&message),
+            (rendered.len() as u64).div_ceil(4)
+        );
+        assert!(rendered.len() > 100_000);
     }
 
     #[test]

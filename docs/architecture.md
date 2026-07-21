@@ -38,7 +38,9 @@ protocol. OAuth, API keys, SSE parsing, provider errors, and provider-specific
 cache hints stay behind this boundary. The runner owns the non-resetting model
 request deadline; streaming providers apply the per-call idle interval while
 opening the HTTP request through its response headers and before each next valid
-SSE event.
+SSE event. A protocol-signalled structurally incomplete normal response is
+discarded and retried once as a fresh request with an ephemeral tail reminder;
+ordinary transport and provider errors remain terminal for that run.
 
 Initial adapters:
 
@@ -96,7 +98,9 @@ capability contract without a dynamic spawn allowlist.
 
 The fixed built-ins also include `graph_init` and `graph_list`. Their shared
 run-local store allocates short `g<N>` YAML files without overwriting a graph
-during concurrent initialization. `graph_list` parses each file independently,
+during concurrent initialization. `graph_init` accepts the complete initial
+node map, validates references and acyclicity, and creates no file when the
+topology is invalid. `graph_list` parses each file independently,
 validates its DAG and terminal state, and derives ready nodes; one malformed
 file is reported as invalid rather than failing the entire listing. Full graph
 inspection and mutation stay with `read` and `write`. Execution stays with
@@ -140,6 +144,11 @@ runtime reminder text is part of the first user message's `content`, not a
 custom JSON variant. Assistant reasoning explicitly returned by a compatible
 endpoint uses the optional `reasoning_content` extension. This extension is not
 part of the official OpenAI Chat Completions schema.
+
+Assistant function-call `arguments` remain the exact provider string in this
+log, including malformed JSON. Parsing occurs only at the individual tool
+execution boundary. An invalid call receives an ordered `is_error` result while
+valid sibling calls from the same assistant message continue normally.
 
 Text-only user messages keep string `content`. User image messages use the
 native Chat content-part array with text followed by `image_url` data URLs;
@@ -210,9 +219,10 @@ result. For an automatically promoted direct call, the running acknowledgement
 fills the original provider `tool_call_id` slot with a status-less runtime
 notice. Later completion is a new user/runtime message correlated by `task_id`,
 never a second tool result with the same provider call id. One message batches
-all terminal records ready at that boundary. Each terminal body is only its
-complete artifact path; internal task state, not model-facing XML, retains the
-originating call id and task kind.
+all terminal records ready at that boundary. Each terminal body follows the
+ordinary independent inline/preview/artifact policy; the XML status wrapper is
+added and escaped afterward. Internal task state, not model-facing XML, retains
+the originating call id and task kind.
 
 Before every normal provider request, the runner snapshots nonterminal tasks in
 stable task-id order and adds their id, name, and queued/running state to a
@@ -220,7 +230,7 @@ synthetic runtime reminder. The reminder tells the model not to delegate work
 that is already represented there, exposes no child run id, and is never
 appended to the trajectory. The snapshot is refreshed after any compaction
 call: tasks that completed during compaction first receive their ordinary
-terminal artifact notice and are omitted from the active list. At a compacted
+terminal result notice and are omitted from the active list. At a compacted
 boundary, the active-task section shares the existing synthetic continuation
 reminder instead of adding another runtime-reminder message.
 
@@ -239,10 +249,11 @@ call id internally; resume never replays the call.
 Large foreground tool outputs are never discarded and do not enter the live
 context in full. The store writes the complete bytes, records immutable
 metadata, and gives the model a bounded beginning/end preview and a relative
-path it can inspect in pages. Terminal background output is artifact-only even
-when small, so batched notices remain bounded. Each result is limited
-independently; earlier output and compaction do not change later representation.
-See [artifacts.md](artifacts.md).
+path it can inspect in pages. Terminal background output uses the same policy:
+small UTF-8 output stays inline and larger or binary output keeps the bounded
+artifact envelope. Each result is limited independently; earlier output and
+compaction do not change later representation. See
+[artifacts.md](artifacts.md).
 
 For immediate image reads, the runner commits every tool result from the batch
 first, in assistant call order, then commits one user attachment message. This

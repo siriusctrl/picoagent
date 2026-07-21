@@ -181,7 +181,7 @@ async fn resume_marks_incomplete_tool_calls_interrupted_without_reexecution() {
             &Message::assistant(vec![MessageContent::ToolCall {
                 id: "side-effect-call".to_owned(),
                 name: "side_effect".to_owned(),
-                arguments: json!({}),
+                arguments: json!({}).into(),
             }]),
         )
         .await
@@ -217,6 +217,129 @@ async fn resume_marks_incomplete_tool_calls_interrupted_without_reexecution() {
             ..
         }] if metadata.artifact.is_none() && !content.is_empty()
     ));
+}
+
+struct MalformedResumeProvider(Arc<AtomicUsize>);
+
+#[async_trait]
+impl ModelProvider for MalformedResumeProvider {
+    fn name(&self) -> &str {
+        "malformed-resume"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        let recovered = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|content| {
+                matches!(
+                    content,
+                    MessageContent::ToolResult {
+                        call_id,
+                        content,
+                        is_error: true,
+                        ..
+                    } if call_id == "malformed-call"
+                        && content.contains("tool arguments are not valid JSON")
+                        && !content.contains("side effects are unknown")
+                )
+            });
+        if !recovered {
+            bail!("resume omitted the deterministic malformed-argument result");
+        }
+        Ok(text_response("malformed recovered", ModelUsage::default()))
+    }
+}
+
+#[tokio::test]
+async fn resume_reconstructs_malformed_arguments_without_running_the_tool() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let provider = Arc::new(MalformedResumeProvider(Arc::new(AtomicUsize::new(0))));
+    store
+        .create_run(
+            &RunRecord::new(
+                "resume-malformed",
+                "resume malformed",
+                provider.name(),
+                "scripted",
+                workspace.path().to_path_buf(),
+                None,
+            )
+            .with_provider_resume_fingerprint(provider.resume_fingerprint()),
+        )
+        .await
+        .unwrap();
+    store
+        .update_state("resume-malformed", RunState::Running)
+        .await
+        .unwrap();
+    store
+        .append_message(
+            "resume-malformed",
+            &Message::text(Role::User, "resume malformed"),
+        )
+        .await
+        .unwrap();
+    store
+        .append_message(
+            "resume-malformed",
+            &Message::assistant(vec![MessageContent::ToolCall {
+                id: "malformed-call".to_owned(),
+                name: "side_effect".to_owned(),
+                arguments: picoagent::model::ToolArguments::from_raw("{\"value\":"),
+            }]),
+        )
+        .await
+        .unwrap();
+    let executions = Arc::new(AtomicUsize::new(0));
+    let mut tools = ToolRegistry::default();
+    tools
+        .register(Arc::new(CountingTool(executions.clone())))
+        .unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: provider.clone(),
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_path_buf(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::new(ArtifactPolicy {
+            inline_limit_bytes: 1,
+            preview_head_bytes: 256,
+            preview_tail_bytes: 64,
+        }),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions::default(),
+    });
+
+    let result = runner.resume("resume-malformed").await.unwrap();
+    assert_eq!(result.final_output, "malformed recovered");
+    assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+    let messages = store.load_messages(&result.run_id).await.unwrap();
+    let metadata = messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|content| match content {
+            MessageContent::ToolResult {
+                call_id, metadata, ..
+            } if call_id == "malformed-call" => Some(metadata),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        metadata.artifact.as_ref().unwrap().call_id,
+        "malformed-call"
+    );
 }
 
 struct CompletedPromotionRecoveryProvider;
@@ -269,8 +392,7 @@ impl ModelProvider for CompletedPromotionRecoveryProvider {
                         ..
                     } if task_id == "t1"
                         && status.as_deref() == Some("completed")
-                        && content.starts_with(".pico/runs/")
-                        && content.contains("/artifacts/background-t1-")
+                        && content == "completed output"
                 )
             });
         if !delivered {
@@ -319,7 +441,7 @@ async fn resume_reconstructs_a_missing_promotion_ack_from_its_terminal_task() {
             &Message::assistant(vec![MessageContent::ToolCall {
                 id: "promoted-call".to_owned(),
                 name: "side_effect".to_owned(),
-                arguments: json!({}),
+                arguments: json!({}).into(),
             }]),
         )
         .await
@@ -668,7 +790,7 @@ impl ModelProvider for FileProducingProvider {
                 vec![ToolCall {
                     id: "small-call".to_owned(),
                     name: "small_output".to_owned(),
-                    arguments: json!({}),
+                    arguments: json!({}).into(),
                 }],
                 ModelUsage::default(),
             ))
@@ -676,7 +798,7 @@ impl ModelProvider for FileProducingProvider {
             let call = ToolCall {
                 id: "large-call".to_owned(),
                 name: "large_output".to_owned(),
-                arguments: json!({}),
+                arguments: json!({}).into(),
             };
             Ok(ModelResponse::new(
                 Message::assistant(vec![
@@ -844,12 +966,16 @@ impl ModelProvider for DelegatingProvider {
                     ToolCall {
                         id: "delegate-one".to_owned(),
                         name: "delegate".to_owned(),
-                        arguments: json!({"name": "child_one", "prompt": "child one", "context": "fresh"}),
+                        arguments:
+                            json!({"name": "child_one", "prompt": "child one", "context": "fresh"})
+                                .into(),
                     },
                     ToolCall {
                         id: "delegate-two".to_owned(),
                         name: "delegate".to_owned(),
-                        arguments: json!({"name": "child_two", "prompt": "child two", "context": "fresh"}),
+                        arguments:
+                            json!({"name": "child_two", "prompt": "child two", "context": "fresh"})
+                                .into(),
                     },
                 ],
                 ModelUsage::default(),
@@ -960,28 +1086,34 @@ async fn subagents_reuse_the_runner_and_report_failed_children() {
             )
         })
     }));
-    for (path, artifact) in messages
+    let terminal_results = messages
         .iter()
         .flat_map(|message| &message.content)
         .filter_map(|content| match content {
             MessageContent::BackgroundTask {
-                status: Some(_),
+                status: Some(status),
                 content,
                 metadata,
                 ..
-            } => Some((content, metadata.artifact.as_ref())),
+            } => Some((
+                status.as_str(),
+                content.as_str(),
+                metadata.artifact.as_ref(),
+            )),
             _ => None,
         })
-    {
-        let artifact = artifact.expect("terminal task notice omitted artifact metadata");
-        assert_eq!(path, &artifact.path);
-        assert!(path.contains("/artifacts/background-t"));
-        assert!(!path.contains("delegate-one") && !path.contains("delegate-two"));
-        let body = tokio::fs::read_to_string(workspace.path().join(path))
-            .await
-            .unwrap();
-        assert!(!body.is_empty());
-    }
+        .collect::<Vec<_>>();
+    assert!(
+        terminal_results
+            .iter()
+            .all(|(_, _, artifact)| artifact.is_none())
+    );
+    assert!(terminal_results.iter().any(|(status, content, _)| {
+        *status == "completed" && content.contains("done: child one")
+    }));
+    assert!(terminal_results.iter().any(|(status, content, _)| {
+        *status == "failed" && content.contains("scripted child failure")
+    }));
     assert!(Path::new(&store.paths(&parent.run_id).final_output).is_file());
 }
 
@@ -1019,7 +1151,9 @@ impl ModelProvider for LastStepBackgroundProvider {
                 vec![ToolCall {
                     id: "delegate-edge".to_owned(),
                     name: "delegate".to_owned(),
-                    arguments: json!({"name": "slow_child", "prompt": "slow child", "context": "fresh"}),
+                    arguments:
+                        json!({"name": "slow_child", "prompt": "slow child", "context": "fresh"})
+                            .into(),
                 }],
                 ModelUsage::default(),
             ));
@@ -1125,7 +1259,7 @@ impl ModelProvider for WaitingProvider {
                 vec![ToolCall {
                     id: "wait-call".to_owned(),
                     name: "task_wait".to_owned(),
-                    arguments: json!({"task_ids": [task_id]}),
+                    arguments: json!({"task_ids": [task_id]}).into(),
                 }],
                 ModelUsage::default(),
             ));
@@ -1134,7 +1268,7 @@ impl ModelProvider for WaitingProvider {
             vec![ToolCall {
                 id: "slow-call".to_owned(),
                 name: "slow_output".to_owned(),
-                arguments: json!({}),
+                arguments: json!({}).into(),
             }],
             ModelUsage::default(),
         ))
@@ -1256,7 +1390,7 @@ impl ModelProvider for LongLoopProvider {
                 vec![ToolCall {
                     id: format!("long-call-{call}"),
                     name: "side_effect".to_owned(),
-                    arguments: json!({}),
+                    arguments: json!({}).into(),
                 }],
                 ModelUsage::default(),
             ));
@@ -1367,7 +1501,7 @@ impl ModelProvider for SteeringProvider {
                 vec![ToolCall {
                     id: "child-gate-call".to_owned(),
                     name: "steering_gate".to_owned(),
-                    arguments: json!({}),
+                    arguments: json!({}).into(),
                 }],
                 ModelUsage::default(),
             ));
@@ -1408,7 +1542,7 @@ impl ModelProvider for SteeringProvider {
                 vec![ToolCall {
                     id: "wait-steered-child".to_owned(),
                     name: "task_wait".to_owned(),
-                    arguments: json!({"task_ids": [task_id]}),
+                    arguments: json!({"task_ids": [task_id]}).into(),
                 }],
                 ModelUsage::default(),
             ));
@@ -1426,7 +1560,8 @@ impl ModelProvider for SteeringProvider {
                     arguments: json!({
                         "task_id": task_id,
                         "message": "take the steered path"
-                    }),
+                    })
+                    .into(),
                 }],
                 ModelUsage::default(),
             ));
@@ -1435,7 +1570,7 @@ impl ModelProvider for SteeringProvider {
             vec![ToolCall {
                 id: "delegate-steered-child".to_owned(),
                 name: "delegate".to_owned(),
-                arguments: json!({"name": "steer_target", "prompt": "child steer target", "context": "fresh"}),
+                arguments: json!({"name": "steer_target", "prompt": "child steer target", "context": "fresh"}).into(),
             }],
             ModelUsage::default(),
         ))
@@ -1543,12 +1678,12 @@ impl ModelProvider for FailingParentProvider {
                 ToolCall {
                     id: "hanging-call-1".to_owned(),
                     name: "hanging".to_owned(),
-                    arguments: json!({}),
+                    arguments: json!({}).into(),
                 },
                 ToolCall {
                     id: "hanging-call-2".to_owned(),
                     name: "hanging".to_owned(),
-                    arguments: json!({}),
+                    arguments: json!({}).into(),
                 },
             ],
             ModelUsage::default(),

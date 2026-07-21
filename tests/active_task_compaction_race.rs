@@ -195,7 +195,7 @@ async fn task_finishing_during_compaction_is_delivered_without_a_stale_active_re
         .expect("terminal task notice must be included after compaction");
     assert_eq!(terminal.0, "compaction review");
     assert_eq!(terminal.1.as_deref(), Some("completed"));
-    assert!(terminal.2.starts_with(".pico/runs/"));
+    assert_eq!(terminal.2, "child completed during compaction");
 }
 
 fn tool_response(id: &str, name: &str, arguments: serde_json::Value) -> ModelResponse {
@@ -203,7 +203,7 @@ fn tool_response(id: &str, name: &str, arguments: serde_json::Value) -> ModelRes
         Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: name.to_owned(),
-            arguments,
+            arguments: arguments.into(),
         }]),
         ModelUsage {
             input_tokens: Some(1_000),

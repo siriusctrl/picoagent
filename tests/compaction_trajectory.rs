@@ -141,7 +141,7 @@ fn tool_call_response(id: &str, label: &str, input_tokens: u64) -> ModelResponse
         Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: "marker".to_owned(),
-            arguments: json!({"label": label}),
+            arguments: json!({"label": label}).into(),
         }]),
         ModelUsage {
             input_tokens: Some(input_tokens),
@@ -161,7 +161,7 @@ fn history_tool_call_response(
         Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: name.to_owned(),
-            arguments,
+            arguments: arguments.into(),
         }]),
         ModelUsage {
             input_tokens: Some(input_tokens),

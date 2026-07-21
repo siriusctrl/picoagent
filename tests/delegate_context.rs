@@ -248,7 +248,7 @@ impl ModelProvider for InvalidContextProvider {
                 Message::assistant(vec![MessageContent::ToolCall {
                     id: "invalid-delegate".to_owned(),
                     name: "delegate".to_owned(),
-                    arguments: json!({"name": "missing_context", "prompt": "must not run"}),
+                    arguments: json!({"name": "missing_context", "prompt": "must not run"}).into(),
                 }]),
                 ModelUsage::default(),
             ))
@@ -378,12 +378,12 @@ impl ModelProvider for CompactedForkProvider {
             0 => Ok(tool_response(vec![ToolCall {
                 id: "old-marker".to_owned(),
                 name: "marker".to_owned(),
-                arguments: json!({"label": "old"}),
+                arguments: json!({"label": "old"}).into(),
             }])),
             1 => Ok(tool_response(vec![ToolCall {
                 id: "new-marker".to_owned(),
                 name: "marker".to_owned(),
-                arguments: json!({"label": "new"}),
+                arguments: json!({"label": "new"}).into(),
             }])),
             2 => {
                 *self.delegate_input.lock().unwrap() = Some(request);
@@ -611,7 +611,7 @@ fn delegate_call(id: &str, name: &str, prompt: &str, context: &str) -> ToolCall 
     ToolCall {
         id: id.to_owned(),
         name: "delegate".to_owned(),
-        arguments: json!({"name": name, "prompt": prompt, "context": context}),
+        arguments: json!({"name": name, "prompt": prompt, "context": context}).into(),
     }
 }
 

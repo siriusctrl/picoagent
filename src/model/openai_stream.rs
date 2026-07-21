@@ -68,14 +68,26 @@ pub(crate) async fn complete_response(
 }
 
 fn reject_failure_event(event_type: &str, value: &Value) -> Result<()> {
-    if matches!(
-        event_type,
-        "error" | "response.error" | "response.failed" | "response.incomplete"
-    ) {
+    if event_type == "response.incomplete" {
+        let reason = value
+            .pointer("/response/incomplete_details/reason")
+            .and_then(Value::as_str)
+            .unwrap_or("response.incomplete");
+        if matches!(reason, "max_output_tokens" | "max_tokens" | "length") {
+            let mut usage = ModelUsage::default();
+            if let Some(value) = value.pointer("/response/usage") {
+                merge_usage(&mut usage, value);
+            }
+            return Err(super::common::incomplete_response_with_usage(
+                "OpenAI", reason, usage,
+            ));
+        }
+        bail!("OpenAI response incomplete: {reason}")
+    }
+    if matches!(event_type, "error" | "response.error" | "response.failed") {
         let message = value
             .pointer("/error/message")
             .or_else(|| value.pointer("/response/error/message"))
-            .or_else(|| value.pointer("/response/incomplete_details/reason"))
             .or_else(|| value.get("message"))
             .and_then(Value::as_str)
             .unwrap_or("response did not complete");
@@ -99,6 +111,7 @@ struct OpenAiAccumulator {
     usage: ModelUsage,
     provider_items: BTreeMap<usize, MessageContent>,
     completed: bool,
+    incomplete_reason: Option<String>,
 }
 
 impl OpenAiAccumulator {
@@ -225,10 +238,13 @@ impl OpenAiAccumulator {
             .pointer("/choices/0/finish_reason")
             .and_then(Value::as_str)
         {
-            if !matches!(reason, "stop" | "tool_calls" | "function_call") {
-                bail!("OpenAI chat response stopped with `{reason}` before completion");
+            match reason {
+                "stop" | "tool_calls" | "function_call" => self.completed = true,
+                "length" | "max_tokens" | "max_output_tokens" => {
+                    self.incomplete_reason = Some(format!("finish_reason={reason}"));
+                }
+                _ => bail!("OpenAI chat stopped with finish_reason={reason}"),
             }
-            self.completed = true;
         }
         let mut emitted = Vec::new();
         if let Some(text) = delta
@@ -267,8 +283,19 @@ impl OpenAiAccumulator {
     }
 
     fn finish(self, protocol: OpenAiProtocol) -> Result<ModelResponse> {
+        if let Some(reason) = self.incomplete_reason {
+            return Err(super::common::incomplete_response_with_usage(
+                "OpenAI chat",
+                reason,
+                self.usage,
+            ));
+        }
         if !self.completed {
-            bail!("OpenAI stream ended before a completion event");
+            return Err(super::common::incomplete_response_with_usage(
+                "OpenAI",
+                "stream ended without a completion event",
+                self.usage,
+            ));
         }
         if protocol == OpenAiProtocol::ChatCompletions {
             let mut assistant_content = Vec::new();
@@ -283,7 +310,7 @@ impl OpenAiAccumulator {
                 });
             }
             for builder in self.tools.into_values() {
-                let call = builder.finish()?;
+                let call = builder.finish();
                 assistant_content.push(MessageContent::ToolCall {
                     id: call.id.clone(),
                     name: call.name.clone(),
@@ -303,7 +330,7 @@ impl OpenAiAccumulator {
             }
         }
         for (index, builder) in self.tools {
-            let call = builder.finish()?;
+            let call = builder.finish();
             assistant_items.insert(
                 index,
                 MessageContent::ToolCall {
@@ -367,5 +394,64 @@ mod tests {
             response.assistant.content[1],
             MessageContent::ToolCall { .. }
         ));
+    }
+
+    #[test]
+    fn output_limit_and_missing_terminal_events_are_repairable_incomplete_errors() {
+        let responses_error = reject_failure_event(
+            "response.incomplete",
+            &json!({
+                "response": {
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "usage": {"input_tokens": 100, "output_tokens": 20, "input_tokens_details": {"cached_tokens": 80}}
+                }
+            }),
+        )
+        .unwrap_err();
+        assert!(super::super::is_incomplete_response(&responses_error));
+        let usage = super::super::incomplete_response_usage(&responses_error).unwrap();
+        assert_eq!(usage.input_tokens, Some(100));
+        assert_eq!(usage.output_tokens, Some(20));
+        assert_eq!(usage.cached_input_tokens, Some(80));
+
+        let mut chat = OpenAiAccumulator::default();
+        chat.handle_chat(&json!({
+            "choices": [{"delta": {}, "finish_reason": "length"}]
+        }))
+        .unwrap();
+        chat.handle_chat(&json!({
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 30,
+                "prompt_tokens_details": {"cached_tokens": 120}
+            }
+        }))
+        .unwrap();
+        let chat_error = chat.finish(OpenAiProtocol::ChatCompletions).unwrap_err();
+        assert!(super::super::is_incomplete_response(&chat_error));
+        let usage = super::super::incomplete_response_usage(&chat_error).unwrap();
+        assert_eq!(usage.input_tokens, Some(200));
+        assert_eq!(usage.output_tokens, Some(30));
+        assert_eq!(usage.cached_input_tokens, Some(120));
+
+        let eof_error = OpenAiAccumulator::default()
+            .finish(OpenAiProtocol::Responses)
+            .unwrap_err();
+        assert!(super::super::is_incomplete_response(&eof_error));
+
+        let filter_error = reject_failure_event(
+            "response.incomplete",
+            &json!({"response": {"incomplete_details": {"reason": "content_filter"}}}),
+        )
+        .unwrap_err();
+        assert!(!super::super::is_incomplete_response(&filter_error));
+        let mut filtered_chat = OpenAiAccumulator::default();
+        let Err(filter_error) = filtered_chat.handle_chat(&json!({
+            "choices": [{"delta": {}, "finish_reason": "content_filter"}]
+        })) else {
+            panic!("content_filter unexpectedly completed")
+        };
+        assert!(!super::super::is_incomplete_response(&filter_error));
     }
 }

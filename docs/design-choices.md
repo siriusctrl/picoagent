@@ -136,19 +136,35 @@ ordinary user tasks. See [ADR 0028](adr/0028-stable-cross-tool-workflow.md).
 ## Uniform Background Delivery
 
 Delegated children and promoted tools use one runtime notice shape. A
-status-less task block means work is running; a terminal block contains only
-the complete result artifact path. Ready terminal tasks share one runtime
-message, and internal kind or provider call ids stay out of model-facing XML.
+status-less task block means work is running; a terminal block adds status
+around the same independently bounded inline-or-artifact result used by
+foreground tools. Ready terminal tasks share one runtime message, and internal
+kind or provider call ids stay out of model-facing XML. Payload limiting happens
+before the runtime wrapper, whose structure and instructions are never clipped.
 Each normal request also receives a non-durable snapshot of active task ids,
 names, and states so compaction cannot make the model forget already delegated
 work. A post-compaction refresh delivers newly terminal artifacts first; when a
 compaction continuation reminder already exists, both dynamic sections share
 that one synthetic message.
 
-Rejected: separate start/result protocols, inline terminal previews, one
-runtime message per ready task, and persisting repeated active-state snapshots.
-See
-[ADR 0020](adr/0020-unify-background-task-runtime-notices.md).
+Rejected: separate start/result protocols, forcing every small result through a
+second artifact read, one runtime message per ready task, and persisting
+repeated active-state snapshots. See
+[ADR 0030](adr/0030-uniform-foreground-and-background-results.md).
+
+## Recover Model Output At Narrow Boundaries
+
+OpenAI-compatible tool arguments remain exact provider strings in durable
+messages and are parsed only when that one tool executes. Malformed JSON becomes
+an ordered error result for its own call, so valid siblings still run and the
+model can correct the call on its next turn. Separately, a provider-signalled
+structurally incomplete assistant response gets one fresh repair request with
+an ephemeral tail reminder; partial content is neither persisted nor executed,
+and provider-reported usage for that discarded attempt stays observable.
+
+Rejected: parsing tool arguments while assembling the whole assistant response,
+blindly retrying transport errors, and persisting partial assistant text. See
+[ADR 0029](adr/0029-recover-incomplete-model-output.md).
 
 ## Artifact-First Tool Output
 

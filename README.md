@@ -144,19 +144,38 @@ provider description and owns validation, assembly, and execution.
 
 ## File-backed Planning Graphs
 
-For a complex task, `graph_init` creates a short run-local path such as
-`.pico/runs/<run-id>/graphs/g1.yaml`. The graph is durable coordination state,
-not a scheduler: nodes are work items, dependencies are accepted-outcome
-dependencies, and a node is resolved only when the main agent writes a
-resolution. Use ordinary `read` and `write` for the complete file, then call
-`graph_list` to validate it and derive ready nodes. Execute independent ready
-work with concurrent `delegate` calls and supervise those runs with the existing
-task controls; task ids are not stored in the graph.
+For a complex task, `graph_init` accepts the goal and complete initial node map,
+validates the DAG, and creates a short run-local path such as
+`.pico/runs/<run-id>/graphs/g1.yaml`. Invalid initialization creates no file.
+The graph is durable coordination state, not a scheduler: nodes are work items,
+dependencies are accepted-outcome dependencies, and a node is resolved only
+when the main agent writes a resolution. Use ordinary `read` and `write` for
+later revisions, then call `graph_list` to validate them and derive ready nodes.
+Execute independent ready work with concurrent `delegate` calls and supervise
+those runs with the existing task controls; task ids are not stored in the
+graph.
 
-Tool calls within one assistant response run concurrently. Therefore graph
-updates are a three-turn dependency chain: complete `write`, call `graph_list`
-only after receiving that result, and issue dependent `delegate` calls only
-after receiving the validated listing. Do not batch dependent stages together.
+```json
+{
+  "goal": "Implement and verify image input support",
+  "nodes": {
+    "inspect_api": {
+      "objective": "Determine the provider request contract",
+      "depends_on": []
+    },
+    "implement": {
+      "objective": "Implement the accepted contract",
+      "depends_on": ["inspect_api"]
+    }
+  }
+}
+```
+
+Tool calls within one assistant response run concurrently. Therefore later
+graph updates are a three-turn dependency chain: complete `write`, call
+`graph_list` only after receiving that result, and issue dependent `delegate`
+calls only after receiving the validated listing. Do not batch dependent stages
+together.
 
 ```yaml
 version: 1

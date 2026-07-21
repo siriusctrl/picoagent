@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -30,6 +30,7 @@ pub use super::types::{AgentRunnerConfig, RunRequest, RunResult, RunnerOptions};
 
 mod fork;
 mod lifecycle;
+mod model_request;
 mod recovery;
 
 use lifecycle::RunMode;
@@ -257,6 +258,9 @@ impl AgentRunner {
                     &run_id,
                     &mut trajectory,
                     &task_manager,
+                    &self.artifacts,
+                    &events,
+                    &self.workspace,
                 )
                 .await?;
                 let resumed_inputs = self
@@ -287,7 +291,6 @@ impl AgentRunner {
                             &self.store,
                             &run_id,
                             &mut trajectory,
-                            &task_manager,
                             &ready,
                         )
                         .await?;
@@ -310,7 +313,6 @@ impl AgentRunner {
                         &self.store,
                         &run_id,
                         &mut trajectory,
-                        &task_manager,
                         &ready,
                     )
                     .await?;
@@ -356,7 +358,6 @@ impl AgentRunner {
                     &self.store,
                     &run_id,
                     &mut trajectory,
-                    &task_manager,
                     &ready,
                 )
                 .await?;
@@ -384,20 +385,10 @@ impl AgentRunner {
                     }
                 }
 
-                let model_permit = self
-                    .model_slots
-                    .acquire()
-                    .await
-                    .context("model concurrency limiter closed")?;
-                events
-                    .emit(&RuntimeEvent::new(
+                let response = self
+                    .complete_model_step(
                         &run_id,
-                        RuntimeEventKind::ModelStarted { step },
-                    ))
-                    .await?;
-                let response = tokio::time::timeout(
-                    Duration::from_secs(self.options.model_request_deadline_seconds),
-                    self.provider.complete(
+                        step,
                         ModelRequest {
                             run_id: run_id.clone(),
                             model: model.clone(),
@@ -405,77 +396,14 @@ impl AgentRunner {
                             messages: active_messages,
                             tools: tool_specs.clone(),
                             max_output_tokens,
-                            stream_idle_timeout: Duration::from_secs(
+                            stream_idle_timeout: std::time::Duration::from_secs(
                                 self.options.model_stream_idle_timeout_seconds,
                             ),
                         },
                         events.clone(),
-                    ),
-                )
-                .await;
-                fork_first_request_pending = false;
-                let response = match response {
-                    Ok(Ok(response)) => response,
-                    Ok(Err(error)) => {
-                        let error = error
-                            .context(format!("{} model call failed", self.provider.name()));
-                        events
-                            .emit(&RuntimeEvent::new(
-                                &run_id,
-                                RuntimeEventKind::ModelFailed {
-                                    step,
-                                    error: format!("{error:#}"),
-                                },
-                            ))
-                            .await?;
-                        drop(model_permit);
-                        return Err(error);
-                    }
-                    Err(_) => {
-                        let error = anyhow::anyhow!(
-                            "{} model request deadline exceeded {} seconds",
-                            self.provider.name(),
-                            self.options.model_request_deadline_seconds
-                        );
-                        events
-                            .emit(&RuntimeEvent::new(
-                                &run_id,
-                                RuntimeEventKind::ModelFailed {
-                                    step,
-                                    error: error.to_string(),
-                                },
-                            ))
-                            .await?;
-                        drop(model_permit);
-                        return Err(error);
-                    }
-                };
-                if let Err(error) = response.validate_completed() {
-                    events
-                        .emit(&RuntimeEvent::new(
-                            &run_id,
-                            RuntimeEventKind::ModelFailed {
-                                step,
-                                error: format!("{error:#}"),
-                            },
-                        ))
-                        .await?;
-                    drop(model_permit);
-                    return Err(error);
-                }
-                events
-                    .emit(&RuntimeEvent::new(
-                        &run_id,
-                        RuntimeEventKind::ModelCompleted {
-                            step,
-                            input_tokens: response.usage.input_tokens,
-                            output_tokens: response.usage.output_tokens,
-                            cached_input_tokens: response.usage.cached_input_tokens,
-                            reasoning_tokens: response.usage.reasoning_tokens,
-                        },
-                    ))
+                    )
                     .await?;
-                drop(model_permit);
+                fork_first_request_pending = false;
                 let final_text = response.text();
                 let tool_calls = response.tool_calls();
                 let assistant_message = response.assistant;
@@ -508,7 +436,6 @@ impl AgentRunner {
                             &self.store,
                             &run_id,
                             &mut trajectory,
-                            &task_manager,
                             &ready,
                         )
                         .await?;

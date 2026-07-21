@@ -46,6 +46,9 @@ to `messages.jsonl`.
   background-delivery contract. A later `read` of that image artifact attaches
   it on demand.
 
+ADR 0030 later generalizes background delivery to the ordinary per-result
+policy; image bytes remain artifact-backed because they are binary.
+
 ## Consequences
 
 - The model receives actual image inputs rather than large textual base64, and

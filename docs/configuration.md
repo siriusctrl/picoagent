@@ -125,7 +125,12 @@ wait/foreground limits must be greater than zero.
 
 The OpenAI-compatible adapter additionally retries initial HTTP 429 responses
 up to three times with bounded exponential backoff. It does not retry a partial
-stream or non-rate-limit provider error. A resumable run records a non-secret
+stream at the HTTP layer or a non-rate-limit provider error. The agent runner
+does make one new request when a supported protocol explicitly reports a
+structurally incomplete response; the discarded partial response is never
+persisted or executed, while any provider-reported usage remains in its
+`model_failed` event. Filtering, refusal, and unknown stop reasons are not part
+of this retry path. A resumable run records a non-secret
 fingerprint of wire-critical provider settings. Changing the compatible
 endpoint, Chat/Responses protocol, reasoning effort, OAuth inference endpoint,
 or Anthropic version requires a new run rather than replaying provider state
@@ -223,10 +228,9 @@ lower than the foreground window. `task_stop` performs cancellation.
 already-running direct calls are not paused when they are promoted. On Unix,
 cancelling `bash` terminates its process-group descendants too.
 
-All terminal background tool and child results are artifacts regardless of
-size. Their runtime notices carry only the complete path, so successful output
-and failure, cancellation, or interruption details stay out of the parent
-context until the model reads them.
+Terminal background tool and child results use the configured per-result
+artifact limits just like foreground tools. Small UTF-8 output stays inline;
+larger or binary output is preserved behind the bounded artifact envelope.
 
 ## Artifacts
 

@@ -207,7 +207,8 @@ fn anthropic_message(message: &Message) -> Value {
                         name,
                         arguments,
                     } => {
-                        json!({"type": "tool_use", "id": id, "name": name, "input": arguments})
+                        let input = arguments.parse().unwrap_or_else(|_| serde_json::json!({}));
+                        json!({"type": "tool_use", "id": id, "name": name, "input": input})
                     }
                     MessageContent::RuntimeReminder { .. }
                     | MessageContent::Image { .. }
@@ -332,13 +333,21 @@ impl AnthropicAccumulator {
                 }
             }
             "message_delta" => {
-                if let Some(reason) = value.pointer("/delta/stop_reason").and_then(Value::as_str)
-                    && !matches!(reason, "end_turn" | "tool_use" | "stop_sequence")
-                {
-                    bail!("Anthropic response stopped with `{reason}` before completion");
-                }
                 if let Some(usage) = value.get("usage") {
                     merge_usage(&mut self.usage, usage);
+                }
+                if let Some(reason) = value.pointer("/delta/stop_reason").and_then(Value::as_str) {
+                    match reason {
+                        "end_turn" | "tool_use" | "stop_sequence" => {}
+                        "max_tokens" => {
+                            return Err(super::common::incomplete_response_with_usage(
+                                "Anthropic",
+                                format!("stop_reason={reason}"),
+                                self.usage.clone(),
+                            ));
+                        }
+                        _ => bail!("Anthropic stopped with stop_reason={reason}"),
+                    }
                 }
             }
             "message_stop" => self.completed = true,
@@ -349,7 +358,11 @@ impl AnthropicAccumulator {
 
     fn finish(self) -> Result<ModelResponse> {
         if !self.completed {
-            bail!("Anthropic stream ended before `message_stop`");
+            return Err(super::common::incomplete_response_with_usage(
+                "Anthropic",
+                "stream ended without `message_stop`",
+                self.usage,
+            ));
         }
         let mut content = BTreeMap::new();
         for (index, text) in self.texts {
@@ -358,7 +371,7 @@ impl AnthropicAccumulator {
             }
         }
         for (index, builder) in self.tools {
-            let call = builder.finish()?;
+            let call = builder.finish();
             content.insert(
                 index,
                 MessageContent::ToolCall {
@@ -387,6 +400,35 @@ mod tests {
         let debug = format!("{options:?}");
         assert!(!debug.contains("anthropic-secret-token"));
         assert!(debug.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn output_limit_and_missing_message_stop_are_repairable_incomplete_errors() {
+        let mut accumulator = AnthropicAccumulator::default();
+        let stop_error = accumulator
+            .handle(
+                "message_delta",
+                &serde_json::json!({
+                    "delta": {"stop_reason": "max_tokens"},
+                    "usage": {"input_tokens": 50, "output_tokens": 12}
+                }),
+            )
+            .unwrap_err();
+        assert!(super::super::is_incomplete_response(&stop_error));
+        let usage = super::super::incomplete_response_usage(&stop_error).unwrap();
+        assert_eq!(usage.input_tokens, Some(50));
+        assert_eq!(usage.output_tokens, Some(12));
+
+        let eof_error = AnthropicAccumulator::default().finish().unwrap_err();
+        assert!(super::super::is_incomplete_response(&eof_error));
+
+        let filter_error = AnthropicAccumulator::default()
+            .handle(
+                "message_delta",
+                &serde_json::json!({"delta": {"stop_reason": "refusal"}}),
+            )
+            .unwrap_err();
+        assert!(!super::super::is_incomplete_response(&filter_error));
     }
 
     fn request_with(messages: Vec<Message>, tools: Vec<ToolSpec>) -> ModelRequest {
@@ -428,12 +470,12 @@ mod tests {
                         MessageContent::ToolCall {
                             id: "call-1".into(),
                             name: "read".into(),
-                            arguments: json!({"path": "one"}),
+                            arguments: json!({"path": "one"}).into(),
                         },
                         MessageContent::ToolCall {
                             id: "call-2".into(),
                             name: "read".into(),
-                            arguments: json!({"path": "two"}),
+                            arguments: json!({"path": "two"}).into(),
                         },
                     ],
                 },

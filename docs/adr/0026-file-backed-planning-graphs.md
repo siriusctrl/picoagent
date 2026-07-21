@@ -4,6 +4,10 @@
 - Date: 2026-07-21
 - Refines: ADR 0017 (complex-task planning remains separate from task execution)
 
+ADR 0031 later refines initialization: `graph_init` receives and validates the
+complete initial topology before creating the file. File-backed revision,
+validation, readiness, and separation from task execution remain accepted.
+
 ## Context
 
 Long tasks benefit from a durable dependency graph that the main agent can

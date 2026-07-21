@@ -90,7 +90,7 @@ pub(crate) fn project_chat_message(message: &Message) -> ChatMessage {
                         kind: ChatToolCallKind::Function,
                         function: ChatFunctionCall {
                             name: name.clone(),
-                            arguments: arguments.to_string(),
+                            arguments: arguments.as_raw().to_owned(),
                         },
                     }),
                     _ => None,
@@ -230,7 +230,7 @@ mod tests {
                 MessageContent::ToolCall {
                     id: "call_1".into(),
                     name: "read".into(),
-                    arguments: json!({"path": "README.md"}),
+                    arguments: json!({"path": "README.md"}).into(),
                 },
             ],
         });

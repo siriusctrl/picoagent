@@ -167,7 +167,7 @@ fn tool_call_response_with_usage(id: &str, label: &str, input_tokens: u64) -> Mo
         Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: "marker".to_owned(),
-            arguments: json!({"label": label}),
+            arguments: json!({"label": label}).into(),
         }]),
         ModelUsage {
             input_tokens: Some(input_tokens),

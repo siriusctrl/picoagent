@@ -1,6 +1,6 @@
 use std::fmt;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,9 @@ pub mod openai_compatible;
 pub mod openai_oauth;
 
 pub use anthropic_compatible::{AnthropicCompatibleOptions, AnthropicCompatibleProvider};
+#[cfg(test)]
+pub(crate) use common::incomplete_response_with_usage;
+pub(crate) use common::{incomplete_response_usage, is_incomplete_response};
 pub use openai_compatible::{OpenAiCompatibleOptions, OpenAiCompatibleProvider, OpenAiProtocol};
 pub use openai_oauth::{
     DEFAULT_OPENAI_OAUTH_BASE_URL, DeviceCode, OAuthCredentials, OpenAiOAuthOptions,
@@ -87,7 +90,7 @@ pub enum MessageContent {
     ToolCall {
         id: String,
         name: String,
-        arguments: Value,
+        arguments: ToolArguments,
     },
     ToolResult {
         call_id: String,
@@ -103,8 +106,8 @@ pub enum MessageContent {
     BackgroundTask {
         task_id: String,
         name: String,
-        /// Terminal state when this notice carries a result artifact. A
-        /// status-less notice only reports that the task remains active.
+        /// Terminal state when this notice carries a result. A status-less
+        /// notice only reports that the task remains active.
         status: Option<String>,
         content: String,
         metadata: ResultMetadata,
@@ -211,7 +214,41 @@ pub struct ToolSpec {
 pub struct ToolCall {
     pub id: String,
     pub name: String,
-    pub arguments: Value,
+    pub arguments: ToolArguments,
+}
+
+/// Exact provider function-call arguments.
+///
+/// OpenAI-compatible protocols carry arguments as a JSON-encoded string. Keep
+/// that string intact in the durable assistant message and parse it only at the
+/// execution boundary. An empty string has the protocol-compatible `{}`
+/// meaning there; any malformed nonempty value becomes an ordinary tool error
+/// instead of aborting the model response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct ToolArguments(String);
+
+impl ToolArguments {
+    pub fn from_raw(raw: impl Into<String>) -> Self {
+        Self(raw.into())
+    }
+
+    pub fn as_raw(&self) -> &str {
+        &self.0
+    }
+
+    pub fn parse(&self) -> Result<Value> {
+        if self.0.trim().is_empty() {
+            return Ok(serde_json::json!({}));
+        }
+        serde_json::from_str(&self.0).context("tool arguments are not valid JSON")
+    }
+}
+
+impl From<Value> for ToolArguments {
+    fn from(value: Value) -> Self {
+        Self(value.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

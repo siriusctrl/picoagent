@@ -16,7 +16,7 @@ use picoagent::{
     hooks::HookPipeline,
     model::{
         Message, MessageContent, ModelModality, ModelProvider, ModelRequest, ModelResponse,
-        ModelUsage, Role, ToolCall,
+        ModelUsage, Role, ToolArguments, ToolCall,
     },
     storage::RunDirStore,
     tools::{RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
@@ -50,7 +50,7 @@ fn calls(specs: &[(&str, &str, u64)]) -> Vec<ToolCall> {
         .map(|(call_id, label, delay_ms)| ToolCall {
             id: (*call_id).to_owned(),
             name: "scheduled".to_owned(),
-            arguments: json!({"label": label, "delay_ms": delay_ms}),
+            arguments: json!({"label": label, "delay_ms": delay_ms}).into(),
         })
         .collect()
 }
@@ -210,6 +210,135 @@ async fn direct_batch_finishes_early_but_commits_in_original_call_order() {
     assert_eq!(completed_call_ids, ["call-fast", "call-slow"]);
 }
 
+struct ArgumentTool(Arc<AtomicUsize>);
+
+#[async_trait]
+impl Tool for ArgumentTool {
+    fn spec(&self) -> picoagent::model::ToolSpec {
+        picoagent::model::ToolSpec {
+            name: "argument_tool".to_owned(),
+            description: "Return the supplied label".to_owned(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(RawToolOutput::text(
+            arguments["label"].as_str().unwrap().to_owned(),
+        ))
+    }
+}
+
+struct MalformedBatchProvider {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl ModelProvider for MalformedBatchProvider {
+    fn name(&self) -> &str {
+        "malformed-batch"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        match self.calls.fetch_add(1, Ordering::SeqCst) {
+            0 => Ok(tool_response(vec![
+                ToolCall {
+                    id: "valid-one".to_owned(),
+                    name: "argument_tool".to_owned(),
+                    arguments: json!({"label": "one"}).into(),
+                },
+                ToolCall {
+                    id: "malformed".to_owned(),
+                    name: "argument_tool".to_owned(),
+                    arguments: ToolArguments::from_raw("{\"label\":"),
+                },
+                ToolCall {
+                    id: "valid-three".to_owned(),
+                    name: "argument_tool".to_owned(),
+                    arguments: json!({"label": "three"}).into(),
+                },
+            ])),
+            1 => {
+                let results = request
+                    .messages
+                    .iter()
+                    .flat_map(|message| &message.content)
+                    .filter_map(|content| match content {
+                        MessageContent::ToolResult {
+                            call_id,
+                            content,
+                            is_error,
+                            ..
+                        } => Some((call_id.as_str(), content.as_str(), *is_error)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                ensure!(
+                    results.len() == 3
+                        && results[0] == ("valid-one", "one", false)
+                        && results[1].0 == "malformed"
+                        && results[1].1.contains("tool arguments are not valid JSON")
+                        && results[1].2
+                        && results[2] == ("valid-three", "three", false),
+                    "malformed call did not remain a local ordered tool error: {results:?}"
+                );
+                Ok(text_response("recovered malformed call"))
+            }
+            call => anyhow::bail!("unexpected model call {call}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_arguments_fail_only_their_own_call_and_preserve_raw_text() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let executions = Arc::new(AtomicUsize::new(0));
+    let mut tools = ToolRegistry::default();
+    tools
+        .register(Arc::new(ArgumentTool(executions.clone())))
+        .unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(MalformedBatchProvider {
+            calls: AtomicUsize::new(0),
+        }),
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_owned(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions::default(),
+    });
+
+    let result = runner
+        .run(RunRequest::root("execute every call"))
+        .await
+        .unwrap();
+    assert_eq!(result.final_output, "recovered malformed call");
+    assert_eq!(executions.load(Ordering::SeqCst), 2);
+    let messages = store.load_messages(&result.run_id).await.unwrap();
+    let raw = messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|content| match content {
+            MessageContent::ToolCall { id, arguments, .. } if id == "malformed" => {
+                Some(arguments.as_raw())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(raw, "{\"label\":");
+}
+
 struct ImageTool;
 
 #[async_trait]
@@ -250,12 +379,12 @@ impl ModelProvider for ImageBatchProvider {
                 ToolCall {
                     id: "image-one".into(),
                     name: "image".into(),
-                    arguments: json!({"label": "one"}),
+                    arguments: json!({"label": "one"}).into(),
                 },
                 ToolCall {
                     id: "image-two".into(),
                     name: "image".into(),
-                    arguments: json!({"label": "two"}),
+                    arguments: json!({"label": "two"}).into(),
                 },
             ])),
             1 => {
@@ -375,7 +504,7 @@ impl ModelProvider for TextOnlyImageReadProvider {
                 Ok(tool_response(vec![ToolCall {
                     id: "read-image".into(),
                     name: "read".into(),
-                    arguments: json!({"path": "image.png"}),
+                    arguments: json!({"path": "image.png"}).into(),
                 }]))
             }
             1 => {
@@ -502,9 +631,8 @@ impl ModelProvider for PartialPromotionProvider {
                 ensure!(
                     background.len() == 1
                         && background[0].0 == expected
-                        && background[0].1.starts_with(".pico/runs/")
-                        && background[0].1.contains("/artifacts/background-t1-"),
-                    "background result did not reference its complete artifact: {background:?}"
+                        && background[0].1 == "background",
+                    "small background result did not stay inline: {background:?}"
                 );
                 ensure!(
                     tool_results(&request)

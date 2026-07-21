@@ -190,9 +190,11 @@ into the parent exactly once.
 A status-less `<background_task>` tool result means only that work is running.
 At a later model boundary, terminal records are grouped in one
 `<runtime-reminder>` user message. Each terminal block includes its task id,
-name, and status, while the body is only the workspace-relative path to the
-complete result artifact. Completed output and failure, cancellation, or
-interruption details all use this same artifact-only delivery path.
+name, and status. Its payload follows the ordinary per-result policy: small
+UTF-8 text stays inline, while large or binary output uses the bounded
+`[Tool output]` artifact envelope. The runtime block is added after payload
+limiting and its text is XML-escaped, so status, artifact metadata, read
+instructions, and closing tags cannot be clipped or forged by task output.
 
 The CLI resumes the parent, not a child id. Parent recovery owns durable
 GeneralTask child reconciliation, which avoids two processes racing to advance
@@ -207,8 +209,9 @@ a call acquires a permit, the corresponding `model_started` or
 entire provider call without resetting. Every started request closes with a
 completed or failed event before the permit is released, so event order also
 reflects the configured concurrency. A normal failure emits `model_failed`
-before the enclosing `run_failed`. Each real compaction retry is a separate
-numbered attempt: invalid responses retain their reported input, output,
+before the enclosing `run_failed`; when a discarded incomplete response reports
+usage, that failure retains its input, output, cached-input, and reasoning
+counts. Each real compaction retry is a separate numbered attempt: invalid responses retain their reported input, output,
 cached-input, and reasoning usage in `compaction_failed`, and a successful
 `compaction_completed` carries the accepted attempt number. A compaction
 rejected by the context-window preflight has no started event, a null attempt,
@@ -219,6 +222,16 @@ valid SSE event, so a healthy long reasoning response can outlive one idle
 interval. Neither timer includes later tool execution. An expired normal call
 fails that run; an expired compaction call records `compaction_failed` and
 continues with the uncompacted context.
+
+If a provider explicitly reports a structurally incomplete normal response
+(for example, an output-token stop or a stream ending without its terminal
+event), picoagent discards that partial assistant content and makes one repair
+request. The second request reuses the same system prompt, frozen tools, and
+existing messages with one non-durable runtime reminder appended at the tail.
+Each real request emits its own started/failed or started/completed lifecycle,
+including provider-reported usage for the discarded attempt when available.
+Transport, authentication, filtering/refusal, malformed SSE, deadline, and
+other provider errors do not use this repair path.
 
 ## Streaming
 

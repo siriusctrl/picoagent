@@ -11,6 +11,9 @@ name, and terminal bodies contain only complete artifact paths. The concurrent
 batch, foreground-window, task-control, and recovery decisions here remain
 accepted.
 
+ADR 0030 later replaces that artifact-only body with the ordinary per-result
+inline/preview/artifact policy. The shared tag and batching remain accepted.
+
 ADR 0022 later specifies that native image inputs follow the complete ordered
 tool-result batch in one user message. The concurrency and correlation decisions
 here remain accepted.

@@ -113,8 +113,8 @@ async fn chat_stream_reassembles_fragmented_tool_arguments_and_supplies_missing_
         "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"content\":\"\"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"first\"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"content\":\"checking \"}}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"pa\"}}]}}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"th\\\":\\\"README.md\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\n  \\\"pa\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"th\\\": \\\"README.md\\\"\\n}\"}}]}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
         "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":8,\"completion_tokens_details\":{\"reasoning_tokens\":7}}}\n\n",
         "data: [DONE]\n\n",
@@ -149,7 +149,14 @@ async fn chat_stream_reassembles_fragmented_tool_arguments_and_supplies_missing_
     assert_eq!(tool_calls.len(), 1);
     assert!(tool_calls[0].id.starts_with("call_"));
     assert_eq!(tool_calls[0].name, "read");
-    assert_eq!(tool_calls[0].arguments["path"], "README.md");
+    assert_eq!(
+        tool_calls[0].arguments.as_raw(),
+        "{\n  \"path\": \"README.md\"\n}"
+    );
+    assert_eq!(
+        tool_calls[0].arguments.parse().unwrap()["path"],
+        "README.md"
+    );
     assert_eq!(response.text(), "checking ");
     assert_eq!(response.usage.reasoning_tokens, Some(7));
     assert!(matches!(
@@ -167,6 +174,39 @@ async fn chat_stream_reassembles_fragmented_tool_arguments_and_supplies_missing_
     let recorded = events.0.lock().expect("recording lock poisoned");
     assert_eq!(recorded.reasoning, ["inspect ", "first"]);
     assert_eq!(recorded.text, ["checking "]);
+}
+
+#[tokio::test]
+async fn chat_accepts_malformed_tool_arguments_as_a_completed_assistant_message() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_bad\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAiCompatibleProvider::new(
+        format!("{}/v1", server.uri()),
+        "test-key",
+        OpenAiProtocol::ChatCompletions,
+    );
+    let response = provider
+        .complete(request(), Arc::new(NoopEventSink))
+        .await
+        .expect("malformed tool arguments belong to tool execution, not response assembly");
+    let call = &response.tool_calls()[0];
+    assert_eq!(call.id, "call_bad");
+    assert_eq!(call.arguments.as_raw(), "{\"path\":");
+    assert!(call.arguments.parse().is_err());
 }
 
 #[tokio::test]
@@ -304,7 +344,10 @@ async fn anthropic_stream_reassembles_fragmented_tool_input() {
 
     assert_eq!(response.text(), "checking");
     assert_eq!(response.tool_calls()[0].name, "bash");
-    assert_eq!(response.tool_calls()[0].arguments["command"], "cargo test");
+    assert_eq!(
+        response.tool_calls()[0].arguments.parse().unwrap()["command"],
+        "cargo test"
+    );
     assert_eq!(response.usage.input_tokens, Some(9));
     assert_eq!(response.usage.output_tokens, Some(7));
     assert_eq!(response.usage.cached_input_tokens, Some(3));
@@ -504,6 +547,7 @@ async fn chat_rejects_length_finish_reason() {
     let body = concat!(
         "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\n",
         "data: [DONE]\n\n",
     );
     Mock::given(method("POST"))

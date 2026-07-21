@@ -1,45 +1,22 @@
 name: graph_init
 description: |-
-  Initialize one durable planning graph for the current run. A graph records
-  work-item topology and accepted outcomes; it does not execute work or track
-  tasks. The new YAML starts with empty nodes. Use `write` to produce this exact
-  shape:
+  Initialize and validate one complete planning topology for the current run.
+  A graph records work items and accepted outcomes; it does not execute work or
+  track tasks. Supply every initial node in this call. For example:
 
-  version: 1
-  status: wip
-  goal: >-
-    Overall outcome.
-  nodes:
-    inspect_api:
-      objective: >-
-        Determine the API contract.
-      depends_on: []
-      resolution:
-        summary: >-
-          Accepted outcome.
-        evidence:
-          - .pico/runs/<run-id>/artifacts/result.txt
-    implement:
-      objective: >-
-        Implement the accepted contract.
-      depends_on: [inspect_api]
-      resolution: null
+    {"goal":"Ship the API","nodes":{"inspect":{"objective":"Determine the API contract","depends_on":[]},"implement":{"objective":"Implement the accepted contract","depends_on":["inspect"]},"verify":{"objective":"Run the required tests","depends_on":["implement"]}}}
 
-  Node ids are non-empty YAML mapping keys without boundary whitespace.
-  Resolution stays null until the main agent accepts a non-empty summary;
-  evidence is an optional list of project-relative paths without `..`. Use
-  `graph_list` to validate the file and discover ready nodes, `delegate` to
-  execute independent work, and task controls to supervise it. Because tool
-  calls in one assistant batch execute concurrently, perform a graph `write`,
-  inspect the subsequent `graph_list` result, and issue dependent `delegate`
-  calls in separate assistant turns; never batch dependent stages. Finish with
-  top-level `status: completed` plus non-empty `summary` after every node is
-  resolved and the goal's required verification has succeeded, or `status:
-  aborted` plus non-empty `abort_reason`; omit both terminal fields while
-  status is `wip`.
+  Node ids are non-empty mapping keys without boundary whitespace. Dependencies
+  must name nodes in this same call, may not repeat, and must form a DAG. The
+  created version-1 YAML is `wip`, with every resolution set to null. Revise it
+  later with `write`; use `graph_list` to validate and derive ready nodes,
+  `delegate` to execute independent work, and task controls to supervise it.
+  Because one assistant tool-call batch is concurrent, graph writes,
+  validation, and dependent delegations belong in separate turns.
 returns: >-
   JSON containing the short run-local graph `id`, project-relative YAML `path`,
-  and initial `wip` status. Read or write that path with ordinary file tools.
+  `wip` status, resolved/unresolved counts, and initially ready node ids. An
+  invalid topology returns a tool error and creates no file.
 input_schema:
   type: object
   properties:
@@ -47,6 +24,36 @@ input_schema:
       type: string
       minLength: 1
       description: Concise overall outcome the graph should coordinate
+    nodes:
+      type: object
+      minProperties: 1
+      description: Complete initial node map keyed by stable node id
+      additionalProperties:
+        type: object
+        properties:
+          objective:
+            type: string
+            minLength: 1
+          depends_on:
+            type: array
+            items:
+              type: string
+            uniqueItems: true
+        required:
+          - objective
+          - depends_on
+        additionalProperties: false
   required:
     - goal
+    - nodes
+  examples:
+    - goal: Ship the API
+      nodes:
+        inspect:
+          objective: Determine the API contract
+          depends_on: []
+        implement:
+          objective: Implement the accepted contract
+          depends_on:
+            - inspect
   additionalProperties: false

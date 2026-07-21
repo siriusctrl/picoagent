@@ -7,7 +7,8 @@ description: >-
 returns: >-
   A status-less `<background_task>` runtime notice with the task id and name.
   This only acknowledges background execution. A later terminal notice carries
-  the complete result artifact path.
+  a small textual result inline or the ordinary bounded artifact envelope for
+  larger or binary output.
 input_schema:
   type: object
   properties:

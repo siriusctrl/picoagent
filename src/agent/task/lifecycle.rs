@@ -74,7 +74,7 @@ impl TaskManager {
             workspace: self.workspace.clone(),
         };
         let raw = RawToolOutput {
-            content: format!("background task `{name}` failed: {error}").into_bytes(),
+            content: error.as_bytes().to_vec(),
             source_path: None,
             media_type: "text/plain; charset=utf-8".to_owned(),
             is_error: true,

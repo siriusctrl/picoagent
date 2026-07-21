@@ -170,8 +170,7 @@ async fn resume_recovers_delegate_ack_child_and_delivery_exactly_once() {
         .collect::<Vec<_>>();
     assert_eq!(terminal.len(), 1);
     assert_eq!(terminal[0].0, "completed");
-    assert!(terminal[0].1.starts_with(".pico/runs/"));
-    assert!(workspace.path().join(terminal[0].1).is_file());
+    assert_eq!(terminal[0].1, "child result");
 
     let task: serde_json::Value = serde_json::from_slice(
         &tokio::fs::read(store.paths(PARENT_RUN_ID).directory.join("tasks/t1.json"))
@@ -235,7 +234,8 @@ async fn create_crash_window(
                     "name": "inspect_child",
                     "prompt": "child work",
                     "context": "fresh"
-                }),
+                })
+                .into(),
             }]),
         )
         .await

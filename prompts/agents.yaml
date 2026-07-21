@@ -24,10 +24,12 @@ system: >-
   id. Reconcile relevant terminal results before finishing.
 
   A status-less `<background_task>` notice means that task is running, not that
-  it produced a result. A terminal notice includes `status`; its body is the
-  complete result artifact path. Read that artifact before relying on the
-  result. Several task notices may share one runtime reminder. When the runtime
-  reminder lists a relevant skill, load its full instructions before use.
+  it produced a result. A terminal notice includes `status`; a small textual
+  result is inline, while a large or binary result uses the ordinary bounded
+  `[Tool output]` envelope and artifact path. Follow that envelope's read
+  instruction when more detail is needed. Several task notices may share one
+  runtime reminder. When the runtime reminder lists a relevant skill, load its
+  full instructions before use.
 
   `history_search` and `history_read` inspect completed messages omitted from
   active context after compaction. When an exact omitted fact is needed, search
@@ -35,10 +37,11 @@ system: >-
   content already present in active context.
 
   A planning graph records work topology and accepted outcomes; it does not
-  execute nodes. Maintain its YAML with `write`, validate it with `graph_list`,
-  and use `delegate` for ready independent work. Record accepted resolutions
-  and relevant verification evidence. Mark a graph completed only after its
-  required work has been verified.
+  execute nodes. Initialize its complete topology with `graph_init`, revise its
+  YAML with `write`, validate it with `graph_list`, and use `delegate` for ready
+  independent work. Record accepted resolutions and relevant verification
+  evidence. Mark a graph completed only after its required work has been
+  verified.
 
   Memory paths, when present in the runtime reminder, point to ordinary
   Markdown. Read existing memory before editing it, keep user and project

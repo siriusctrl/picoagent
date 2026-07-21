@@ -99,7 +99,19 @@ async fn graph_tools_initialize_validate_and_reuse_file_tools_for_mutation() {
     let initialized = init
         .execute(
             context(workspace.path(), "graph-init"),
-            json!({"goal": "Inspect and implement graph support"}),
+            json!({
+                "goal": "Inspect and implement graph support",
+                "nodes": {
+                    "inspect": {
+                        "objective": "Inspect existing behavior",
+                        "depends_on": []
+                    },
+                    "implement": {
+                        "objective": "Implement the design",
+                        "depends_on": ["inspect"]
+                    }
+                }
+            }),
         )
         .await
         .unwrap();
@@ -107,18 +119,23 @@ async fn graph_tools_initialize_validate_and_reuse_file_tools_for_mutation() {
     let path = initialized["path"].as_str().unwrap();
     assert_eq!(path, ".pico/runs/run-1/graphs/g1.yaml");
 
-    let skeleton = read
+    let initial_graph = read
         .execute(
             context(workspace.path(), "graph-read"),
             json!({"path": path}),
         )
         .await
         .unwrap();
-    assert!(
-        String::from_utf8(skeleton.content)
-            .unwrap()
-            .contains("nodes: {}")
-    );
+    let initial_graph = String::from_utf8(initial_graph.content).unwrap();
+    assert!(initial_graph.contains("inspect:"));
+    assert!(initial_graph.contains("depends_on:") && initial_graph.contains("- inspect"));
+    let initial_listing = list
+        .execute(context(workspace.path(), "graph-list-initial"), json!({}))
+        .await
+        .unwrap();
+    let initial_listing: serde_json::Value =
+        serde_json::from_slice(&initial_listing.content).unwrap();
+    assert_eq!(initial_listing["wip"][0]["ready"], json!(["inspect"]));
 
     write
         .execute(

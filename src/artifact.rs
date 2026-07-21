@@ -142,9 +142,8 @@ impl ArtifactStore {
         self.persist_output_inner(context, output, false).await
     }
 
-    /// Persist a complete result even when it would normally fit inline.
-    /// Background task delivery uses this so its terminal notice can remain a
-    /// small, stable artifact reference.
+    /// Persist complete bytes even when they would normally fit inline.
+    /// Fork snapshots use this to make inherited references self-contained.
     pub async fn persist_artifact(
         &self,
         context: &ToolContext,

@@ -5,6 +5,11 @@
 - Refines: ADR 0017 (background acknowledgement and delivery protocol)
 - Refines: ADR 0018 (terminal background result presentation)
 
+ADR 0030 later replaces the artifact-only terminal body decision with the same
+per-result inline/preview/artifact policy used by foreground tools. The shared
+runtime tag, batching, task-id correlation, and hidden internal ids remain
+accepted.
+
 ## Context
 
 Delegated children and automatically promoted tools shared durable task state,

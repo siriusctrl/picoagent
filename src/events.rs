@@ -51,6 +51,10 @@ pub enum RuntimeEventKind {
     ModelFailed {
         step: usize,
         error: String,
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        cached_input_tokens: Option<u64>,
+        reasoning_tokens: Option<u64>,
     },
     CompactionStarted {
         state_message_ref: String,

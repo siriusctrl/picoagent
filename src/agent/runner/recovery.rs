@@ -1,11 +1,13 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 
 use crate::{
-    artifact::ResultMetadata,
+    artifact::{ArtifactStore, ResultMetadata},
+    events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
     model::{Message, MessageContent, Role},
     storage::{RunDirStore, RunState},
+    tools::ToolContext,
     trajectory::TrajectoryMessage,
 };
 
@@ -97,25 +99,21 @@ pub(super) async fn append_background_results(
     store: &RunDirStore,
     run_id: &str,
     trajectory: &mut Vec<TrajectoryMessage>,
-    tasks: &TaskManager,
     records: &[BackgroundTaskRecord],
 ) -> Result<u64> {
     if records.is_empty() {
         return Ok(0);
     }
-    let records = tasks.prepare_delivery(records).await?;
     let content = records
         .iter()
         .map(|record| {
             let (status, content, metadata) = if record.state.is_terminal() {
                 let metadata = record.result_metadata();
-                let path = metadata
-                    .artifact
-                    .as_ref()
-                    .context("terminal background task is missing its result artifact")?
-                    .path
-                    .clone();
-                (Some(record.status().to_owned()), path, metadata)
+                (
+                    Some(record.status().to_owned()),
+                    record.model_content(),
+                    metadata,
+                )
             } else {
                 (
                     None,
@@ -123,15 +121,15 @@ pub(super) async fn append_background_results(
                     ResultMetadata::empty(),
                 )
             };
-            Ok(MessageContent::BackgroundTask {
+            MessageContent::BackgroundTask {
                 task_id: record.id.clone(),
                 name: record.name.clone(),
                 status,
                 content,
                 metadata,
-            })
+            }
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
     let message = Message {
         role: Role::User,
         content,
@@ -147,6 +145,9 @@ pub(super) async fn append_interrupted_tool_results(
     run_id: &str,
     trajectory: &mut Vec<TrajectoryMessage>,
     tasks: &TaskManager,
+    artifacts: &ArtifactStore,
+    events: &SharedEventSink,
+    workspace: &Path,
 ) -> Result<()> {
     let Some(assistant_index) = trajectory
         .iter()
@@ -172,6 +173,46 @@ pub(super) async fn append_interrupted_tool_results(
         .filter(|call| !completed.contains(call.id.as_str()))
         .collect::<Vec<_>>();
     for call in missing {
+        if let Err(error) = call.arguments.parse() {
+            let error = error.context("the tool was not executed");
+            let context = ToolContext {
+                run_id: run_id.to_owned(),
+                call_id: call.id.clone(),
+                workspace: workspace.to_owned(),
+            };
+            let output = artifacts
+                .persist_output(
+                    &context,
+                    crate::agent::tool_execution::failed_tool_output(
+                        &call.name,
+                        &format!("{error:#}"),
+                    ),
+                )
+                .await?;
+            if let Some(artifact) = &output.artifact {
+                events
+                    .emit(&RuntimeEvent::new(
+                        run_id,
+                        RuntimeEventKind::ArtifactCreated {
+                            call_id: call.id.clone(),
+                            path: artifact.path.clone(),
+                            bytes: artifact.bytes,
+                        },
+                    ))
+                    .await?;
+            }
+            let message = Message {
+                role: Role::Tool,
+                content: vec![MessageContent::ToolResult {
+                    call_id: call.id,
+                    content: output.model_content(),
+                    is_error: true,
+                    metadata: output.result_metadata(),
+                }],
+            };
+            trajectory.push(store.append_message(run_id, &message).await?);
+            continue;
+        }
         let task = tasks
             .find_undelivered_origin(&call.id, &call.name, assistant_created_at)
             .await;

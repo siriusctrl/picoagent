@@ -94,3 +94,9 @@ Use these sections:
   call](0027-correlate-delegate-recovery-with-originating-call.md)
 - [ADR 0028: Keep cross-tool workflow in the stable system
   prompt](0028-stable-cross-tool-workflow.md)
+- [ADR 0029: Recover incomplete model output at narrow
+  boundaries](0029-recover-incomplete-model-output.md)
+- [ADR 0030: Use one result policy for foreground and background
+  work](0030-uniform-foreground-and-background-results.md)
+- [ADR 0031: Validate the complete initial graph topology before
+  creation](0031-validate-complete-initial-graph-topology.md)

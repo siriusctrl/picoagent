@@ -66,6 +66,14 @@ navigation, invariants, verification, and handoff.
   and resolve their original paths through integrity-checked local snapshots.
 - Treat completed messages as the resumable boundary. Stream deltas are events,
   not durable conversation messages.
+- Keep provider function-call arguments as exact strings through message
+  persistence and parse them only at the individual tool execution boundary.
+  A malformed call returns its own ordered tool error and cannot suppress valid
+  sibling calls.
+- Repair only explicitly classified structurally incomplete normal model
+  responses, at most once, with a non-durable tail reminder. Never persist or
+  execute the discarded partial response; retain its reported usage in the
+  failure event, and do not retry unrelated provider errors through this path.
 - Keep `messages.jsonl` in the declared `openai-chat-compatible` shape. Store
   the sequence-addressed `m<N>` ref, timestamps, exact-message and
   reconstruction-metadata hashes, tool-error state, and opaque provider items in the paired
@@ -84,8 +92,10 @@ navigation, invariants, verification, and handoff.
 - Correlate foreground `ToolResult` messages by provider `tool_call_id` and
   terminal background messages by `task_id`; keep promoted calls' originating
   provider ids in internal task state rather than model-facing notices.
-- Persist every terminal background result as an artifact, including small
-  output and error details. Its runtime notice contains only the result path.
+- Apply the same independent inline/preview/artifact policy to foreground and
+  terminal background results. Add the background status/XML envelope only
+  after limiting the payload, so harness metadata and read instructions are
+  never clipped. Escape inline payload text inside the XML envelope.
 - Keep artifact ids and metadata stable. Changing content under the same hash or
   identity is a contract violation.
 - Keep prompt prefixes deterministic: stable section order, sorted tools and
@@ -134,8 +144,8 @@ navigation, invariants, verification, and handoff.
 
 - Small UTF-8 tool results may stay inline.
 - Large results must preserve their complete bytes under the current run.
-- Terminal background results always preserve complete bytes as artifacts and
-  expose only their relative paths in the runtime notice.
+- Terminal background results use the ordinary per-result policy: keep small
+  UTF-8 payloads inline and preserve larger or binary payloads as artifacts.
 - A truncated model-facing result must include `truncated`, total bytes, media
   type, hash, stable relative path, and useful beginning/end previews.
 - `read` must support bounded reads so the model can inspect an artifact

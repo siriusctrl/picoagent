@@ -7,10 +7,52 @@ use reqwest::{RequestBuilder, Response, StatusCode};
 
 use crate::{
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
-    model::{MessageContent, ModelUsage, ToolCall},
+    model::{MessageContent, ModelUsage, ToolArguments, ToolCall},
 };
 
 pub(crate) const ERROR_BODY_LIMIT: usize = 16 * 1024;
+
+#[derive(Debug)]
+struct IncompleteModelResponse {
+    provider: String,
+    reason: String,
+    usage: ModelUsage,
+}
+
+impl fmt::Display for IncompleteModelResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} response ended before completion: {}",
+            self.provider, self.reason
+        )
+    }
+}
+
+impl Error for IncompleteModelResponse {}
+
+pub(crate) fn incomplete_response_with_usage(
+    provider: impl Into<String>,
+    reason: impl Into<String>,
+    usage: ModelUsage,
+) -> anyhow::Error {
+    IncompleteModelResponse {
+        provider: provider.into(),
+        reason: reason.into(),
+        usage,
+    }
+    .into()
+}
+
+pub(crate) fn is_incomplete_response(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<IncompleteModelResponse>().is_some()
+}
+
+pub(crate) fn incomplete_response_usage(error: &anyhow::Error) -> Option<&ModelUsage> {
+    error
+        .downcast_ref::<IncompleteModelResponse>()
+        .map(|incomplete| &incomplete.usage)
+}
 
 #[derive(Debug)]
 struct HttpStatusError {
@@ -125,28 +167,21 @@ pub(crate) struct ToolCallBuilder {
 }
 
 impl ToolCallBuilder {
-    pub fn finish(self) -> Result<ToolCall> {
+    pub fn finish(self) -> ToolCall {
         let Self {
             id,
             name,
             arguments,
         } = self;
-        let arguments = if arguments.trim().is_empty() {
-            serde_json::json!({})
-        } else {
-            serde_json::from_str(&arguments).with_context(|| {
-                format!("model returned invalid JSON arguments for tool `{name}`")
-            })?
-        };
-        Ok(ToolCall {
+        ToolCall {
             id: if id.trim().is_empty() {
                 format!("call_{}", ulid::Ulid::new())
             } else {
                 id
             },
             name,
-            arguments,
-        })
+            arguments: ToolArguments::from_raw(arguments),
+        }
     }
 }
 
@@ -226,8 +261,7 @@ mod tests {
             name: "read".into(),
             arguments: "{}".into(),
         }
-        .finish()
-        .unwrap();
+        .finish();
 
         assert_eq!(call.id, "provider-call");
     }
@@ -239,8 +273,7 @@ mod tests {
             name: "read".into(),
             arguments: "{}".into(),
         }
-        .finish()
-        .unwrap();
+        .finish();
 
         assert!(call.id.starts_with("call_"));
         assert!(call.id.len() > "call_".len());

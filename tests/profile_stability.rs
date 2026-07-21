@@ -89,7 +89,7 @@ impl ModelProvider for NoCheckpointHistoryProvider {
                 Message::assistant(vec![MessageContent::ToolCall {
                     id: "call-empty-history".to_owned(),
                     name: "history_search".to_owned(),
-                    arguments: json!({"pattern": "anything"}),
+                    arguments: json!({"pattern": "anything"}).into(),
                 }]),
                 ModelUsage::default(),
             )),
@@ -152,7 +152,8 @@ fn delegate_response(id: &str, prompt: &str) -> ModelResponse {
         Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: "delegate".to_owned(),
-            arguments: json!({"name": "delegated_child", "prompt": prompt, "context": "fresh"}),
+            arguments: json!({"name": "delegated_child", "prompt": prompt, "context": "fresh"})
+                .into(),
         }]),
         ModelUsage::default(),
     )

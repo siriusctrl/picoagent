@@ -8,6 +8,9 @@ background result is artifact-backed regardless of size and its runtime notice
 contains only the path. The independent per-result policy here still governs
 ordinary foreground tool results.
 
+ADR 0030 later applies this ADR's independent per-result policy to terminal
+background results as well.
+
 ## Context
 
 Picoagent originally combined a per-result inline threshold with a cumulative

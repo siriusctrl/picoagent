@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 pub(super) const GRAPH_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(super) enum GraphStatus {
     Wip,
@@ -16,32 +16,32 @@ pub(super) enum GraphStatus {
     Aborted,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct GraphDocument {
     version: u32,
     pub(super) status: GraphStatus,
     pub(super) goal: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) summary: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) abort_reason: Option<String>,
     nodes: BTreeMap<String, GraphNode>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GraphNode {
-    objective: String,
+pub(super) struct GraphNode {
+    pub(super) objective: String,
     #[serde(default)]
-    depends_on: Vec<String>,
+    pub(super) depends_on: Vec<String>,
     #[serde(default)]
-    resolution: Option<GraphResolution>,
+    pub(super) resolution: Option<GraphResolution>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GraphResolution {
+pub(super) struct GraphResolution {
     summary: String,
     #[serde(default)]
     evidence: Vec<String>,
@@ -84,6 +84,17 @@ pub(super) struct GraphListing {
 }
 
 impl GraphDocument {
+    pub(super) fn initial(goal: String, nodes: BTreeMap<String, GraphNode>) -> Self {
+        Self {
+            version: GRAPH_VERSION,
+            status: GraphStatus::Wip,
+            goal,
+            summary: None,
+            abort_reason: None,
+            nodes,
+        }
+    }
+
     pub(super) fn parse(source: &str) -> Result<Self> {
         serde_yaml_ng::from_str(source).context("parse graph YAML")
     }

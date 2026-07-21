@@ -225,7 +225,7 @@ fn tool_response(
         Message::assistant(vec![MessageContent::ToolCall {
             id: id.to_owned(),
             name: name.to_owned(),
-            arguments,
+            arguments: arguments.into(),
         }]),
         ModelUsage {
             input_tokens: Some(input_tokens),

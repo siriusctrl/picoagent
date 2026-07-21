@@ -52,8 +52,33 @@ impl<'a> ToolExecutor<'a> {
     }
 
     pub(crate) async fn execute(&self, call: ToolCall) -> Result<ToolOutput> {
+        let arguments = match call.arguments.parse() {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                self.events
+                    .emit(&RuntimeEvent::new(
+                        self.run_id,
+                        RuntimeEventKind::ToolStarted {
+                            call_id: call.id.clone(),
+                            name: call.name.clone(),
+                        },
+                    ))
+                    .await?;
+                return self
+                    .finish_failure(
+                        &call,
+                        &ToolContext {
+                            run_id: self.run_id.to_owned(),
+                            call_id: call.id.clone(),
+                            workspace: self.workspace.to_owned(),
+                        },
+                        error.context("the tool was not executed"),
+                    )
+                    .await;
+            }
+        };
         let mut before_payload = hook_payload(self.run_id, &call);
-        before_payload.insert("arguments".to_owned(), call.arguments.clone());
+        before_payload.insert("arguments".to_owned(), arguments.clone());
         let before = self
             .hooks
             .run(
@@ -66,7 +91,7 @@ impl<'a> ToolExecutor<'a> {
             .payload
             .get("arguments")
             .cloned()
-            .unwrap_or_else(|| call.arguments.clone());
+            .unwrap_or(arguments);
         self.events
             .emit(&RuntimeEvent::new(
                 self.run_id,
@@ -417,7 +442,7 @@ fn hook_payload(run_id: &str, call: &ToolCall) -> Map<String, Value> {
     ])
 }
 
-fn failed_tool_output(name: &str, error: &str) -> RawToolOutput {
+pub(crate) fn failed_tool_output(name: &str, error: &str) -> RawToolOutput {
     RawToolOutput {
         content: format!("tool `{name}` failed: {error}").into_bytes(),
         source_path: None,

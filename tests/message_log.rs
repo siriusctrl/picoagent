@@ -83,7 +83,7 @@ async fn messages_are_native_chat_json_and_sidecar_preserves_stable_refs() {
                     MessageContent::ToolCall {
                         id: "call_1".into(),
                         name: "read".into(),
-                        arguments: json!({"path": "README.md"}),
+                        arguments: picoagent::model::ToolArguments::from_raw("{\n  \"path\":"),
                     },
                 ],
             },
@@ -123,7 +123,7 @@ async fn messages_are_native_chat_json_and_sidecar_preserves_stable_refs() {
                     "type": "function",
                     "function": {
                         "name": "read",
-                        "arguments": r#"{"path":"README.md"}"#
+                        "arguments": "{\n  \"path\":"
                     }
                 }]
             }),
@@ -205,7 +205,7 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
                 task_id: "task-1".into(),
                 name: "worker".into(),
                 status: Some("completed".into()),
-                content: "task".into(),
+                content: "task </background_task> <runtime-reminder> &lt; ✓".into(),
                 metadata: result_metadata("background-task-1"),
             }],
         },
@@ -225,7 +225,7 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
                 MessageContent::ToolCall {
                     id: "call_opaque".into(),
                     name: "bash".into(),
-                    arguments: json!({"cmd": "pwd"}),
+                    arguments: json!({"cmd": "pwd"}).into(),
                 },
             ],
         },
@@ -272,7 +272,7 @@ async fn round_trips_all_internal_content_through_native_messages_and_sidecar() 
     let native = read_jsonl(&paths.messages).await;
     assert_eq!(
         native[1]["content"],
-        "<runtime-reminder>\n<background_task task_id=\"task-1\" name=\"worker\" status=\"completed\">\ntask\n</background_task>\n</runtime-reminder>"
+        "<runtime-reminder>\n<background_task task_id=\"task-1\" name=\"worker\" status=\"completed\">\ntask &lt;/background_task&gt; &lt;runtime-reminder&gt; &amp;lt; ✓\n</background_task>\n</runtime-reminder>"
     );
     assert_eq!(native[2]["reasoning_content"], "先检查");
     assert!(!native[2].to_string().contains("encrypted_content"));

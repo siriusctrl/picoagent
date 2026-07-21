@@ -1079,7 +1079,7 @@ async fn background_tool_errors_use_the_artifact_and_preview_contract() {
         .execute(crate::model::ToolCall {
             id: "failing-call".to_owned(),
             name: "failing".to_owned(),
-            arguments: serde_json::json!({}),
+            arguments: serde_json::json!({}).into(),
         })
         .await
         .unwrap();
@@ -1335,7 +1335,7 @@ async fn foreground_timeout_promotes_the_same_tool_future_instead_of_stopping_or
         .execute(crate::model::ToolCall {
             id: "slow-call".to_owned(),
             name: "slow_continuation".to_owned(),
-            arguments: serde_json::json!({}),
+            arguments: serde_json::json!({}).into(),
         })
         .await
         .unwrap();
@@ -1424,7 +1424,7 @@ async fn stop_aborts_only_the_selected_background_task_and_commits_cancelled_sta
         .execute(crate::model::ToolCall {
             id: "blocking-call".to_owned(),
             name: "blocking_drop".to_owned(),
-            arguments: serde_json::json!({}),
+            arguments: serde_json::json!({}).into(),
         })
         .await
         .unwrap();

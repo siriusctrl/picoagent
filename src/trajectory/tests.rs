@@ -178,7 +178,7 @@ async fn search_supports_inline_regex_flags_and_hides_internal_content() {
             vec![MessageContent::ToolCall {
                 id: "internal-call".to_owned(),
                 name: "history_search".to_owned(),
-                arguments: json!({"pattern": "Visible"}),
+                arguments: json!({"pattern": "Visible"}).into(),
             }],
         ),
         record(
@@ -216,6 +216,44 @@ async fn search_supports_inline_regex_flags_and_hides_internal_content() {
 }
 
 #[tokio::test]
+async fn background_search_snippet_matches_the_chat_projection_read_returns() {
+    let message = Message {
+        role: Role::User,
+        content: vec![MessageContent::BackgroundTask {
+            task_id: "t1".to_owned(),
+            name: "review".to_owned(),
+            status: Some("completed".to_owned()),
+            content: "result contains <needle> & evidence".to_owned(),
+            metadata: ResultMetadata::empty(),
+        }],
+    };
+    let reader = reader(vec![record(
+        1,
+        message.role.clone(),
+        message.content.clone(),
+    )]);
+
+    let result = reader
+        .search(HistorySearchRequest {
+            run_id: "run".to_owned(),
+            pattern: Regex::new("needle").unwrap(),
+            max_matches: 10,
+        })
+        .await
+        .unwrap();
+    let crate::model::openai_chat::ChatMessage::User {
+        content: crate::model::openai_chat::ChatUserContent::Text(projected),
+    } = crate::model::openai_chat::project_chat_message(&message)
+    else {
+        panic!("background result must project to Chat user text")
+    };
+
+    assert_eq!(result.matches.len(), 1);
+    assert!(projected.contains(&result.matches[0].snippet));
+    assert!(result.matches[0].snippet.contains("&lt;needle&gt;"));
+}
+
+#[tokio::test]
 async fn read_returns_a_contiguous_window_and_keeps_tool_pairs() {
     let reader = reader(vec![
         record(
@@ -231,7 +269,7 @@ async fn read_returns_a_contiguous_window_and_keeps_tool_pairs() {
             vec![MessageContent::ToolCall {
                 id: "call-1".to_owned(),
                 name: "bash".to_owned(),
-                arguments: json!({"command": "cargo test"}),
+                arguments: json!({"command": "cargo test"}).into(),
             }],
         ),
         record(
@@ -282,7 +320,7 @@ async fn read_pairs_reused_call_ids_by_occurrence() {
             vec![MessageContent::ToolCall {
                 id: "reused".to_owned(),
                 name: "bash".to_owned(),
-                arguments: json!({"command": "old"}),
+                arguments: json!({"command": "old"}).into(),
             }],
         ),
         record(
@@ -301,7 +339,7 @@ async fn read_pairs_reused_call_ids_by_occurrence() {
             vec![MessageContent::ToolCall {
                 id: "reused".to_owned(),
                 name: "read".to_owned(),
-                arguments: json!({"path": "new"}),
+                arguments: json!({"path": "new"}).into(),
             }],
         ),
         record(
@@ -345,7 +383,7 @@ async fn history_projection_hides_only_the_matching_reused_call_occurrence() {
             vec![MessageContent::ToolCall {
                 id: "reused".to_owned(),
                 name: "history_search".to_owned(),
-                arguments: json!({"pattern": "old"}),
+                arguments: json!({"pattern": "old"}).into(),
             }],
         ),
         record(
@@ -364,7 +402,7 @@ async fn history_projection_hides_only_the_matching_reused_call_occurrence() {
             vec![MessageContent::ToolCall {
                 id: "reused".to_owned(),
                 name: "bash".to_owned(),
-                arguments: json!({"command": "real work"}),
+                arguments: json!({"command": "real work"}).into(),
             }],
         ),
         record(
@@ -449,7 +487,7 @@ async fn search_matches_the_complete_tool_result_artifact() {
             vec![MessageContent::ToolCall {
                 id: "call-1".to_owned(),
                 name: "bash".to_owned(),
-                arguments: json!({"command": "large-output"}),
+                arguments: json!({"command": "large-output"}).into(),
             }],
         ),
         record(
@@ -525,7 +563,7 @@ async fn search_stops_before_an_older_missing_artifact_after_limit_is_known() {
             vec![MessageContent::ToolCall {
                 id: "old-call".to_owned(),
                 name: "bash".to_owned(),
-                arguments: json!({"command": "huge-output"}),
+                arguments: json!({"command": "huge-output"}).into(),
             }],
         ),
         record(
@@ -592,7 +630,7 @@ async fn reused_call_ids_resolve_each_result_to_its_exact_artifact() {
             vec![MessageContent::ToolCall {
                 id: "reused-call".to_owned(),
                 name: "bash".to_owned(),
-                arguments: json!({"command": "old-output"}),
+                arguments: json!({"command": "old-output"}).into(),
             }],
         ),
         record(
@@ -611,7 +649,7 @@ async fn reused_call_ids_resolve_each_result_to_its_exact_artifact() {
             vec![MessageContent::ToolCall {
                 id: "reused-call".to_owned(),
                 name: "read".to_owned(),
-                arguments: json!({"path": "new"}),
+                arguments: json!({"path": "new"}).into(),
             }],
         ),
         record(
@@ -699,7 +737,7 @@ async fn plain_result_does_not_claim_a_reused_call_ids_only_artifact() {
             vec![MessageContent::ToolCall {
                 id: "reused-call".to_owned(),
                 name: "bash".to_owned(),
-                arguments: json!({"command": "large"}),
+                arguments: json!({"command": "large"}).into(),
             }],
         ),
         record(
@@ -718,7 +756,7 @@ async fn plain_result_does_not_claim_a_reused_call_ids_only_artifact() {
             vec![MessageContent::ToolCall {
                 id: "reused-call".to_owned(),
                 name: "read".to_owned(),
-                arguments: json!({"path": "small"}),
+                arguments: json!({"path": "small"}).into(),
             }],
         ),
         record(

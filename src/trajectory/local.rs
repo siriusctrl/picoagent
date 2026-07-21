@@ -248,7 +248,7 @@ fn match_message(record: &TrajectoryMessage, pattern: &Regex) -> Option<HistoryM
             MessageContent::Image { .. } => return None,
             MessageContent::ToolCall {
                 name, arguments, ..
-            } => format!("{name} {}", serde_json::to_string(arguments).ok()?),
+            } => format!("{name} {}", arguments.as_raw()),
             MessageContent::ToolResult { content, .. } => content.clone(),
             MessageContent::BackgroundTask {
                 task_id,
@@ -256,9 +256,11 @@ fn match_message(record: &TrajectoryMessage, pattern: &Regex) -> Option<HistoryM
                 status,
                 content,
                 ..
-            } => format!(
-                "{task_id} {name} {} {content}",
-                status.as_deref().unwrap_or("running")
+            } => crate::model::runtime::render_background_task_block(
+                task_id,
+                name,
+                status.as_deref(),
+                content,
             ),
             MessageContent::RuntimeReminder { .. }
             | MessageContent::Reasoning { .. }
