@@ -373,7 +373,7 @@ pub trait ModelProvider: Send + Sync {
 }
 
 pub(crate) fn stable_resume_fingerprint(provider: &str, fields: &[(&str, &str)]) -> String {
-    let payload = serde_json::to_vec(&("picoagent-provider-resume-v1", provider, fields))
+    let payload = serde_json::to_vec(&("fiasco-provider-resume-v1", provider, fields))
         .expect("provider resume fingerprint fields must serialize");
     format!("sha256:{:x}", Sha256::digest(payload))
 }

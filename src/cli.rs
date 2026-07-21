@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
-#[command(name = "pico", version, about = "A small headless agent harness")]
+#[command(
+    name = "fiasco",
+    version,
+    about = "Orchestrate multiple agents and background jobs"
+)]
 pub(crate) struct Cli {
     #[arg(long, global = true, default_value = ".")]
     pub workspace: PathBuf,
@@ -15,7 +19,7 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    /// Run one autonomous task.
+    /// Run one orchestrated task.
     Run {
         prompt: String,
         #[arg(long, value_enum, default_value = "text")]

@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     agent::{
         CompactionOptions,
         runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
@@ -52,7 +52,7 @@ impl CompletingDuringCompactionProvider {
     async fn wait_for_terminal_task(&self, run_id: &str) -> Result<()> {
         let path = self
             .workspace
-            .join(".pico/runs")
+            .join(".fiasco/runs")
             .join(run_id)
             .join("tasks/t1.json");
         tokio::time::timeout(Duration::from_secs(5), async {

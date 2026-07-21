@@ -1,13 +1,13 @@
 # Artifact Contract
 
 Tool output is part of the execution record, even when it is too large for the
-model context. Picoagent therefore separates the complete artifact from the
+model context. Fiasco therefore separates the complete artifact from the
 bounded model-facing envelope.
 
 ## Location
 
 ```text
-.pico/runs/<run-id>/artifacts/
+.fiasco/runs/<run-id>/artifacts/
   <tool-call-id>-<sha256-prefix>.<extension>
   <tool-call-id>-<sha256-prefix>.artifact.json
 ```
@@ -65,7 +65,7 @@ envelope reports zero preview bytes and
 An image returned by `read` follows the same artifact contract and is also sent
 to the model as a native image attachment. The immediate tool result retains
 the artifact path and digest; after every result from that assistant tool-call
-batch has been emitted in original call order, picoagent appends one user
+batch has been emitted in original call order, fiasco appends one user
 message containing the images and a runtime reminder that lists their source
 call ids in attachment order. This preserves provider tool-call/result pairing
 even when several tools ran concurrently. OpenAI Chat uses `image_url` data
@@ -88,7 +88,7 @@ bounded `[Tool output]` envelope with its path, digest, byte counts, read
 instruction, and any safe head/tail preview. The parent receives one batched
 runtime message per ready set.
 
-Payload limiting happens before picoagent adds the `<background_task>` status
+Payload limiting happens before fiasco adds the `<background_task>` status
 wrapper. The wrapper, artifact metadata, and inspection instruction are never
 part of the preview budget. The typed message keeps the exact inline payload;
 provider projections XML-escape it, so runtime-like tags cannot escape its task
@@ -130,6 +130,6 @@ Artifacts belong to a run, not to long-term memory. Memory extraction may cite
 or summarize selected artifacts, but raw tool output is not automatically
 promoted into user or project memory.
 
-Picoagent does not delete run artifacts automatically in the launch release.
+Fiasco does not delete run artifacts automatically in the launch release.
 Cloud deployments may apply an external retention policy to completed run
 directories.

@@ -24,7 +24,7 @@ one assistant message requested several concurrent calls. Some providers
 require every tool call to have its matching result before conversation resumes
 with another user message.
 
-Picoagent also persists a directly inspectable Chat-compatible trajectory.
+Fiasco also persists a directly inspectable Chat-compatible trajectory.
 Images therefore need both a provider-neutral runtime representation and an
 ordinary Chat representation that survives resume without adding private fields
 to `messages.jsonl`.

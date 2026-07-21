@@ -12,7 +12,7 @@ and folding decision remain accepted.
 
 Six short fixed agent prompts lived in six Markdown files and were included by
 five Rust modules. Preserving readable source wrapping then required generic
-Markdown reflow code during request assembly. Picoagent is an internal harness,
+Markdown reflow code during request assembly. Fiasco is an internal harness,
 so direct editing and a single obvious inventory matter more than independent
 packaging for each short prompt.
 

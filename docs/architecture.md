@@ -1,8 +1,8 @@
 # Architecture
 
-Picoagent is a headless Rust agent harness for local and cloud jobs. The launch
-architecture favors a small, inspectable execution core over a UI or platform
-framework.
+Fiasco is a headless Rust orchestrator for multiple agents and background jobs.
+Its architecture favors a small, inspectable execution core over a UI or
+platform framework.
 
 ## Runtime Flow
 
@@ -75,7 +75,7 @@ provider-visible name; paths never derive names. The common loader validates
 both prose fields and joins them with a `Returns:` semantic boundary into the
 standard provider description. Its Rust module owns arguments, semantic
 validation, and execution.
-The base `bash` adapter uses a non-login shell and inherits the picoagent
+The base `bash` adapter uses a non-login shell and inherits the fiasco
 process environment, avoiding per-call profile output and PATH rewrites.
 The base `read` adapter returns up to 400 text lines under a 65,536-byte cap.
 When the byte cap lands inside a multi-line range, it backs up to the newest
@@ -130,7 +130,7 @@ Its static YAML schema and description do not change.
 
 ### Run storage
 
-Each run is a portable directory beneath `<workspace>/.pico/runs/<run-id>/`.
+Each run is a portable directory beneath `<workspace>/.fiasco/runs/<run-id>/`.
 It contains run metadata, append-only complete messages, structured events, the
 final answer, artifacts, and background task records. It may also contain
 `graphs/g<N>.yaml` files whose nodes represent durable work-item topology and
@@ -138,13 +138,13 @@ main-agent-accepted outcomes. This is what persistence means in the launch
 runtime:
 a cloud worker can retain or inspect a job without a database.
 
-The durable message contract is `pico-message`. Every `messages.jsonl` line is
+The durable message contract is `fiasco-message`. Every `messages.jsonl` line is
 self-contained: `ref`, `created_at`, `role`, and the exact typed
 provider-neutral `content` blocks used by the runner. Tool-error state,
 structured artifact refs, images, reasoning, background-task identity, and
 opaque provider continuation items therefore need no second representation or
 reconstruction layout. Optional pending-input idempotency and compaction state
-live under `_pico` on the same record. The one-based sequence is derived from
+live under `_fiasco` on the same record. The one-based sequence is derived from
 the required `m<N>` ref and line position rather than stored again.
 
 Assistant function-call `arguments` remain the exact provider string in this
@@ -156,7 +156,7 @@ Image attachments remain typed base64 content blocks in the log. Provider
 adapters project text and images to their native wire shapes only when building
 a request.
 
-`run.json` identifies the format as `pico-message` and records the model
+`run.json` identifies the format as `fiasco-message` and records the model
 modality declaration, persisted profile, and remaining delegation depth. Resume
 requires the current model declaration to match and restores delegation
 authority from that run snapshot rather than current depth configuration.
@@ -166,7 +166,7 @@ sinks but omitted from the persisted `events.jsonl` and are never appended as
 partial conversation messages.
 
 The one process holding the run execution lease is the sole writer. Each
-newline completes one physical message record, while `_pico.checkpoint` groups
+newline completes one physical message record, while `_fiasco.checkpoint` groups
 one or more records into the logical commit boundary. Read-only viewers take no
 message-log lock and publish a group only when every declared line is complete.
 The writer trims an incomplete tail group before resuming appends. Malformed
@@ -255,7 +255,7 @@ concurrently read images to share one model input message.
 Local compaction changes the active-context projection without rewriting prior
 messages. `messages.jsonl` retains every committed completed message with a
 stable `m<N>` ref whose number is its sequence, including the successful
-compaction user instruction and exact assistant compacted state. Their `_pico`
+compaction user instruction and exact assistant compacted state. Their `_fiasco`
 state marks the pair and stores the covered prefix and first exact message kept.
 A normal active
 request excludes compaction instructions and older compacted states; it contains
@@ -270,9 +270,9 @@ adopts provider-reported input usage whenever available. Configuring
 prompt and history-tool schemas are already present and remain unchanged. The
 additional request uses the same provider, model, system, and frozen schemas,
 then appends one compaction user instruction. A returned tool call or empty
-state is never executed or committed; picoagent records the invalid attempt and
+state is never executed or committed; fiasco records the invalid attempt and
 retries that compaction request once.
-Picoagent does not implement provider/server-side compaction.
+Fiasco does not implement provider/server-side compaction.
 
 `history_search` and `history_read` expose a read-only `TrajectoryReader`
 boundary. The local implementation searches only messages outside the active
@@ -329,7 +329,7 @@ use the same durable GeneralTask child mechanism as other delegated work; an
 external cron or job scheduler can invoke the convenience consolidation
 command. See [memory.md](memory.md).
 
-### Subagents
+### Agent orchestration
 
 A subagent is a child invocation of the same `AgentRunner`. It has its own run
 directory and transcript, a `parent_run_id`, and a depth. The launch runtime runs
@@ -377,7 +377,7 @@ queued/running children through the same runner. Resume validates the frozen
 tool-schema hash before task reconciliation can update any of those records.
 
 This recovery path assumes the runtime supervisor, cgroup, or container killed
-the previous picoagent process and all locally managed descendants before
+the previous fiasco process and all locally managed descendants before
 resume. A stale busy lease fails immediately. Remote work and external side
 effects can survive and must be inspected after the restart reminder.
 

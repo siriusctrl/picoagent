@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
     artifact::ArtifactStore,
     events::{EventSink, NoopEventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
@@ -85,8 +85,8 @@ struct ScheduledTool {
 
 #[async_trait]
 impl Tool for ScheduledTool {
-    fn spec(&self) -> picoagent::model::ToolSpec {
-        picoagent::model::ToolSpec {
+    fn spec(&self) -> fiasco::model::ToolSpec {
+        fiasco::model::ToolSpec {
             name: "scheduled".to_owned(),
             description: "Return the requested label after a test delay".to_owned(),
             input_schema: json!({"type": "object"}),
@@ -214,8 +214,8 @@ struct ArgumentTool(Arc<AtomicUsize>);
 
 #[async_trait]
 impl Tool for ArgumentTool {
-    fn spec(&self) -> picoagent::model::ToolSpec {
-        picoagent::model::ToolSpec {
+    fn spec(&self) -> fiasco::model::ToolSpec {
+        fiasco::model::ToolSpec {
             name: "argument_tool".to_owned(),
             description: "Return the supplied label".to_owned(),
             input_schema: json!({"type": "object"}),
@@ -343,8 +343,8 @@ struct ImageTool;
 
 #[async_trait]
 impl Tool for ImageTool {
-    fn spec(&self) -> picoagent::model::ToolSpec {
-        picoagent::model::ToolSpec {
+    fn spec(&self) -> fiasco::model::ToolSpec {
+        fiasco::model::ToolSpec {
             name: "image".to_owned(),
             description: "Return a test image".to_owned(),
             input_schema: json!({"type": "object"}),
@@ -762,7 +762,7 @@ async fn batch_boundary_error_promotes_other_pending_futures_before_returning() 
     assert!(format!("{error:#}").contains("injected tool boundary failure"));
     assert_eq!(executions.load(Ordering::SeqCst), 1);
 
-    let run_dir = std::fs::read_dir(workspace.path().join(".pico/runs"))
+    let run_dir = std::fs::read_dir(workspace.path().join(".fiasco/runs"))
         .unwrap()
         .next()
         .unwrap()

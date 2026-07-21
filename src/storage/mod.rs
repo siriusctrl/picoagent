@@ -20,7 +20,7 @@ mod input;
 mod message_log;
 mod trajectory;
 
-pub const MESSAGE_FORMAT: &str = "pico-message";
+pub const MESSAGE_FORMAT: &str = "fiasco-message";
 const RUN_RECORD_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -170,7 +170,7 @@ impl RunDirStore {
     pub fn paths(&self, run_id: &str) -> RunPaths {
         let directory = self
             .workspace
-            .join(".pico")
+            .join(".fiasco")
             .join("runs")
             .join(safe_component(run_id));
         RunPaths {

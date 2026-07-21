@@ -1,6 +1,6 @@
 use std::{io::Cursor, sync::Arc};
 
-use picoagent::{
+use fiasco::{
     artifact::ArtifactStore,
     tools::{BashTool, ReadTool, Tool, ToolContext, WebSearchTool, WriteTool, build_app_tools},
 };
@@ -117,7 +117,7 @@ async fn graph_tools_initialize_validate_and_reuse_file_tools_for_mutation() {
         .unwrap();
     let initialized: serde_json::Value = serde_json::from_slice(&initialized.content).unwrap();
     let path = initialized["path"].as_str().unwrap();
-    assert_eq!(path, ".pico/runs/run-1/graphs/g1.yaml");
+    assert_eq!(path, ".fiasco/runs/run-1/graphs/g1.yaml");
 
     let initial_graph = read
         .execute(
@@ -160,7 +160,7 @@ async fn graph_tools_initialize_validate_and_reuse_file_tools_for_mutation() {
 #[tokio::test]
 async fn large_graph_listing_uses_the_normal_artifact_contract() {
     let workspace = tempdir().unwrap();
-    let graph_directory = workspace.path().join(".pico/runs/run-1/graphs");
+    let graph_directory = workspace.path().join(".fiasco/runs/run-1/graphs");
     tokio::fs::create_dir_all(&graph_directory).await.unwrap();
     for number in 1..=400 {
         tokio::fs::write(

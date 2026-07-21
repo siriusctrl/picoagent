@@ -1,11 +1,12 @@
 # Design Choices
 
-## Internal Harness First
+## Internal Orchestrator First
 
-Picoagent currently has no external users or compatibility commitments. It is
-an internal harness for its maintainers' own workflows, so operator convenience,
-code readability, and fast iteration take priority over broad configurability,
-backward compatibility, and abstractions for hypothetical consumers.
+Fiasco currently has no external users or compatibility commitments. It is an
+internal multi-agent orchestrator for its maintainers' own workflows, so
+operator convenience, code readability, and fast iteration take priority over
+broad configurability, backward compatibility, and abstractions for
+hypothetical consumers.
 
 Rejected: carrying compatibility layers, packaging indirection, or generalized
 extension points without a concrete internal need. Revisit this boundary only
@@ -44,7 +45,7 @@ the Rust library and event stream without owning agent behavior.
 
 The launch runtime uses one self-contained directory per run instead of SQLite
 or an event-sourced service. Complete messages and metadata are enough for
-inspection and form the boundary for the bounded `pico resume` command; object
+inspection and form the boundary for the bounded `fiasco resume` command; object
 storage can archive the directory as a unit.
 
 The persisted event log contains lifecycle and debugging records, not streaming
@@ -81,11 +82,11 @@ tree before resume. See [ADR 0034](adr/0034-atomic-turn-checkpoints.md).
 
 `messages.jsonl` stores the runner's provider-neutral message directly. Each
 model-readable record contains `ref`, `created_at`, `role`, and typed `content`;
-rare local lifecycle classification uses optional `_pico`. There is no metadata
+rare local lifecycle classification uses optional `_fiasco`. There is no metadata
 sidecar, reconstruction layout, or second transcript representation.
 
 One execution lease gives a run exactly one writer while allowing any number
-of lock-free viewers. `_pico.checkpoint` groups one or more newline-terminated
+of lock-free viewers. `_fiasco.checkpoint` groups one or more newline-terminated
 records. Viewers publish only complete groups; the writer trims an incomplete
 tail group before appending after a crash. This deliberately assumes viewers
 never mutate the run and rejects supporting multiple competing writers.
@@ -160,7 +161,7 @@ blindly retrying transport errors, and persisting partial assistant text. See
 Large results are preserved in full but represented in model context by a small
 versioned envelope. This was chosen over destructive truncation and over placing
 unbounded stdout in every subsequent model request. Each result is limited
-independently; picoagent does not retain a cumulative preview budget across a
+independently; fiasco does not retain a cumulative preview budget across a
 run because compaction can free context and later small results should remain
 directly readable. See [ADR 0018](adr/0018-limit-tool-output-per-result.md).
 
@@ -220,7 +221,7 @@ clear retry request.
 
 ## Direct Host Execution
 
-The launch runtime intentionally executes tools and hooks with the picoagent
+The launch runtime intentionally executes tools and hooks with the fiasco
 process permissions.
 
 Rejected for launch: a partial permission UI that could be mistaken for an OS

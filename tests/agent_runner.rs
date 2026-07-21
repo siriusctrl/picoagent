@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     agent::{
         runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
         task::{BackgroundTaskState, TaskManager, TaskManagerConfig},
@@ -108,8 +108,8 @@ struct CountingTool(Arc<AtomicUsize>);
 
 #[async_trait]
 impl Tool for CountingTool {
-    fn spec(&self) -> picoagent::model::ToolSpec {
-        picoagent::model::ToolSpec {
+    fn spec(&self) -> fiasco::model::ToolSpec {
+        fiasco::model::ToolSpec {
             name: "side_effect".to_owned(),
             description: "Count executions".to_owned(),
             input_schema: json!({"type": "object"}),
@@ -560,8 +560,8 @@ struct LargeOutputTool;
 
 #[async_trait]
 impl Tool for LargeOutputTool {
-    fn spec(&self) -> picoagent::model::ToolSpec {
-        picoagent::model::ToolSpec {
+    fn spec(&self) -> fiasco::model::ToolSpec {
+        fiasco::model::ToolSpec {
             name: "large_output".to_owned(),
             description: "Produce a large deterministic result".to_owned(),
             input_schema: json!({"type": "object"}),
@@ -577,8 +577,8 @@ struct SmallOutputTool;
 
 #[async_trait]
 impl Tool for SmallOutputTool {
-    fn spec(&self) -> picoagent::model::ToolSpec {
-        picoagent::model::ToolSpec {
+    fn spec(&self) -> fiasco::model::ToolSpec {
+        fiasco::model::ToolSpec {
             name: "small_output".to_owned(),
             description: "Produce a small deterministic result".to_owned(),
             input_schema: json!({"type": "object"}),
@@ -634,14 +634,14 @@ async fn runner_spills_a_large_result_without_affecting_the_next_small_result() 
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .collect::<Vec<_>>();
     for (index, line) in stored_lines[1..3].iter().enumerate() {
-        assert_eq!(line["_pico"]["checkpoint"]["first_message_ref"], "m2");
-        assert_eq!(line["_pico"]["checkpoint"]["index"], index);
-        assert_eq!(line["_pico"]["checkpoint"]["count"], 2);
+        assert_eq!(line["_fiasco"]["checkpoint"]["first_message_ref"], "m2");
+        assert_eq!(line["_fiasco"]["checkpoint"]["index"], index);
+        assert_eq!(line["_fiasco"]["checkpoint"]["count"], 2);
     }
     for (index, line) in stored_lines[3..5].iter().enumerate() {
-        assert_eq!(line["_pico"]["checkpoint"]["first_message_ref"], "m4");
-        assert_eq!(line["_pico"]["checkpoint"]["index"], index);
-        assert_eq!(line["_pico"]["checkpoint"]["count"], 2);
+        assert_eq!(line["_fiasco"]["checkpoint"]["first_message_ref"], "m4");
+        assert_eq!(line["_fiasco"]["checkpoint"]["index"], index);
+        assert_eq!(line["_fiasco"]["checkpoint"]["count"], 2);
     }
     assert_eq!(
         messages
@@ -667,7 +667,7 @@ async fn runner_spills_a_large_result_without_affecting_the_next_small_result() 
     assert_eq!(tool_results.len(), 2);
     assert_eq!(tool_results[0].0, "large-call");
     assert!(tool_results[0].1.contains("[Tool output]"));
-    assert!(tool_results[0].1.contains("artifact: .pico/runs/"));
+    assert!(tool_results[0].1.contains("artifact: .fiasco/runs/"));
     assert!(tool_results[0].1.contains("truncated: true"));
     assert!(tool_results[0].2.artifact.is_some());
     assert_eq!(tool_results[1].0, "small-call");
@@ -755,7 +755,7 @@ async fn subagents_reuse_the_runner_and_report_failed_children() {
     let parent = runner.run(RunRequest::root("delegate work")).await.unwrap();
     assert_eq!(parent.final_output, "done: delegate work");
 
-    let run_root = workspace.path().join(".pico/runs");
+    let run_root = workspace.path().join(".fiasco/runs");
     let mut children = Vec::new();
     for entry in std::fs::read_dir(&run_root).unwrap() {
         let id = entry.unwrap().file_name().to_string_lossy().into_owned();
@@ -950,8 +950,8 @@ struct SlowOutputTool;
 
 #[async_trait]
 impl Tool for SlowOutputTool {
-    fn spec(&self) -> picoagent::model::ToolSpec {
-        picoagent::model::ToolSpec {
+    fn spec(&self) -> fiasco::model::ToolSpec {
+        fiasco::model::ToolSpec {
             name: "slow_output".to_owned(),
             description: "Return a delayed test result".to_owned(),
             input_schema: json!({"type": "object"}),
@@ -1182,8 +1182,8 @@ struct SteeringGateTool;
 
 #[async_trait]
 impl Tool for SteeringGateTool {
-    fn spec(&self) -> picoagent::model::ToolSpec {
-        picoagent::model::ToolSpec {
+    fn spec(&self) -> fiasco::model::ToolSpec {
+        fiasco::model::ToolSpec {
             name: "steering_gate".to_owned(),
             description: "Hold a child tool batch briefly".to_owned(),
             input_schema: json!({"type": "object"}),
@@ -1367,12 +1367,12 @@ struct YieldingSerializedEventSink {
 }
 
 #[async_trait]
-impl picoagent::events::EventSink for YieldingSerializedEventSink {
-    async fn emit(&self, event: &picoagent::events::RuntimeEvent) -> Result<()> {
+impl fiasco::events::EventSink for YieldingSerializedEventSink {
+    async fn emit(&self, event: &fiasco::events::RuntimeEvent) -> Result<()> {
         let _guard = self.lock.lock().await;
         if matches!(
             event.kind,
-            picoagent::events::RuntimeEventKind::ToolStarted { .. }
+            fiasco::events::RuntimeEventKind::ToolStarted { .. }
         ) && self.tool_starts.fetch_add(1, Ordering::SeqCst) == 1
         {
             tokio::task::yield_now().await;
@@ -1383,8 +1383,8 @@ impl picoagent::events::EventSink for YieldingSerializedEventSink {
 
 #[async_trait]
 impl Tool for HangingTool {
-    fn spec(&self) -> picoagent::model::ToolSpec {
-        picoagent::model::ToolSpec {
+    fn spec(&self) -> fiasco::model::ToolSpec {
+        fiasco::model::ToolSpec {
             name: "hanging".to_owned(),
             description: "Wait until cancelled".to_owned(),
             input_schema: json!({"type": "object"}),
@@ -1469,7 +1469,7 @@ async fn parent_failure_aborts_and_settles_background_tasks() {
     .expect("multi-call promotion deadlocked on an in-flight tool event")
     .unwrap_err();
     assert!(format!("{error:#}").contains("scripted parent failure"));
-    let run_root = workspace.path().join(".pico/runs");
+    let run_root = workspace.path().join(".fiasco/runs");
     let parent_dir = std::fs::read_dir(&run_root)
         .unwrap()
         .next()
@@ -1535,7 +1535,7 @@ async fn model_requests_have_a_runtime_deadline() {
         format!("{error:#}").contains("model request deadline exceeded 1 seconds"),
         "{error:#}"
     );
-    let run_id = std::fs::read_dir(workspace.path().join(".pico/runs"))
+    let run_id = std::fs::read_dir(workspace.path().join(".fiasco/runs"))
         .unwrap()
         .next()
         .unwrap()

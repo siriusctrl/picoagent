@@ -16,7 +16,7 @@ delegate acknowledgements, and distinguish a resumable child from an ordinary
 tool whose side effects were unknown. Compaction had a similar two-append window
 between its request and state.
 
-Picoagent runs under a supervisor, cgroup, or container which can terminate the
+Fiasco runs under a supervisor, cgroup, or container which can terminate the
 old process and all locally managed descendants before resume. Workspace and
 external side effects may survive, but local futures from the old process do
 not. That makes a complete logical turn a simpler recovery boundary than each
@@ -25,7 +25,7 @@ individual message.
 ## Decision
 
 - Each persisted message remains one JSON line with its own `m<N>` ref.
-  `_pico.checkpoint` records the group's first ref, zero-based index, and count.
+  `_fiasco.checkpoint` records the group's first ref, zero-based index, and count.
 - A normal assistant tool turn commits the assistant message, every tool result
   in provider call order, and any user attachment message as one checkpoint.
 - A successful compaction commits its request and assistant state as one
@@ -44,7 +44,7 @@ individual message.
   `interrupted`; recognized child runs reconcile or resume normally.
 - `delegate` prepares the child run directory before returning its task start,
   so every committed child acknowledgement references a self-contained run.
-- Resume requires the old picoagent process and its locally managed descendants
+- Resume requires the old fiasco process and its locally managed descendants
   to be dead. A busy child lease is an invariant violation and fails immediately
   rather than being polled. Remote jobs and external effects are outside this
   process-domain guarantee.

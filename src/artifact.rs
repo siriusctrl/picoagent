@@ -181,7 +181,7 @@ impl ArtifactStore {
         let file_name = format!("{stable_name}.{extension}");
         let directory = context
             .workspace
-            .join(".pico")
+            .join(".fiasco")
             .join("runs")
             .join(safe_component(&context.run_id))
             .join("artifacts");
@@ -341,7 +341,7 @@ fn is_textual(media_type: &str) -> bool {
 fn artifact_directory(context: &ToolContext) -> PathBuf {
     context
         .workspace
-        .join(".pico/runs")
+        .join(".fiasco/runs")
         .join(safe_component(&context.run_id))
         .join("artifacts")
 }

@@ -5,7 +5,7 @@ use std::sync::{
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
     artifact::ArtifactStore,
     events::{NoopEventSink, SharedEventSink},
@@ -274,7 +274,7 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
     let provider = Arc::new(ProfileContractProvider::default());
     let options = RunnerOptions {
         max_subagent_depth: 2,
-        general_task: picoagent::agent::GeneralTaskProfile {
+        general_task: fiasco::agent::GeneralTaskProfile {
             model: None,
             max_output_tokens: Some(4_096),
         },

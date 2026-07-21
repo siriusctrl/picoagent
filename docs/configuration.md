@@ -1,7 +1,7 @@
 # Configuration
 
-Picoagent reads TOML from an explicit `--config` path, the workspace
-`.pico/config.toml`, or the user `$HOME/.pico/config.toml`. Workspace and user
+Fiasco reads TOML from an explicit `--config` path, the workspace
+`.fiasco/config.toml`, or the user `$HOME/.fiasco/config.toml`. Workspace and user
 files are alternatives in the launch runtime; they are not merged.
 Unknown fields are rejected so misspelled settings fail at startup instead of
 silently falling back to defaults.
@@ -16,7 +16,7 @@ kind = "openai-oauth"
 model = "gpt-5.6-sol"
 modalities = ["text"]
 # base_url = "https://chatgpt.com/backend-api/codex"
-# auth_file = "/custom/pico-auth.json"
+# auth_file = "/custom/fiasco-auth.json"
 ```
 
 ```toml
@@ -32,7 +32,7 @@ reasoning_effort = "medium" # optional; provider/model-specific
 
 `modalities` declares the selected model's input capabilities. It defaults to
 `["text"]`, must include `text`, and currently accepts only `text` and `image`.
-Picoagent does not infer capability from a model name or probe the endpoint.
+Fiasco does not infer capability from a model name or probe the endpoint.
 The first runtime reminder records the declaration as `current model supported
 modalities: [...]`, while the stable system prompt tells the agent not to use
 an absent modality. If a text-only model nevertheless calls `read` on an image,
@@ -43,14 +43,14 @@ GeneralTask model selected by this configuration.
 
 `api_key` accepts either a literal value or a whole environment reference such
 as `${OPENAI_API_KEY}`. Environment references are resolved when the runtime is
-assembled. Keep literal credentials in `$HOME/.pico/config.toml` with
+assembled. Keep literal credentials in `$HOME/.fiasco/config.toml` with
 restrictive file permissions rather than in a workspace config that may be
-shared. If `api_key` is omitted, picoagent reads `OPENAI_API_KEY`. The removed
+shared. If `api_key` is omitted, fiasco reads `OPENAI_API_KEY`. The removed
 OpenAI-compatible `api_key_env` field is rejected; use
 `api_key = "${OPENAI_API_KEY}"` for an explicit environment reference.
 
 `reasoning_effort` is passed through as a string because OpenAI-compatible
-providers and models support different levels. Picoagent maps it to
+providers and models support different levels. Fiasco maps it to
 `reasoning.effort` for the Responses protocol and to the top-level
 `reasoning_effort` field for Chat Completions. Omitting it preserves the
 provider's default. Common values are `none`, `minimal`, `low`, `medium`,
@@ -75,7 +75,7 @@ request. Responses usage reports the equivalent count under
 retain provider-reported cached input token counts.
 
 Some compatible endpoints omit the required id from a streamed tool call.
-Picoagent assigns a unique `call_<ULID>` id at the provider boundary so the
+Fiasco assigns a unique `call_<ULID>` id at the provider boundary so the
 assistant call and its tool result retain an unambiguous Chat identity.
 
 This behavior only records fields the provider actually sends. OpenAI
@@ -153,17 +153,17 @@ every normal agent profile receives `history_search` and `history_read` from its
 provider call even when the setting is omitted. `context_window_tokens` is the
 model's optional nominal full context window. When both are set,
 `compact_at_tokens` must be smaller, and `runtime.max_output_tokens` must be set
-so the Root profile has an explicit output reserve. All limits must be positive. Picoagent
+so the Root profile has an explicit output reserve. All limits must be positive. Fiasco
 estimates system, frozen schemas, and active messages from the first request;
 provider-reported input usage replaces that estimate whenever available. When
-the tracked context reaches the threshold, picoagent uses the
+the tracked context reaches the threshold, fiasco uses the
 same provider, model, system prompt, and frozen tool schemas for an additional
 request ending in the `compaction_request` user instruction. A tool-call or
 empty state is rejected and retried once. Every real request has a numbered
 started event and a matching completed or failed event; invalid-attempt failures
 retain provider-reported usage. A preflight rejection has no started event and
 uses a null attempt because no request occurred. A request error leaves the existing context or
-compacted state in use. Before each model call, picoagent adds
+compacted state in use. Before each model call, fiasco adds
 the configured output allowance and fails if the estimate is at or above
 `context_window_tokens`. This provider-neutral estimate is a safety check, not
 a tokenizer-exact guarantee.
@@ -200,7 +200,7 @@ The local reader uses `rg` from `PATH` to scan linked full-text artifacts
 without loading them into the Rust heap; message-only matching does not require
 that subprocess. Remote readers may implement the same interface directly.
 
-Compaction is local and model-generated. Picoagent does not currently call a
+Compaction is local and model-generated. Fiasco does not currently call a
 provider's server-side compaction API.
 
 ## Background Tasks And Agent Profiles
@@ -251,13 +251,13 @@ the end to the model.
 ```toml
 [memory]
 enabled = true
-# global_root = "/persistent/pico-home"
+# global_root = "/persistent/fiasco-home"
 ```
 
 `global_root` must be an absolute path and is the base containing
-`memory/user/`. A relative `PICO_HOME` environment value is resolved against the
+`memory/user/`. A relative `FIASCO_HOME` environment value is resolved against the
 launch working directory. Project memory always lives at
-`<workspace>/.pico/memory/project/`. Memory is never written merely because a
+`<workspace>/.fiasco/memory/project/`. Memory is never written merely because a
 run succeeded. When enabled, the resolved paths enter the initial reminder; the
 model uses `read`, `write`, and `bash` directly, or delegates a large independent
 update through an ordinary GeneralTask child.
@@ -289,7 +289,7 @@ args = ["-y", "@modelcontextprotocol/server-github"]
 GITHUB_TOKEN = "${GITHUB_TOKEN}"
 ```
 
-Values written as `$NAME` or `${NAME}` are resolved from the picoagent process
+Values written as `$NAME` or `${NAME}` are resolved from the fiasco process
 environment. Other values are passed literally.
 
 ## Hooks
@@ -305,7 +305,7 @@ tool_before = []
 tool_after = []
 ```
 
-Hooks inherit picoagent's host permissions. A nonzero `run_start`,
+Hooks inherit fiasco's host permissions. A nonzero `run_start`,
 `tool_before`, or `tool_after` exit fails that operation. `run_end` is a
 best-effort post-commit notification: its failure is logged but cannot turn a
 completed run back into a resumable failed run and replay earlier hook effects.

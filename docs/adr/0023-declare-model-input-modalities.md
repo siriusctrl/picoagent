@@ -8,7 +8,7 @@
 
 ## Context
 
-Picoagent can attach images, but an OpenAI-compatible endpoint does not imply
+Fiasco can attach images, but an OpenAI-compatible endpoint does not imply
 that its selected model supports vision. Sending a native image message to the
 configured text-only model produced a provider 400 after the image tool result
 had already been committed. Inferring support from model names would require a
@@ -24,7 +24,7 @@ must not be hard-coded to one known model name.
   to `["text"]`. `text` is required. The initial implementation also accepts
   `image`; other values are rejected until the harness actually supports them.
 - The declaration applies to the primary model and any GeneralTask model
-  override in that process. Picoagent does not select another model based on a
+  override in that process. Fiasco does not select another model based on a
   task or attachment.
 - Add one stable system rule: the current model's supported modalities are
   authoritative and the agent must not request or claim an absent modality.

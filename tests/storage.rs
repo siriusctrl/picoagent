@@ -1,4 +1,4 @@
-use picoagent::{
+use fiasco::{
     events::{EventSink, RuntimeEvent, RuntimeEventKind},
     model::{Message, ModelModality, Role},
     storage::{RunDirStore, RunRecord, RunState},

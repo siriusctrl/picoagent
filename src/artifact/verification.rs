@@ -17,7 +17,7 @@ pub(crate) async fn verified_artifact_path_for_run(
         workspace.join(path)
     };
     let directory = workspace
-        .join(".pico/runs")
+        .join(".fiasco/runs")
         .join(safe_component(current_run_id))
         .join("artifacts");
     let canonical_directory = tokio::fs::canonicalize(&directory)

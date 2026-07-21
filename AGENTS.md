@@ -32,7 +32,7 @@ navigation, invariants, verification, and handoff.
 - `src/mcp.rs`: MCP stdio connection lifecycle and tool adapters.
 - `src/hooks.rs`: command hook discovery and lifecycle invocation.
 - `src/memory.rs`: user/project Markdown paths exposed to ordinary agent tools.
-- `src/config.rs`: `.pico/config.toml` loading and runtime/provider settings.
+- `src/config.rs`: `.fiasco/config.toml` loading and runtime/provider settings.
 - `src/events.rs`: transport-neutral runtime events and event sinks.
 - `src/cli.rs`: command-line shape; `src/main.rs`: headless composition root.
   Runtime behavior does not belong in either file.
@@ -67,7 +67,7 @@ navigation, invariants, verification, and handoff.
   message as one checkpoint; compaction commits request and state together.
   Stream deltas are events, not durable conversation messages.
 - Resume assumes the supervisor, cgroup, or container has already terminated
-  the old picoagent process and every locally managed descendant. Ignore task
+  the old fiasco process and every locally managed descendant. Ignore task
   files not acknowledged by a complete parent checkpoint; resume committed
   child runs, mark committed ordinary background tools interrupted, and never
   wait for a stale run lease to disappear.
@@ -79,20 +79,20 @@ navigation, invariants, verification, and handoff.
   responses, at most once, with a non-durable tail reminder. Never persist or
   execute the discarded partial response; retain its reported usage in the
   failure event, and do not retry unrelated provider errors through this path.
-- Keep `messages.jsonl` in the declared `pico-message` shape. Each line contains
+- Keep `messages.jsonl` in the declared `fiasco-message` shape. Each line contains
   its `m<N>` ref, timestamp, role, and exact provider-neutral content blocks.
-  Keep optional pending-input and compaction state under `_pico`; do not add a
+  Keep optional pending-input and compaction state under `_fiasco`; do not add a
   second message metadata log or reconstruction format.
 - Keep message refs run-local and equal to `m<N>`, where `N` is the durable
   one-based message sequence. Store pending-input ids separately for steering
   idempotency; do not overload the model-facing ref with unrelated identity.
 - Allow exactly one process to advance a run under its execution lease and any
   number of lock-free read-only viewers. Newlines complete physical records,
-  while `_pico.checkpoint` declares the logical commit group. Viewers expose
+  while `_fiasco.checkpoint` declares the logical commit group. Viewers expose
   only complete groups; the writer trims an incomplete tail group before its
   next append. In-memory cursors are only a writer fast path and must be
   invalidated before cancellable writes.
-- Spill large tool results to `.pico/runs/<run-id>/artifacts/`; preserve the full
+- Spill large tool results to `.fiasco/runs/<run-id>/artifacts/`; preserve the full
   result and return a bounded head/tail preview plus an immutable artifact ref.
 - Limit each tool result independently. Keep small UTF-8 results inline; spill
   larger results with a bounded head/tail preview. Do not carry a cumulative
@@ -137,9 +137,9 @@ navigation, invariants, verification, and handoff.
 - Keep user memory and project memory distinct. Raw artifacts and transcripts
   are sources, not automatically curated memory.
 - The launch runtime intentionally has no security sandbox or approval engine.
-  Tools and hooks inherit the picoagent process permissions; document this
+  Tools and hooks inherit the fiasco process permissions; document this
   plainly and do not imply otherwise.
-- Treat picoagent as an internal harness with no external compatibility promise.
+- Treat fiasco as an internal harness with no external compatibility promise.
   Optimize for maintainer convenience, readability, and fast iteration; do not
   add compatibility layers or generality for hypothetical users.
 - Do not add a TUI, frontend framework, built-in scheduler, vector database,

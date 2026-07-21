@@ -5,7 +5,7 @@ use std::sync::{
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
-use picoagent::{
+use fiasco::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunnerOptions},
     artifact::ArtifactStore,
     events::{NoopEventSink, SharedEventSink},
@@ -165,7 +165,7 @@ async fn create_resumable_parent_and_child(
                         call_id: "resume-delegate-call".to_owned(),
                         content: "background task started".to_owned(),
                         is_error: false,
-                        metadata: picoagent::artifact::ResultMetadata::empty(),
+                        metadata: fiasco::artifact::ResultMetadata::empty(),
                     }],
                 },
             ],
@@ -186,7 +186,7 @@ async fn create_resumable_parent_and_child(
             .with_execution_context(
                 "general_task_leaf",
                 1,
-                Some(picoagent::prompts::agent_prompts().general_task.clone()),
+                Some(fiasco::prompts::agent_prompts().general_task.clone()),
                 0,
             )
             .with_provider_resume_fingerprint(fingerprint),

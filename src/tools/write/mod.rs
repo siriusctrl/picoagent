@@ -154,7 +154,7 @@ async fn replace_file(path: &std::path::Path, content: &[u8]) -> Result<()> {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("file");
-    let temporary = parent.join(format!(".{name}.pico-{}.tmp", Ulid::new()));
+    let temporary = parent.join(format!(".{name}.fiasco-{}.tmp", Ulid::new()));
     let result = async {
         tokio::fs::write(&temporary, content).await?;
         if let Ok(metadata) = tokio::fs::metadata(path).await {

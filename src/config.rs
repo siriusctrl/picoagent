@@ -209,20 +209,11 @@ pub struct AgentProfilesConfig {
     pub general_task: GeneralTaskConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GeneralTaskConfig {
     pub model: Option<String>,
     pub max_output_tokens: Option<u32>,
-}
-
-impl Default for GeneralTaskConfig {
-    fn default() -> Self {
-        Self {
-            model: None,
-            max_output_tokens: None,
-        }
-    }
 }
 
 impl Default for RuntimeConfig {
@@ -317,13 +308,13 @@ impl AppConfig {
             return read_config(path);
         }
 
-        let workspace_path = workspace.join(".pico/config.toml");
+        let workspace_path = workspace.join(".fiasco/config.toml");
         if workspace_path.is_file() {
             return read_config(&workspace_path);
         }
 
         if let Some(home) = env::var_os("HOME") {
-            let user_path = PathBuf::from(home).join(".pico/config.toml");
+            let user_path = PathBuf::from(home).join(".fiasco/config.toml");
             if user_path.is_file() {
                 return read_config(&user_path);
             }

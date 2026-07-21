@@ -14,7 +14,7 @@ transient-delta decision here remain accepted.
 
 ## Context
 
-Picoagent needs a portable, searchable trajectory for inspection and future
+Fiasco needs a portable, searchable trajectory for inspection and future
 resume behavior. Provider streams can produce hundreds of small text and
 reasoning chunks. Persisting each chunk in `events.jsonl` duplicates content
 already assembled in `messages.jsonl`, adds repeated event metadata, and records
@@ -30,7 +30,7 @@ events remain useful for operational inspection and debugging.
 - `messages.jsonl` stores complete user, assistant, tool, and explicit reasoning
   content in conversation order.
 - `ModelDelta` and `ModelReasoningDelta` remain runtime events for live sinks,
-  including `pico run --output ndjson`.
+  including `fiasco run --output ndjson`.
 - `RunDirStore` does not write either per-chunk delta to `events.jsonl`.
 - `events.jsonl` retains run/model lifecycle, usage, tool, artifact, background
   task, subagent, and failure events.
