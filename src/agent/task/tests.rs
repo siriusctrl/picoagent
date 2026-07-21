@@ -9,6 +9,8 @@ use crate::{
     tools::ToolRegistry,
 };
 
+mod fork_compaction;
+
 async fn create_run(store: &RunDirStore, id: &str, parent: Option<String>) {
     store
         .create_run(

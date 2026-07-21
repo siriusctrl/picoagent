@@ -47,6 +47,13 @@ the prefix and record reported usage without claiming a hit.
   orchestration, delegation, task control, or edits the child should perform;
   later direct steering may refine that scope. Keep the dynamic GeneralTask
   reminder limited to identifying the role and paired task.
+- Treat the ordinary message at the current run's fork boundary plus one as
+  its exact local assignment. If compaction excludes it from the recent kept
+  tail, insert it once after compacted state and the continuation reminder in
+  normal active context. Include it once in every compaction input as well,
+  ordered against the ordinary slice. Nested forks pin only their own
+  innermost assignment. These are projection rules and append no durable
+  reminder or message.
 - Persist context mode and fork boundary in both task coordination and child
   run records. A complete child snapshot resumes without reading parent
   trajectory files. If copying stopped before the boundary, recovery validates

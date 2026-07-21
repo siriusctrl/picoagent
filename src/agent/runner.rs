@@ -122,6 +122,11 @@ impl AgentRunner {
         };
 
         let system = agent_prompts().system.clone();
+        let fork_parent_message_seq = request
+            .delegated_context
+            .as_ref()
+            .filter(|context| context.mode == DelegateContext::Fork)
+            .and_then(|context| context.fork_parent_message_seq);
         if request
             .delegated_context
             .as_ref()
@@ -293,7 +298,7 @@ impl AgentRunner {
 
             let mut context_tokens = estimate_request_input_tokens(
                 &system,
-                &build_active_context(&trajectory)?,
+                &build_active_context(&trajectory, fork_parent_message_seq)?,
                 &tool_specs,
             );
 
@@ -328,6 +333,7 @@ impl AgentRunner {
                         system: &system,
                         tools: &tool_specs,
                         trajectory: &trajectory,
+                        fork_parent_message_seq,
                         tokens_before: context_tokens,
                         options: &self.options.compaction,
                         store: &self.store,
@@ -341,7 +347,8 @@ impl AgentRunner {
                     context_tokens = completed.estimated_context_tokens;
                     trajectory.extend(completed.records);
                 }
-                let active_messages = build_active_context(&trajectory)?;
+                let active_messages =
+                    build_active_context(&trajectory, fork_parent_message_seq)?;
                 context_tokens = context_tokens.max(estimate_request_input_tokens(
                     &system,
                     &active_messages,

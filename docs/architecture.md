@@ -342,6 +342,10 @@ response and complete tool-call batch, before its next provider request. Stop
 aborts the selected future and commits `cancelled`; it does not affect unrelated
 tasks. Background work has no hard execution deadline.
 
+Short task ids are local to the run that allocated them. Task controls accept
+only ids returned by that run's `delegate` or `task_status`; a fork child must
+not reuse an ancestor run's inherited `t<N>` ids.
+
 Delegate context is explicit. A fresh child starts from its own initial
 reminder and task. A fork child records the parent's pre-assistant message
 sequence, materializes that entire prefix in its own Chat-compatible message
@@ -353,6 +357,13 @@ messages as background; the appended delegated task defines the child's
 immediate scope and takes precedence over conflicting ancestor workflow. A
 complete child snapshot no longer reads the parent on resume, while a partial
 snapshot may finish copying through its already-recorded boundary.
+
+Compaction projections retain that scope exactly. The current run's local
+assignment is the ordinary message immediately after its recorded fork
+boundary. Normal active context and every later compaction request include that
+message once even after its sequence falls before the recent tail. Nested forks
+pin only their own innermost assignment. This is an in-memory projection rule;
+the native trajectory and compacted-state records remain unchanged.
 
 The copied prefix remains byte-identical even when it references artifacts, so
 provider cache shape does not change. Before each inherited message commits,

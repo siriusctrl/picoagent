@@ -28,7 +28,7 @@ pub(crate) fn build_runtime_reminder(
         remaining_delegation_depth
     ));
     sections.push(
-        "<tool-guidance>\n`delegate` starts independent GeneralTask work asynchronously only when remaining delegation depth is greater than 0; at 0 it remains visible but returns an error. Use `task_status` or bounded `task_wait` to observe background work, `task_inspect` and `task_steer` for delegated agents, and `task_stop` to cancel. The same controls manage direct tools promoted after the foreground window. Reconcile relevant results before finishing.\n</tool-guidance>"
+        "<tool-guidance>\n`delegate` starts independent GeneralTask work asynchronously only when remaining delegation depth is greater than 0; at 0 it remains visible but returns an error. Use `task_status` or bounded `task_wait` to observe background work, `task_inspect` and `task_steer` for delegated agents, and `task_stop` to cancel. Task ids are local to this run; pass task controls only ids returned by this run's `delegate` or `task_status`, never ids inherited from an ancestor trajectory. The same controls manage direct tools promoted after the foreground window. Reconcile relevant results before finishing.\n</tool-guidance>"
             .to_owned(),
     );
     let agents_path = workspace.join("AGENTS.md");
@@ -121,6 +121,8 @@ mod tests {
         assert!(reminder.contains("remaining delegation depth: 0"));
         assert!(reminder.contains("<tool-guidance>"));
         assert!(reminder.contains("at 0 it remains visible but returns an error"));
+        assert!(reminder.contains("Task ids are local to this run"));
+        assert!(reminder.contains("never ids inherited from an ancestor trajectory"));
         assert!(!reminder.contains("<context-management>"));
         assert!(!reminder.contains("history_search"));
         assert!(!reminder.contains("<compacted-history>"));

@@ -157,6 +157,14 @@ its paired task. A child therefore does not repeat ancestor orchestration,
 delegation, task control, or edits unless its own delegated task explicitly
 requires them; later direct steering may refine that scope.
 
+The local delegated assignment is the ordinary message at the current run's
+fork boundary plus one. If compaction moves it before the recent kept tail,
+normal active context pins the exact message after compacted state and its
+continuation reminder. Every later compaction input also includes it exactly
+once, preserving scope across repeated compaction and resume. Nested forks pin
+only their own innermost assignment; projection does not append another
+durable message.
+
 Once the frozen prefix is complete, child recovery validates and uses only its
 local run files; an interrupted partial copy can be completed from the recorded
 parent boundary. Fork inherits the parent's selected model. Provider-reported
@@ -168,7 +176,9 @@ a cache hit.
 can page backward by sequence. `task_steer` queues a normal user message after
 the current assistant/tool batch and before the next provider call. It does not
 interrupt the current tool batch. `task_status` reports state without adding
-an explanatory pseudo-message.
+an explanatory pseudo-message. Task ids are run-local: controls use ids
+returned by this run's `delegate` or `task_status`, never an inherited
+ancestor's coincidentally named `t<N>` id.
 
 Task JSON is coordination state, not a second transcript. Delivery is derived
 from `BackgroundTask` entries already committed to the parent message
