@@ -186,11 +186,11 @@ async fn create_resumable_parent_and_child(
     tokio::fs::write(
         tasks.join("t1.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 8,
+            "version": 9,
             "id": "t1",
             "kind": "agent",
             "name": "recovered review",
-            "origin_call_id": null,
+            "origin_call_id": "resume-delegate-call",
             "state": "running",
             "result": null,
             "error": null,

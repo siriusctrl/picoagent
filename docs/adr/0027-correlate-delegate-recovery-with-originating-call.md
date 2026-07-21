@@ -57,4 +57,3 @@ runs.
 
 - [ADR 0006](0006-complete-message-resume-and-durable-child-coordination.md)
 - [Architecture](../architecture.md)
-
