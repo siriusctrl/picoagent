@@ -47,11 +47,11 @@ the prefix and record reported usage without claiming a hit.
   boundary.
 - Fork inherits the parent's selected model. Fresh continues to use the
   configured GeneralTask model. Both use the same provider and stable system
-  prompt. Full upstream cache reuse additionally requires identical frozen tool
-  schemas; provider-reported `cached_input_tokens` remains the only cache
-  observation.
-- Advance the pre-release run and task record versions to 7. No compatibility
-  layer is added for unused older runs.
+  prompt. ADR 0024 guarantees the same frozen built-in schemas at every depth;
+  provider-reported `cached_input_tokens` remains the only cache observation.
+- Together with ADR 0024's remaining-depth fields, advance the pre-release run
+  and task record versions to 8. No compatibility layer is added for unused
+  older runs.
 
 ## Consequences
 
