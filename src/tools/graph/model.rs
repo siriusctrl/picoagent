@@ -118,6 +118,14 @@ impl GraphDocument {
                 for (index, evidence) in resolution.evidence.iter().enumerate() {
                     validate_evidence_path(id, index, evidence)?;
                 }
+                for dependency in &node.depends_on {
+                    ensure!(
+                        self.nodes
+                            .get(dependency)
+                            .is_some_and(|node| node.resolution.is_some()),
+                        "node `{id}` is resolved but dependency `{dependency}` is unresolved"
+                    );
+                }
             }
         }
         ensure_acyclic(&self.nodes)?;
@@ -128,19 +136,22 @@ impl GraphDocument {
             .filter(|node| node.resolution.is_some())
             .count();
         let unresolved = self.nodes.len() - resolved;
-        let ready = self
-            .nodes
-            .iter()
-            .filter(|(_, node)| {
-                node.resolution.is_none()
-                    && node.depends_on.iter().all(|dependency| {
-                        self.nodes
-                            .get(dependency)
-                            .is_some_and(|node| node.resolution.is_some())
-                    })
-            })
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
+        let ready = if self.status == GraphStatus::Wip {
+            self.nodes
+                .iter()
+                .filter(|(_, node)| {
+                    node.resolution.is_none()
+                        && node.depends_on.iter().all(|dependency| {
+                            self.nodes
+                                .get(dependency)
+                                .is_some_and(|node| node.resolution.is_some())
+                        })
+                })
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
 
         match self.status {
             GraphStatus::Wip => {
@@ -333,6 +344,18 @@ nodes:
     }
 
     #[test]
+    fn rejects_a_resolution_whose_direct_dependency_is_unresolved() {
+        let error = graph_error(
+            "version: 1\nstatus: wip\ngoal: x\nnodes:\n  inspect:\n    objective: inspect\n    resolution: null\n  implement:\n    objective: implement\n    depends_on: [inspect]\n    resolution:\n      summary: implemented\n",
+        );
+
+        assert!(
+            error.contains("`implement` is resolved") && error.contains("`inspect` is unresolved"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn validates_terminal_graph_contracts() {
         assert!(
             graph_error(
@@ -352,9 +375,12 @@ nodes:
         parse("version: 1\nstatus: completed\ngoal: x\nsummary: done\nnodes: {}\n")
             .validate()
             .unwrap();
-        parse("version: 1\nstatus: aborted\ngoal: x\nabort_reason: superseded\nnodes: {}\n")
-            .validate()
-            .unwrap();
+        let aborted = parse(
+            "version: 1\nstatus: aborted\ngoal: x\nabort_reason: superseded\nnodes:\n  unused:\n    objective: no longer needed\n    resolution: null\n",
+        )
+        .validate()
+        .unwrap();
+        assert!(aborted.ready.is_empty());
     }
 
     #[test]

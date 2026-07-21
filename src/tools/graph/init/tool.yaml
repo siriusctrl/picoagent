@@ -29,7 +29,10 @@ description: |-
   Resolution stays null until the main agent accepts a non-empty summary;
   evidence is an optional list of project-relative paths without `..`. Use
   `graph_list` to validate the file and discover ready nodes, `delegate` to
-  execute independent work, and task controls to supervise it. Finish with
+  execute independent work, and task controls to supervise it. Because tool
+  calls in one assistant batch execute concurrently, perform a graph `write`,
+  inspect the subsequent `graph_list` result, and issue dependent `delegate`
+  calls in separate assistant turns; never batch dependent stages. Finish with
   top-level `status: completed` plus non-empty `summary` after every node is
   resolved, or `status: aborted` plus non-empty `abort_reason`; omit both
   terminal fields while status is `wip`.

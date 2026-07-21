@@ -30,14 +30,18 @@ A node is a durable work item with an objective, dependency ids, and a
 null-or-object resolution. A resolution contains a non-empty summary and
 optional project-relative evidence paths. It records an outcome accepted by the
 main agent, not merely a completed agent run. Readiness is derived: an
-unresolved node is ready exactly when all dependencies are resolved.
+unresolved node in a `wip` graph is ready exactly when all dependencies are
+resolved. Terminal graphs expose no ready nodes, and a node cannot retain an
+accepted resolution while any direct dependency is unresolved.
 
 The validator rejects unknown or repeated dependencies, cycles, unsafe evidence
 paths, and inconsistent terminal state. `completed` requires all nodes resolved
 and a top-level summary; `aborted` requires an abort reason. Full inspection and
 mutation reuse `read` and `write`. Executing ready work reuses `delegate`, and
 running work reuses the task controls. Graph files contain no task ids and do
-not launch work automatically.
+not launch work automatically. Because calls in one assistant tool-call batch
+are concurrent, a dependent graph edit, validation listing, and delegation must
+occur in separate assistant turns.
 
 ## Consequences
 

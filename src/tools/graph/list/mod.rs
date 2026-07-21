@@ -176,7 +176,7 @@ mod tests {
         write_graph(
             workspace.path(),
             "g3.yaml",
-            "version: 1\nstatus: aborted\ngoal: old\nabort_reason: superseded\nnodes: {}\n",
+            "version: 1\nstatus: aborted\ngoal: old\nabort_reason: superseded\nnodes:\n  unused:\n    objective: no longer needed\n    resolution: null\n",
         )
         .await;
 
@@ -192,6 +192,7 @@ mod tests {
             listing.aborted[0].abort_reason.as_deref(),
             Some("superseded")
         );
+        assert!(listing.aborted[0].ready.is_empty());
         assert!(listing.invalid.is_empty());
     }
 

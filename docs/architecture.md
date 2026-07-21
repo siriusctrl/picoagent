@@ -101,7 +101,10 @@ validates its DAG and terminal state, and derives ready nodes; one malformed
 file is reported as invalid rather than failing the entire listing. Full graph
 inspection and mutation stay with `read` and `write`. Execution stays with
 `delegate` and the existing task controls, so the graph family does not create
-a second scheduler or persist task ids.
+a second scheduler or persist task ids. Ready nodes are projected only for a
+`wip` graph, and an accepted resolution is invalid until its direct dependencies
+are resolved. Since one assistant tool-call batch is concurrent, dependent
+`write`, `graph_list`, and `delegate` stages execute in separate turns.
 
 Root and the persisted delegating/leaf GeneralTask profiles have one identical
 built-in capability set. Both GeneralTask profiles appear to the model as the

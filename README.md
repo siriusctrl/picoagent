@@ -153,6 +153,11 @@ resolution. Use ordinary `read` and `write` for the complete file, then call
 work with concurrent `delegate` calls and supervise those runs with the existing
 task controls; task ids are not stored in the graph.
 
+Tool calls within one assistant response run concurrently. Therefore graph
+updates are a three-turn dependency chain: complete `write`, call `graph_list`
+only after receiving that result, and issue dependent `delegate` calls only
+after receiving the validated listing. Do not batch dependent stages together.
+
 ```yaml
 version: 1
 status: wip
@@ -180,7 +185,9 @@ resolved/unresolved counts, and derives ready node ids. Malformed YAML, unknown
 or repeated dependencies, dependency cycles, unsafe evidence paths, and
 inconsistent terminal state appear under `invalid` without hiding other valid
 graphs. A completed graph requires every node to be resolved and a non-empty
-top-level `summary`; an aborted graph requires a non-empty `abort_reason`.
+top-level `summary`; an aborted graph requires a non-empty `abort_reason` and
+always reports `ready: []`. A resolution is invalid while any of that node's
+direct dependencies remains unresolved.
 
 ## Provider Setup
 

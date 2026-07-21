@@ -5,21 +5,26 @@ description: >-
   ready work with ordinary `delegate`, and supervise executions with task
   controls. A node is resolved only when its `resolution` object has a non-empty
   `summary`; an unresolved node is ready when every `depends_on` node is
-  resolved. Validation checks the version and schema, canonical ids, unknown or
-  duplicate dependencies, cycles, project-relative evidence paths, and
+  resolved. A resolved node whose direct dependency is unresolved is invalid.
+  Only `wip` graphs expose ready nodes; terminal graphs always expose `ready: []`.
+  Validation checks the version and schema, canonical ids, unknown or duplicate
+  dependencies, cycles, project-relative evidence paths, and
   consistency of `wip`, `completed`, and `aborted` top-level state. Files use
   version/status/goal/nodes at the top level; each node maps an id to
   objective/depends_on/resolution, and a non-null resolution contains summary
   plus optional evidence paths. A completed graph additionally requires
   top-level summary and no unresolved nodes; an aborted graph requires
   abort_reason. Use `read` on a returned path for the complete topology and the
-  literal values.
+  literal values. Because one assistant tool-call batch is concurrent, a
+  dependent `write` -> `graph_list` -> `delegate` sequence must use separate
+  assistant turns so each stage observes the preceding result.
 returns: >-
   JSON arrays grouped as `wip`, `completed`, `aborted`, and `invalid`. Valid
   summaries contain id, project-relative path, goal, resolved and unresolved
-  counts, and derived ready node ids; terminal summaries include the completed
-  summary or abort reason. Invalid entries retain their path and validation
-  error so the YAML can be inspected and repaired.
+  counts, and derived ready node ids. Terminal summaries always contain an empty
+  `ready` array and include the completed summary or abort reason. Invalid
+  entries retain their path and validation error so the YAML can be inspected
+  and repaired.
 input_schema:
   type: object
   properties: {}
