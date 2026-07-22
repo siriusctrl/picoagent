@@ -122,6 +122,59 @@ fn decoder_buffers_only_the_current_checkpoint_and_preserves_raw_line() {
 }
 
 #[test]
+fn decoder_does_not_reserve_the_declared_checkpoint_count() {
+    let first = line("m1", 0, 1_000_000, "first");
+    let mut decoder = CheckpointDecoder::default();
+
+    assert!(matches!(
+        decoder
+            .push_complete_line(
+                Path::new("messages.jsonl"),
+                first.clone(),
+                first.len() as u64,
+            )
+            .unwrap(),
+        DecodeResult::NeedMore
+    ));
+    let pending = decoder.pending.as_ref().unwrap();
+    assert_eq!(pending.records.len(), 1);
+    assert!(pending.records.capacity() < 16);
+}
+
+#[test]
+fn sequence_overflow_rejects_checkpoint_before_advancing_decoder_state() {
+    let initial_seq = u64::MAX - 1;
+    let initial_offset = 97_u64;
+    let overflowing = line(&format!("m{initial_seq}"), 0, 2, "first");
+    let overflowing_end = initial_offset + overflowing.len() as u64;
+    let mut decoder = CheckpointDecoder::new(initial_seq, initial_offset);
+
+    let error = decoder
+        .push_complete_line(Path::new("messages.jsonl"), overflowing, overflowing_end)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("message sequence overflow after checkpoint")
+    );
+    assert_eq!(decoder.next_seq, initial_seq);
+    assert_eq!(decoder.committed_end, initial_offset);
+    assert_eq!(decoder.next_line_offset, initial_offset);
+    assert!(decoder.pending.is_none());
+
+    let valid = line(&format!("m{initial_seq}"), 0, 1, "retry");
+    let valid_end = initial_offset + valid.len() as u64;
+    let DecodeResult::Checkpoint(checkpoint) = decoder
+        .push_complete_line(Path::new("messages.jsonl"), valid, valid_end)
+        .unwrap()
+    else {
+        panic!("decoder should remain reusable after rejecting the overflow");
+    };
+    assert_eq!(checkpoint.committed_end, valid_end);
+    assert_eq!(decoder.next_seq, u64::MAX);
+}
+
+#[test]
 fn decoder_validates_a_candidate_group_from_a_tail_offset() {
     let first = line("m900", 0, 2, "tail call");
     let second = line("m901", 1, 2, "tail result");
@@ -243,6 +296,65 @@ struct CountingReader<R> {
     reads: Arc<AtomicUsize>,
 }
 
+struct DeterministicChunkReader {
+    bytes: Vec<u8>,
+    offset: usize,
+    step: usize,
+}
+
+impl AsyncRead for DeterministicChunkReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if self.offset == self.bytes.len() {
+            return Poll::Ready(Ok(()));
+        }
+        let chunk = (self.step.wrapping_mul(17).wrapping_add(5) % 23) + 1;
+        self.step = self.step.wrapping_add(1);
+        let end = self
+            .offset
+            .saturating_add(chunk.min(buffer.remaining()))
+            .min(self.bytes.len());
+        buffer.put_slice(&self.bytes[self.offset..end]);
+        self.offset = end;
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn deterministic_chunk_boundaries_preserve_checkpoint_and_raw_order() {
+    let expected = [
+        line("m1", 0, 1, "prefix"),
+        line("m2", 0, 3, "assistant"),
+        line("m3", 1, 3, "first result"),
+        line("m4", 2, 3, "second result"),
+        line("m5", 0, 1, "suffix"),
+    ]
+    .concat();
+    let source = DeterministicChunkReader {
+        bytes: expected.clone(),
+        offset: 0,
+        step: 0,
+    };
+    let mut reader = CommittedCheckpointReader::new(
+        BufReader::with_capacity(29, source),
+        PathBuf::from("messages.jsonl"),
+    );
+    let mut refs = Vec::new();
+    let mut raw = Vec::new();
+    while let DecodeResult::Checkpoint(checkpoint) = reader.next_checkpoint().await.unwrap() {
+        for record in checkpoint.records {
+            refs.push(record.trajectory.message_ref);
+            raw.extend(record.raw);
+        }
+    }
+
+    assert_eq!(refs, ["m1", "m2", "m3", "m4", "m5"]);
+    assert_eq!(raw, expected);
+}
+
 impl<R: AsyncRead + Unpin> AsyncRead for CountingReader<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -310,4 +422,123 @@ async fn partial_line_can_complete_after_a_later_read() {
         panic!("completed line should become visible");
     };
     assert_eq!(checkpoint.records[0].raw, complete);
+}
+
+#[tokio::test]
+async fn partial_multi_record_checkpoint_commits_once_after_multiple_eofs() {
+    let prefix = line("m1", 0, 1, "prefix");
+    let first = line("m2", 0, 3, "assistant");
+    let second = line("m3", 1, 3, "first result");
+    let third = line("m4", 2, 3, "second result");
+    let second_split = second.len() / 2;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("messages.jsonl");
+    let initial = [prefix.as_slice(), first.as_slice(), &second[..second_split]].concat();
+    tokio::fs::write(&path, &initial).await.unwrap();
+    let file = tokio::fs::File::open(&path).await.unwrap();
+    let mut reader = CommittedCheckpointReader::new(BufReader::new(file), path.clone());
+
+    let DecodeResult::Checkpoint(committed_prefix) = reader.next_checkpoint().await.unwrap() else {
+        panic!("the singleton prefix should be committed");
+    };
+    assert_eq!(committed_prefix.records[0].trajectory.message_ref, "m1");
+    assert_eq!(reader.committed_end(), prefix.len() as u64);
+
+    assert!(matches!(
+        reader.next_checkpoint().await.unwrap(),
+        DecodeResult::NeedMore
+    ));
+    assert!(matches!(
+        reader.next_checkpoint().await.unwrap(),
+        DecodeResult::NeedMore
+    ));
+    assert_eq!(reader.committed_end(), prefix.len() as u64);
+
+    use tokio::io::AsyncWriteExt;
+    let mut writer = tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .await
+        .unwrap();
+    writer.write_all(&second[second_split..]).await.unwrap();
+    writer.flush().await.unwrap();
+    assert!(matches!(
+        reader.next_checkpoint().await.unwrap(),
+        DecodeResult::NeedMore
+    ));
+    assert!(matches!(
+        reader.next_checkpoint().await.unwrap(),
+        DecodeResult::NeedMore
+    ));
+    assert_eq!(reader.committed_end(), prefix.len() as u64);
+
+    writer.write_all(&third).await.unwrap();
+    writer.flush().await.unwrap();
+    let DecodeResult::Checkpoint(checkpoint) = reader.next_checkpoint().await.unwrap() else {
+        panic!("the completed group should commit after the final append");
+    };
+    assert_eq!(
+        checkpoint
+            .records
+            .iter()
+            .map(|record| record.trajectory.message_ref.as_str())
+            .collect::<Vec<_>>(),
+        ["m2", "m3", "m4"]
+    );
+    assert_eq!(checkpoint.records[0].source_offset, prefix.len() as u64);
+    assert_eq!(
+        checkpoint.committed_end,
+        (prefix.len() + first.len() + second.len() + third.len()) as u64
+    );
+    assert!(matches!(
+        reader.next_checkpoint().await.unwrap(),
+        DecodeResult::NeedMore
+    ));
+}
+
+#[test]
+fn decoder_rejects_non_contiguous_and_underflowing_line_offsets() {
+    let first = line("m1", 0, 1, "first");
+    let mut decoder = CheckpointDecoder::default();
+    let error = decoder
+        .push_complete_line(
+            Path::new("messages.jsonl"),
+            first.clone(),
+            first.len() as u64 + 7,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("starts at byte 7, expected 0"));
+
+    let error = decoder
+        .push_complete_line(Path::new("messages.jsonl"), first.clone(), 1)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("record offset precedes the start of the file")
+    );
+
+    let DecodeResult::Checkpoint(_) = decoder
+        .push_complete_line(
+            Path::new("messages.jsonl"),
+            first.clone(),
+            first.len() as u64,
+        )
+        .unwrap()
+    else {
+        panic!("the contiguous first line should commit");
+    };
+    let second = line("m2", 0, 1, "second");
+    let overlap_end = first.len() as u64 + second.len() as u64 - 1;
+    let error = decoder
+        .push_complete_line(Path::new("messages.jsonl"), second, overlap_end)
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "message record starts at byte {}, expected {}",
+            first.len() - 1,
+            first.len()
+        )
+    );
 }
