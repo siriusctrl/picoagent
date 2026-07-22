@@ -31,8 +31,19 @@ pub(crate) enum Command {
         #[arg(long, value_enum, default_value = "text")]
         output: OutputFormat,
     },
-    /// Print persisted metadata and the final output for a run.
-    Inspect { run_id: String },
+    /// Inspect a run's committed transcript or persisted summary.
+    Inspect {
+        run_id: String,
+        /// Continue following newly committed checkpoints.
+        #[arg(long, conflicts_with_all = ["output", "summary"])]
+        follow: bool,
+        /// Write checkpoint-safe records instead of opening the viewer.
+        #[arg(long, value_enum, conflicts_with_all = ["follow", "summary"])]
+        output: Option<InspectOutput>,
+        /// Print persisted metadata and final output.
+        #[arg(long, conflicts_with_all = ["follow", "output"])]
+        summary: bool,
+    },
     /// Authenticate an OpenAI OAuth provider with the device-code flow.
     Auth {
         #[command(subcommand)]
@@ -53,6 +64,11 @@ pub(crate) enum Command {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum OutputFormat {
     Text,
+    Ndjson,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum InspectOutput {
     Ndjson,
 }
 

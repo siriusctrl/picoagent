@@ -181,6 +181,48 @@ final line across EOF and streams forward without reading the whole file;
 trajectory loading collects its committed records, while append recovery only
 counts them and uses the same committed byte offset.
 
+### Transcript inspection
+
+`fiasco inspect` is a read-only adapter over the same durable boundary:
+
+```text
+inspect command
+  -> TranscriptTimeline (Fiasco storage/checkpoints/run state)
+     -> fmtview::view::RecordTimeline
+        -> fmtview (tail loading/search/navigation/render/terminal lifecycle)
+```
+
+The command is selected before application config and provider composition.
+Summary and exact NDJSON paths therefore need only the run directory, and the
+interactive path constructs no provider, MCP client, hooks, tools, or runner.
+Fiasco depends on the released `fmtview` facade and does not depend directly on
+`fmtview-core` or own ratatui/crossterm behavior.
+
+The timeline opens at the last committed checkpoint by scanning physical lines
+backward from EOF. It loads older checkpoints backward and newer checkpoints
+forward; one logical checkpoint may exceed a requested record/byte budget when
+it is the first group in a batch, but is never split across published batches.
+Prefix probes are bounded. The initial tail path does not index or validate
+every earlier message, so a large history can show its first screen without a
+forward scan.
+
+Follow refresh retains the shared `CheckpointDecoder`, its pending checkpoint,
+a torn-line buffer, and the scanned suffix cursor. An unchanged large pending
+checkpoint therefore costs only bounded head/middle/tail probes per refresh.
+Rewriting only the uncommitted suffix invalidates and rebuilds this tracker from
+the unchanged committed boundary without changing the epoch. Reads from a
+concurrently shrinking or rewritten suffix are retried from a clean working
+tracker and published only after one coherent file observation. Truncating a
+committed prefix, replacing the file identity, or changing bounded committed
+prefix probes starts a new epoch so fmtview discards old record identities.
+Queued, running, and idle runs report a live boundary; completed, failed,
+cancelled, and closed runs report a terminal boundary.
+
+Interactive snapshot and follow modes are TTY-only. Redirected stdout defaults
+to exact committed NDJSON, preserving every raw record byte and LF without
+reserialization; `--summary` retains the metadata/final-output view. Events,
+child-run trees, and task controls are outside this transcript source.
+
 The message file is created and directory-synced with the run. The writer's
 cached next sequence is invalidated before cancellable I/O and restored only
 after a complete record has synced. Multiple independent writers for one run
@@ -436,17 +478,18 @@ root, `run_end` follows terminal completion; for a reusable child it follows
 each completed activity after the child becomes idle, not explicit close.
 Hooks do not define a second execution path.
 
-## Headless Surface
+## Runtime And Inspector Surfaces
 
-The binary emits NDJSON runtime events for machines and a compact final result
-for humans. There is no TUI or embedded web frontend. A future API or web client
-should consume the same runtime events and run artifacts rather than introduce
-model logic in the transport.
+The execution path emits NDJSON runtime events for machines and a compact final
+result for humans. The separate read-only inspect path can embed fmtview's TUI,
+but no terminal state enters `AgentRunner` or storage contracts. A future API or
+web client should consume the same runtime events and run artifacts rather than
+introduce model logic in the transport.
 
 ## Deliberate Launch Omissions
 
 - OS sandbox and interactive approvals
-- TUI or browser frontend
+- browser frontend or a second transcript rendering stack
 - built-in scheduler
 - vector search
 - provider/server-side compaction

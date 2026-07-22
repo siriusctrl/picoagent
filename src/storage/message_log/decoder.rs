@@ -69,6 +69,33 @@ impl CheckpointDecoder {
         self.committed_end
     }
 
+    pub(crate) fn next_seq(&self) -> u64 {
+        self.next_seq
+    }
+
+    /// Validate one complete line as the first record of the next checkpoint
+    /// without advancing decoder state. Directional readers use this to stop
+    /// before a checkpoint that cannot fit the remainder of a non-empty batch.
+    pub(crate) fn preflight_checkpoint_start(
+        &self,
+        path: &std::path::Path,
+        line_with_newline: &[u8],
+    ) -> Result<u64> {
+        ensure!(
+            self.pending.is_none(),
+            "checkpoint preflight requires a checkpoint boundary"
+        );
+        ensure!(
+            line_with_newline.ends_with(b"\n"),
+            "checkpoint preflight requires a newline-terminated record"
+        );
+        let stored = parse_stored_line(path, line_with_newline)?;
+        let checkpoint = stored.local.checkpoint.clone();
+        self.validate_checkpoint_start(&stored, checkpoint.as_ref())?;
+        let _ = trajectory_record(stored, self.next_seq)?;
+        Ok(checkpoint.map_or(1, |checkpoint| checkpoint.count))
+    }
+
     pub(crate) fn push_complete_line(
         &mut self,
         path: &std::path::Path,
@@ -109,28 +136,8 @@ impl CheckpointDecoder {
                 "message `{}` has inconsistent checkpoint metadata",
                 stored.message_ref
             );
-        } else if let Some(checkpoint) = checkpoint.as_ref() {
-            ensure!(
-                checkpoint.count > 0,
-                "message checkpoint count must be positive"
-            );
-            ensure!(
-                checkpoint.index == 0,
-                "message checkpoint `{}` starts at index {} instead of 0",
-                checkpoint.first_message_ref,
-                checkpoint.index
-            );
-            ensure!(
-                checkpoint.first_message_ref == stored.message_ref,
-                "message checkpoint `{}` starts with message `{}`",
-                checkpoint.first_message_ref,
-                stored.message_ref
-            );
-            usize::try_from(checkpoint.count)
-                .context("message checkpoint count does not fit in memory")?;
-            self.next_seq
-                .checked_add(checkpoint.count)
-                .context("message sequence overflow after checkpoint")?;
+        } else {
+            self.validate_checkpoint_start(&stored, checkpoint.as_ref())?;
         }
         let expected_seq = self
             .next_seq
@@ -177,6 +184,37 @@ impl CheckpointDecoder {
         } else {
             Ok(DecodeResult::NeedMore)
         }
+    }
+
+    fn validate_checkpoint_start(
+        &self,
+        stored: &super::StoredMessage,
+        checkpoint: Option<&MessageCheckpoint>,
+    ) -> Result<()> {
+        if let Some(checkpoint) = checkpoint {
+            ensure!(
+                checkpoint.count > 0,
+                "message checkpoint count must be positive"
+            );
+            ensure!(
+                checkpoint.index == 0,
+                "message checkpoint `{}` starts at index {} instead of 0",
+                checkpoint.first_message_ref,
+                checkpoint.index
+            );
+            ensure!(
+                checkpoint.first_message_ref == stored.message_ref,
+                "message checkpoint `{}` starts with message `{}`",
+                checkpoint.first_message_ref,
+                stored.message_ref
+            );
+            usize::try_from(checkpoint.count)
+                .context("message checkpoint count does not fit in memory")?;
+            self.next_seq
+                .checked_add(checkpoint.count)
+                .context("message sequence overflow after checkpoint")?;
+        }
+        Ok(())
     }
 
     fn commit_pending(&mut self, committed_end: u64) -> Result<DecodeResult> {

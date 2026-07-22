@@ -1,5 +1,6 @@
 use std::{
     env,
+    io::IsTerminal,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -22,13 +23,13 @@ use fiasco::{
         openai_oauth::{DEFAULT_OPENAI_OAUTH_BASE_URL, OpenAiOAuthProvider},
     },
     skills::SkillRegistry,
-    storage::RunDirStore,
+    storage::{RunDirStore, TranscriptTimeline},
     tools::{WebSearchTool, build_app_tools},
 };
 
 mod cli;
 
-use cli::{AuthCommand, Cli, Command, MemoryCommand, OutputFormat, SkillsCommand};
+use cli::{AuthCommand, Cli, Command, InspectOutput, MemoryCommand, OutputFormat, SkillsCommand};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -38,6 +39,23 @@ async fn main() -> Result<()> {
         .init();
     let cli = Cli::parse();
     let workspace = dunce_canonicalize(&cli.workspace)?;
+    if let Command::Inspect {
+        run_id,
+        follow,
+        output,
+        summary,
+    } = &cli.command
+    {
+        return inspect_run(
+            &workspace,
+            run_id,
+            *follow,
+            *output,
+            *summary,
+            std::io::stdout().is_terminal(),
+        )
+        .await;
+    }
     let config = AppConfig::load(&workspace, cli.config.as_deref())?;
     let fiasco_home = fiasco_home()?;
 
@@ -48,7 +66,7 @@ async fn main() -> Result<()> {
         Command::Resume { run_id, output } => {
             resume_task(&workspace, &fiasco_home, config, run_id, output).await
         }
-        Command::Inspect { run_id } => inspect_run(&workspace, &run_id).await,
+        Command::Inspect { .. } => unreachable!("inspect is dispatched before config loading"),
         Command::Auth {
             command: AuthCommand::Login,
         } => login(&fiasco_home, &config).await,
@@ -310,8 +328,32 @@ fn build_hooks(config: &AppConfig, workspace: &Path) -> Result<HookPipeline> {
     Ok(pipeline)
 }
 
-async fn inspect_run(workspace: &Path, run_id: &str) -> Result<()> {
+async fn inspect_run(
+    workspace: &Path,
+    run_id: &str,
+    follow: bool,
+    output: Option<InspectOutput>,
+    summary: bool,
+    stdout_is_terminal: bool,
+) -> Result<()> {
     let store = RunDirStore::new(workspace);
+    if summary {
+        return inspect_summary(&store, run_id).await;
+    }
+    if follow && !stdout_is_terminal {
+        bail!("`fiasco inspect --follow` requires an interactive terminal on stdout");
+    }
+    if output.is_some() || !stdout_is_terminal {
+        let mut stdout = tokio::io::stdout();
+        return store.write_committed_ndjson(run_id, &mut stdout).await;
+    }
+    let source = TranscriptTimeline::open(&store, run_id)?;
+    let mut options = fmtview::view::ViewOptions::default();
+    options.follow = follow;
+    fmtview::view::run(Box::new(source), options)
+}
+
+async fn inspect_summary(store: &RunDirStore, run_id: &str) -> Result<()> {
     let run = store.load_run(run_id).await?;
     println!("{}", serde_json::to_string_pretty(&run)?);
     let final_path = store.paths(run_id).final_output;

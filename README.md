@@ -7,9 +7,10 @@ delegated agents and long-running background jobs through one durable runtime
 for local automation and cloud workloads.
 
 The runtime deliberately shares one `AgentRunner` implementation and one tool
-contract across root and child agents. Runs are portable, resumable, and
-inspectable without an embedded TUI, database, distributed scheduler, sandbox,
-or approval system.
+contract across root and child agents. Runs are portable and resumable without
+a database, distributed scheduler, sandbox, or approval system. Transcript
+inspection embeds fmtview behind a storage-neutral boundary; the agent runtime
+itself remains headless.
 
 ## Features
 
@@ -33,6 +34,7 @@ or approval system.
 - run-local YAML planning graphs maintained with ordinary file tools
 - ordinary Markdown user/project memory maintained with normal file tools
 - self-contained run directories and optional NDJSON events
+- tail-first transcript inspection for completed and running runs
 
 ## Important Security Boundary
 
@@ -79,10 +81,26 @@ Runtime output is stored beneath the current project:
   tasks/
 ```
 
-Inspect a previous result:
+On an interactive terminal, inspect opens the current committed tail and loads
+older checkpoints lazily:
 
 ```bash
 fiasco inspect <run-id>
+fiasco inspect <run-id> --follow
+```
+
+`--follow` refreshes newly committed checkpoints while preserving fmtview's
+attached, detached, and paused browsing states. A redirected `--follow` is
+rejected because this mode requires an interactive terminal.
+
+When stdout is redirected, inspect instead writes exact checkpoint-safe JSONL.
+The explicit form is useful in scripts. The legacy metadata/final-output view
+remains available separately:
+
+```bash
+fiasco inspect <run-id> | jq -c .
+fiasco inspect <run-id> --output ndjson
+fiasco inspect <run-id> --summary
 ```
 
 Resume an interrupted or failed run from its last complete checkpoint:
@@ -139,6 +157,14 @@ before resuming appends. `run.json` declares
 `"message_format": "fiasco-message"`, retains the original user prompt, and
 freezes the stored profile plus remaining delegation depth. Compaction never
 rewrites or deletes committed trajectory records.
+
+The interactive inspector delegates terminal lifecycle, JSON/chat rendering,
+search, navigation, wrap, and follow state to the released `fmtview` embedding
+facade. Fiasco owns only run lookup and a checkpoint-aware `RecordTimeline`;
+the inspector never introduces ratatui/crossterm rendering or event-loop logic
+into the runtime. Tail discovery scans backward from EOF, older loads move by
+whole checkpoints, and refresh continues the shared incremental checkpoint
+decoder from the last committed byte boundary.
 
 Stable agent instructions are folded scalar values in the typed, compile-time
 `prompts/agents.yaml` registry. Every local model-facing tool adapter has a
