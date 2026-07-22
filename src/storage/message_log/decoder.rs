@@ -69,6 +69,10 @@ impl CheckpointDecoder {
         self.committed_end
     }
 
+    pub(crate) fn next_seq(&self) -> u64 {
+        self.next_seq
+    }
+
     pub(crate) fn push_complete_line(
         &mut self,
         path: &std::path::Path,

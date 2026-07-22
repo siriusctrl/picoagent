@@ -33,13 +33,16 @@ healthy reasoning response; and an idle timeout alone, because heartbeat or
 trickle traffic could retain a model slot indefinitely. See
 [ADR 0011](adr/0011-model-stream-idle-timeout-and-request-deadline.md).
 
-## Headless First
+## Headless Runtime, Separate Inspector
 
-The runtime emits structured events and portable artifacts. It does not contain
-a TUI or web frontend.
+The agent runtime emits structured events and portable artifacts without UI
+state. The `inspect` command is a separate read-only adapter that embeds
+fmtview's terminal frontend over a backend-neutral checkpoint timeline. Fiasco
+does not own terminal rendering, viewport, search, or event-loop behavior.
 
 Rejected: preserving the legacy Bun/Hono/Ink surfaces. A future service can wrap
-the Rust library and event stream without owning agent behavior.
+the Rust library and event stream without owning agent behavior. Also rejected:
+duplicating ratatui/crossterm logic inside the orchestration runtime.
 
 ## File-Based Runs
 

@@ -26,6 +26,8 @@ navigation, invariants, verification, and handoff.
 - `src/storage/`: self-contained run directories, one self-contained message
   JSONL (including compacted-state boundaries), event JSONL, status, and
   final-result persistence.
+- `src/storage/message_log/transcript.rs`: checkpoint-safe tail-first timeline
+  and exact NDJSON source used by the read-only inspector.
 - `src/trajectory.rs` and `src/trajectory/`: provider-neutral compacted-history
   search/read contracts plus the local message and artifact reader.
 - `src/skills/`: Agent Skills discovery and progressive `SKILL.md` loading.
@@ -157,9 +159,11 @@ navigation, invariants, verification, and handoff.
   protects. For rare process crashes, prefer one durable authority, complete
   checkpoints, an explicit `interrupted` result, and model-directed retry over
   a cross-file state machine for transparent continuation.
-- Do not add a TUI, frontend framework, built-in scheduler, vector database,
-  native dynamic plugin ABI, or distributed worker system without a concrete
-  request.
+- Keep the requested transcript TUI behind fmtview's embedding facade. Fiasco
+  owns the checkpoint-aware source and command routing, not terminal rendering,
+  viewport/search logic, or the crossterm event loop. Do not add another
+  frontend framework, built-in scheduler, vector database, native dynamic
+  plugin ABI, or distributed worker system without a concrete request.
 - Prefer a readable module over speculative framework layers or defensive code
   for states the program cannot produce.
 

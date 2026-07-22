@@ -55,6 +55,9 @@
 - `src/storage/message_log/decoder.rs`: synchronous incremental checkpoint
   validation plus the forward async reader; it preserves exact raw lines and
   committed byte offsets without exposing partial groups.
+- `src/storage/message_log/transcript.rs`: tail-first, bidirectional fmtview
+  timeline over complete checkpoints, incremental follow refresh, reset
+  detection, and exact committed-NDJSON streaming.
 - `src/storage/trajectory.rs`: classified append-only messages and
   compacted-history loading.
 - `src/skills/mod.rs`: Agent Skills metadata discovery and body/path loading;
@@ -65,4 +68,5 @@
 - `src/config.rs`: TOML configuration.
 - `src/events.rs`: runtime event contract and sinks.
 - `src/cli.rs`: CLI command schema.
-- `src/main.rs`: headless composition root.
+- `src/main.rs`: command composition root; inspect dispatch occurs before
+  provider/runtime initialization and embeds only the public fmtview facade.

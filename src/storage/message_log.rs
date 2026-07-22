@@ -14,6 +14,9 @@ use crate::{
 };
 
 pub(crate) mod decoder;
+mod transcript;
+
+pub use transcript::TranscriptTimeline;
 
 use decoder::{CommittedCheckpointReader, CommittedRecord, DecodeResult};
 

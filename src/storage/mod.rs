@@ -20,6 +20,8 @@ mod input;
 mod message_log;
 mod trajectory;
 
+pub use message_log::TranscriptTimeline;
+
 pub const MESSAGE_FORMAT: &str = "fiasco-message";
 const RUN_RECORD_VERSION: u32 = 10;
 
@@ -258,21 +260,7 @@ impl RunDirStore {
 
     pub async fn load_run(&self, run_id: &str) -> Result<RunRecord> {
         let run: RunRecord = read_json(&self.paths(run_id).metadata).await?;
-        ensure!(
-            run.version == RUN_RECORD_VERSION,
-            "unsupported run record version {}; expected {RUN_RECORD_VERSION}",
-            run.version
-        );
-        ensure!(
-            run.message_format == MESSAGE_FORMAT,
-            "unsupported message format {}; expected {MESSAGE_FORMAT}",
-            run.message_format
-        );
-        ensure!(
-            run.model_modalities.contains(&ModelModality::Text),
-            "run record model modalities must include text"
-        );
-        validate_run_parentage(&run)?;
+        validate_loaded_run(&run)?;
         Ok(run)
     }
 
@@ -310,6 +298,24 @@ impl RunDirStore {
     pub fn event_sink(&self) -> SharedEventSink {
         Arc::new(self.clone())
     }
+}
+
+pub(super) fn validate_loaded_run(run: &RunRecord) -> Result<()> {
+    ensure!(
+        run.version == RUN_RECORD_VERSION,
+        "unsupported run record version {}; expected {RUN_RECORD_VERSION}",
+        run.version
+    );
+    ensure!(
+        run.message_format == MESSAGE_FORMAT,
+        "unsupported message format {}; expected {MESSAGE_FORMAT}",
+        run.message_format
+    );
+    ensure!(
+        run.model_modalities.contains(&ModelModality::Text),
+        "run record model modalities must include text"
+    );
+    validate_run_parentage(run)
 }
 
 fn validate_run_parentage(run: &RunRecord) -> Result<()> {
