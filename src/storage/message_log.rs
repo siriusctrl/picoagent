@@ -5,13 +5,17 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::{
     fs::OpenOptions,
-    io::{AsyncSeekExt, AsyncWriteExt},
+    io::{AsyncSeekExt, AsyncWriteExt, BufReader},
 };
 
 use crate::{
     model::Message,
     trajectory::{CompactionMessage, TrajectoryMessage, message_ref, message_ref_seq},
 };
+
+pub(crate) mod decoder;
+
+use decoder::{CommittedCheckpointReader, CommittedRecord, DecodeResult};
 
 /// One durable transcript line. The provider-neutral content blocks are kept
 /// directly in the record so readers do not need a second file to reconstruct
@@ -62,6 +66,7 @@ struct MessageCheckpoint {
 
 struct JsonlFile {
     records: Vec<TrajectoryMessage>,
+    record_count: u64,
     original_len: u64,
     committed_end: u64,
 }
@@ -131,13 +136,13 @@ pub(super) async fn append_checkpoint(path: &Path, records: &[TrajectoryMessage]
 /// newline-terminated message lines are present, so viewers can ignore both a
 /// crash-torn line and complete lines from an incomplete final checkpoint.
 pub(super) async fn load(path: &Path) -> Result<Vec<TrajectoryMessage>> {
-    Ok(read_jsonl(path).await?.records)
+    Ok(read_jsonl(path, true).await?.records)
 }
 
 /// Validate the committed prefix and remove an uncommitted tail before the
 /// sole writer resumes appending.
 pub(super) async fn prepare_append(path: &Path) -> Result<u64> {
-    let log = read_jsonl(path).await?;
+    let log = read_jsonl(path, false).await?;
     if log.original_len != log.committed_end {
         let mut file = OpenOptions::new()
             .write(true)
@@ -154,92 +159,42 @@ pub(super) async fn prepare_append(path: &Path) -> Result<u64> {
             .await
             .with_context(|| format!("sync recovered trajectory file {}", path.display()))?;
     }
-    Ok(log.records.len() as u64)
+    Ok(log.record_count)
 }
 
-async fn read_jsonl(path: &Path) -> Result<JsonlFile> {
-    let bytes = tokio::fs::read(path)
+async fn read_jsonl(path: &Path, collect_records: bool) -> Result<JsonlFile> {
+    let file = tokio::fs::File::open(path)
         .await
         .with_context(|| format!("read initialized message log {}", path.display()))?;
-    let original_len = bytes.len() as u64;
-    let complete_lines = bytes
-        .split_inclusive(|byte| *byte == b'\n')
-        .scan(0_usize, |end, line| {
-            if !line.ends_with(b"\n") {
-                return None;
-            }
-            *end += line.len();
-            Some((line, *end))
-        })
-        .collect::<Vec<_>>();
+    let mut reader = CommittedCheckpointReader::new(BufReader::new(file), path.to_owned());
     let mut records = Vec::new();
-    let mut committed_end = 0_usize;
-    let mut line_index = 0_usize;
-
-    while line_index < complete_lines.len() {
-        let first = parse_stored_line(path, complete_lines[line_index].0)?;
-        let Some(checkpoint) = first.local.checkpoint.clone() else {
-            // Pre-checkpoint logs are singleton records. New appends always
-            // persist explicit count=1 checkpoint metadata.
-            let record = trajectory_record(first, records.len() as u64 + 1)?;
-            records.push(record);
-            committed_end = complete_lines[line_index].1;
-            line_index += 1;
-            continue;
-        };
-        ensure!(
-            checkpoint.count > 0,
-            "message checkpoint count must be positive"
-        );
-        ensure!(
-            checkpoint.index == 0,
-            "message checkpoint `{}` starts at index {} instead of 0",
-            checkpoint.first_message_ref,
-            checkpoint.index
-        );
-        ensure!(
-            checkpoint.first_message_ref == first.message_ref,
-            "message checkpoint `{}` starts with message `{}`",
-            checkpoint.first_message_ref,
-            first.message_ref
-        );
-        let checkpoint_count = usize::try_from(checkpoint.count)
-            .context("message checkpoint count does not fit in memory")?;
-        let available = complete_lines.len().saturating_sub(line_index);
-        let inspected = checkpoint_count.min(available);
-        let mut checkpoint_records = Vec::with_capacity(inspected);
-        for offset in 0..inspected {
-            let stored = parse_stored_line(path, complete_lines[line_index + offset].0)?;
-            let actual = stored.local.checkpoint.as_ref().with_context(|| {
-                format!(
-                    "message `{}` is missing checkpoint metadata inside group `{}`",
-                    stored.message_ref, checkpoint.first_message_ref
-                )
-            })?;
-            ensure!(
-                actual.first_message_ref == checkpoint.first_message_ref
-                    && actual.count == checkpoint.count
-                    && actual.index == offset as u64,
-                "message `{}` has inconsistent checkpoint metadata",
-                stored.message_ref
-            );
-            checkpoint_records.push(trajectory_record(
-                stored,
-                records.len() as u64 + offset as u64 + 1,
-            )?);
+    let mut record_count = 0_u64;
+    let mut committed_end = 0;
+    while let DecodeResult::Checkpoint(checkpoint) = reader.next_checkpoint().await? {
+        committed_end = checkpoint.committed_end;
+        record_count = record_count
+            .checked_add(checkpoint.records.len() as u64)
+            .context("committed message count overflow")?;
+        for record in checkpoint.records {
+            let CommittedRecord {
+                trajectory,
+                raw,
+                source_offset,
+            } = record;
+            drop(raw);
+            let _ = source_offset;
+            if collect_records {
+                records.push(trajectory);
+            }
         }
-        if inspected < checkpoint_count {
-            break;
-        }
-        line_index += checkpoint_count;
-        committed_end = complete_lines[line_index - 1].1;
-        records.extend(checkpoint_records);
     }
+    debug_assert_eq!(committed_end, reader.committed_end());
 
     Ok(JsonlFile {
         records,
-        original_len,
-        committed_end: committed_end as u64,
+        record_count,
+        original_len: reader.bytes_read(),
+        committed_end,
     })
 }
 
