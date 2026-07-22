@@ -45,6 +45,7 @@ struct PendingCheckpoint {
 pub(crate) struct CheckpointDecoder {
     next_seq: u64,
     committed_end: u64,
+    next_line_offset: u64,
     pending: Option<PendingCheckpoint>,
 }
 
@@ -59,6 +60,7 @@ impl CheckpointDecoder {
         Self {
             next_seq,
             committed_end,
+            next_line_offset: committed_end,
             pending: None,
         }
     }
@@ -82,6 +84,11 @@ impl CheckpointDecoder {
         let source_offset = line_end
             .checked_sub(line_len)
             .context("message record offset precedes the start of the file")?;
+        ensure!(
+            source_offset == self.next_line_offset,
+            "message record starts at byte {source_offset}, expected {}",
+            self.next_line_offset
+        );
         let stored = parse_stored_line(path, &line_with_newline)?;
         let checkpoint = stored.local.checkpoint.clone();
         let expected_index = self
@@ -137,6 +144,7 @@ impl CheckpointDecoder {
         };
 
         if let Some(pending) = self.pending.as_mut() {
+            self.next_line_offset = line_end;
             pending.records.push(record);
             if expected_index + 1 < pending.metadata.count {
                 return Ok(DecodeResult::NeedMore);
@@ -152,12 +160,14 @@ impl CheckpointDecoder {
                 .checked_add(1)
                 .context("message sequence overflow after singleton checkpoint")?;
             self.committed_end = line_end;
+            self.next_line_offset = line_end;
             return Ok(DecodeResult::Checkpoint(CommittedCheckpoint {
                 records: vec![record],
                 committed_end: line_end,
             }));
         };
         let count = checkpoint.count;
+        self.next_line_offset = line_end;
         self.pending = Some(PendingCheckpoint {
             metadata: checkpoint,
             records: vec![record],
