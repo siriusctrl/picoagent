@@ -32,13 +32,14 @@ the storage boundary in the other direction.
   by reverse physical-line scanning, then feeds that candidate forward through
   the same `CheckpointDecoder` used by trajectory loading and append recovery.
   Older reads repeat this by whole groups; newer reads continue forward from a
-  known sequence and byte boundary. A checkpoint can cross a load budget but is
-  never partially published.
+  known sequence and byte boundary. A checkpoint can cross a load budget only
+  as the first group in a batch and is never partially published.
 - Follow refresh retains the pending decoder, torn-line bytes, and scan cursor.
   Bounded samples detect committed-prefix and pending-suffix changes. Rewriting
   only an uncommitted tail rebuilds pending state from the same committed
-  boundary without duplicating records. Committed truncation or replacement
-  starts a new record-id epoch.
+  boundary without duplicating records. Refresh retries a concurrently changing
+  file without publishing partial decoder progress. Committed truncation or
+  replacement starts a new record-id epoch.
 - Queued, running, and idle run states are live. Completed, failed, cancelled,
   and closed states are terminal.
 - On a TTY, `fiasco inspect <run-id>` opens a tail-first snapshot and

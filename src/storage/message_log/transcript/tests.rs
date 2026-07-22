@@ -17,6 +17,8 @@ use crate::{
     trajectory::message_ref,
 };
 
+mod review;
+
 async fn test_store(state: RunState) -> (TempDir, RunDirStore) {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
