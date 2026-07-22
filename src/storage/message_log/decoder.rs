@@ -129,8 +129,8 @@ impl CheckpointDecoder {
             usize::try_from(checkpoint.count)
                 .context("message checkpoint count does not fit in memory")?;
             self.next_seq
-                .checked_add(checkpoint.count - 1)
-                .context("message sequence overflow inside checkpoint")?;
+                .checked_add(checkpoint.count)
+                .context("message sequence overflow after checkpoint")?;
         }
         let expected_seq = self
             .next_seq
@@ -182,16 +182,21 @@ impl CheckpointDecoder {
     fn commit_pending(&mut self, committed_end: u64) -> Result<DecodeResult> {
         let pending = self
             .pending
-            .take()
+            .as_ref()
             .context("checkpoint decoder has no pending checkpoint to commit")?;
         ensure!(
             pending.records.len() as u64 == pending.metadata.count,
             "checkpoint decoder committed an incomplete checkpoint"
         );
-        self.next_seq = self
+        let next_seq = self
             .next_seq
             .checked_add(pending.metadata.count)
             .context("message sequence overflow after checkpoint")?;
+        let pending = self
+            .pending
+            .take()
+            .context("checkpoint decoder lost its pending checkpoint")?;
+        self.next_seq = next_seq;
         self.committed_end = committed_end;
         Ok(DecodeResult::Checkpoint(CommittedCheckpoint {
             records: pending.records,

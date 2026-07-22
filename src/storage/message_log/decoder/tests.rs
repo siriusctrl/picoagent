@@ -142,6 +142,39 @@ fn decoder_does_not_reserve_the_declared_checkpoint_count() {
 }
 
 #[test]
+fn sequence_overflow_rejects_checkpoint_before_advancing_decoder_state() {
+    let initial_seq = u64::MAX - 1;
+    let initial_offset = 97_u64;
+    let overflowing = line(&format!("m{initial_seq}"), 0, 2, "first");
+    let overflowing_end = initial_offset + overflowing.len() as u64;
+    let mut decoder = CheckpointDecoder::new(initial_seq, initial_offset);
+
+    let error = decoder
+        .push_complete_line(Path::new("messages.jsonl"), overflowing, overflowing_end)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("message sequence overflow after checkpoint")
+    );
+    assert_eq!(decoder.next_seq, initial_seq);
+    assert_eq!(decoder.committed_end, initial_offset);
+    assert_eq!(decoder.next_line_offset, initial_offset);
+    assert!(decoder.pending.is_none());
+
+    let valid = line(&format!("m{initial_seq}"), 0, 1, "retry");
+    let valid_end = initial_offset + valid.len() as u64;
+    let DecodeResult::Checkpoint(checkpoint) = decoder
+        .push_complete_line(Path::new("messages.jsonl"), valid, valid_end)
+        .unwrap()
+    else {
+        panic!("decoder should remain reusable after rejecting the overflow");
+    };
+    assert_eq!(checkpoint.committed_end, valid_end);
+    assert_eq!(decoder.next_seq, u64::MAX);
+}
+
+#[test]
 fn decoder_validates_a_candidate_group_from_a_tail_offset() {
     let first = line("m900", 0, 2, "tail call");
     let second = line("m901", 1, 2, "tail result");
