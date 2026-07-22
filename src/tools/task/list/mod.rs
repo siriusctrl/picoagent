@@ -11,11 +11,13 @@ use crate::{
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
-pub(super) struct SteerTool {
+use super::result::task_records;
+
+pub(super) struct ListTool {
     manager: Arc<TaskManager>,
 }
 
-impl SteerTool {
+impl ListTool {
     pub(super) fn new(manager: Arc<TaskManager>) -> Self {
         Self { manager }
     }
@@ -23,22 +25,26 @@ impl SteerTool {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct TaskSteerArgs {
-    task_id: String,
-    message: String,
+struct TaskListArgs {
+    #[serde(default)]
+    include_closed: bool,
 }
 
 #[async_trait]
-impl Tool for SteerTool {
+impl Tool for ListTool {
     fn spec(&self) -> ToolSpec {
         crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
     async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
-        let args: TaskSteerArgs =
-            serde_json::from_value(arguments).context("invalid task_steer arguments")?;
-        Ok(RawToolOutput::text(serde_json::to_string(
-            &self.manager.steer(&args.task_id, args.message).await?,
-        )?))
+        let args: TaskListArgs =
+            serde_json::from_value(arguments).context("invalid task_list arguments")?;
+        let mut records = self.manager.list_agents().await?;
+        if !args.include_closed {
+            records.retain(|record| record.status() != "closed");
+        }
+        Ok(RawToolOutput::text(serde_json::to_string(&task_records(
+            records,
+        ))?))
     }
 }

@@ -19,6 +19,10 @@ ADR 0030 later replaces that artifact-only presentation with the ordinary
 per-result inline/preview/artifact policy. Parent-controlled delivery remains
 accepted.
 
+ADR 0035 later refines child control into a reusable agent-task lifecycle.
+Agent activity results now leave the child idle, send distinguishes steer from
+queued followup, stop affects only current activity, and close is explicit.
+
 ## Context
 
 The original runtime bounded Root and GeneralTask runs with model-step counts and

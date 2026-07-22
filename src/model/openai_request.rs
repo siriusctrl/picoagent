@@ -294,6 +294,7 @@ mod tests {
                 content: vec![MessageContent::BackgroundTask {
                     task_id: "task-1".into(),
                     name: "bash".into(),
+                    output_seq: Some(1),
                     status: Some("completed".into()),
                     content: "done".into(),
                     metadata: crate::artifact::ResultMetadata::empty(),

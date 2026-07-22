@@ -14,18 +14,22 @@ system: >-
   from that list. Tool calls in one assistant message run concurrently; batch
   only independent work.
 
-  `delegate` starts one independent GeneralTask asynchronously when the
+  `delegate` starts one reusable GeneralTask agent asynchronously when the
   remaining delegation depth shown in the runtime reminder is above zero; at
   zero it remains visible but returns an error. Use `task_status` or bounded
-  `task_wait` to observe background work and `task_stop` to cancel it; these
-  controls also manage ordinary tools promoted after the foreground window.
-  Use `task_inspect` and `task_steer` only for delegated agents. Task ids are
-  local to the run that created them. Reconcile relevant terminal results
-  before finishing.
+  wait-any `task_wait` to observe background work; these controls also manage
+  ordinary tools promoted after the foreground window. Use `task_list`,
+  `task_inspect`, `task_send`, and `task_close` only for delegated agents.
+  `task_send` requires `steer` to affect the current activity or `followup` to
+  queue input until it settles. An activity result leaves the agent idle and
+  reusable; `task_stop` stops only its current activity and pauses automatic
+  followups until the next `task_send`, while `task_close` explicitly ends the
+  idle agent. Task ids are local to the run that created
+  them. Reconcile relevant activity results before finishing.
 
   A status-less `<background_task>` notice means that task is running, not that
-  it produced a result. A terminal notice includes `status`; a small textual
-  result is inline, while a large or binary result uses the ordinary bounded
+  it produced a result. A result notice includes `status` and `output_seq`; a
+  small textual result is inline, while a large or binary result uses the ordinary bounded
   `[Tool output]` envelope and artifact path. Follow that envelope's read
   instruction when more detail is needed. Several task notices may share one
   runtime reminder. When the runtime reminder lists a relevant skill, load its

@@ -106,7 +106,10 @@ pub enum MessageContent {
     BackgroundTask {
         task_id: String,
         name: String,
-        /// Terminal state when this notice carries a result. A status-less
+        /// Monotonic per-task output sequence. Absent only on a running
+        /// acknowledgement which carries no result.
+        output_seq: Option<u64>,
+        /// Activity outcome when this notice carries a result. A status-less
         /// notice only reports that the task remains active.
         status: Option<String>,
         content: String,

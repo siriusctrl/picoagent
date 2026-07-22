@@ -18,22 +18,21 @@ use fiasco::{
 };
 use serde_json::json;
 use tempfile::TempDir;
-use tokio::sync::Notify;
 
 const ACTIVE_MARKER: &str = "<active-background-tasks>";
 
 struct ResumeActiveTaskProvider {
     root_calls: AtomicUsize,
+    child_calls: AtomicUsize,
     requests: Mutex<Vec<ModelRequest>>,
-    release_child: Notify,
 }
 
 impl ResumeActiveTaskProvider {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             root_calls: AtomicUsize::new(0),
+            child_calls: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
-            release_child: Notify::new(),
         })
     }
 }
@@ -51,17 +50,31 @@ impl ModelProvider for ResumeActiveTaskProvider {
     ) -> Result<ModelResponse> {
         self.requests.lock().unwrap().push(request.clone());
         if request.run_id == "resume-parent" {
-            match self.root_calls.fetch_add(1, Ordering::SeqCst) {
-                0 => {
-                    self.release_child.notify_one();
-                    Ok(text_response("wait for recovered work"))
-                }
-                1 => Ok(text_response("resume completed")),
-                unexpected => bail!("unexpected resumed root call {unexpected}"),
+            let call = self.root_calls.fetch_add(1, Ordering::SeqCst);
+            if call != 0 {
+                bail!("unexpected resumed root call {call}");
             }
+            let interrupted = request
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .any(|content| {
+                    matches!(
+                        content,
+                        MessageContent::BackgroundTask {
+                            task_id,
+                            status: Some(status),
+                            ..
+                        } if task_id == "t1" && status == "interrupted"
+                    )
+                });
+            if !interrupted || request_contains(&request, ACTIVE_MARKER) {
+                bail!("resume did not expose one inactive interrupted child");
+            }
+            Ok(text_response("resume completed after interruption"))
         } else if request.run_id == "resume-child" {
-            self.release_child.notified().await;
-            Ok(text_response("recovered child completed"))
+            self.child_calls.fetch_add(1, Ordering::SeqCst);
+            bail!("restart must not automatically resume the child")
         } else {
             bail!("unexpected run {}", request.run_id)
         }
@@ -69,7 +82,7 @@ impl ModelProvider for ResumeActiveTaskProvider {
 }
 
 #[tokio::test]
-async fn resume_rebuilds_active_task_reminder_without_persisting_it() {
+async fn resume_reports_an_interrupted_child_without_restarting_it() {
     let workspace = TempDir::new().unwrap();
     let provider = ResumeActiveTaskProvider::new();
     let store = RunDirStore::new(workspace.path());
@@ -93,21 +106,17 @@ async fn resume_rebuilds_active_task_reminder_without_persisting_it() {
     });
 
     let result = runner.resume("resume-parent").await.unwrap();
-    assert_eq!(result.final_output, "resume completed");
+    assert_eq!(result.final_output, "resume completed after interruption");
+    assert_eq!(provider.root_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.child_calls.load(Ordering::SeqCst), 0);
     {
         let requests = provider.requests.lock().unwrap();
         let root = requests
             .iter()
             .filter(|request| request.run_id == "resume-parent")
             .collect::<Vec<_>>();
-        assert_eq!(root.len(), 2);
-        assert!(request_contains(root[0], ACTIVE_MARKER));
-        assert!(request_contains(
-            root[0],
-            "<task task_id=\"t1\" name=\"recovered review\" state=\"running\" />"
-        ));
-        assert!(!request_contains(root[0], "resume-child"));
-        assert!(!request_contains(root[1], ACTIVE_MARKER));
+        assert_eq!(root.len(), 1);
+        assert!(!request_contains(root[0], ACTIVE_MARKER));
     }
 
     let durable = store.load_messages("resume-parent").await.unwrap();
@@ -115,6 +124,25 @@ async fn resume_rebuilds_active_task_reminder_without_persisting_it() {
         durable
             .iter()
             .all(|message| !message_contains(message, ACTIVE_MARKER))
+    );
+    assert_eq!(
+        durable
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter(|content| matches!(
+                content,
+                MessageContent::BackgroundTask {
+                    task_id,
+                    status: Some(status),
+                    ..
+                } if task_id == "t1" && status == "interrupted"
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        store.load_run("resume-child").await.unwrap().state,
+        RunState::Idle
     );
 }
 
@@ -210,14 +238,15 @@ async fn create_resumable_parent_and_child(
     tokio::fs::write(
         tasks.join("t1.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 10,
+            "version": 12,
             "id": "t1",
             "kind": "agent",
             "name": "recovered review",
             "origin_call_id": "resume-delegate-call",
             "state": "running",
-            "result": null,
-            "error": null,
+            "outputs": [],
+            "pending_followups": [],
+            "paused": false,
             "child_run_id": "resume-child",
             "child_remaining_delegation_depth": 0,
             "prompt": "finish recovered work",

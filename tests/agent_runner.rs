@@ -781,24 +781,11 @@ async fn subagents_reuse_the_runner_and_report_failed_children() {
             .iter()
             .all(|child| child.parent_run_id.as_deref() == Some(&parent.run_id))
     );
-    assert_eq!(
-        children
-            .iter()
-            .filter(|child| child.state == RunState::Completed)
-            .count(),
-        1
-    );
-    assert_eq!(
-        children
-            .iter()
-            .filter(|child| child.state == RunState::Failed)
-            .count(),
-        1
-    );
+    assert!(children.iter().all(|child| child.state == RunState::Idle));
     let events = tokio::fs::read_to_string(store.paths(&parent.run_id).events)
         .await
         .unwrap();
-    assert!(events.contains("\"type\":\"subagent_failed\""));
+    assert!(events.contains("\"type\":\"subagent_activity_failed\""));
     assert!(events.contains("scripted child failure"));
     let messages = store.load_messages(&parent.run_id).await.unwrap();
     assert_eq!(
@@ -1300,10 +1287,11 @@ impl ModelProvider for SteeringProvider {
             return Ok(tool_response(
                 vec![ToolCall {
                     id: "steer-call".to_owned(),
-                    name: "task_steer".to_owned(),
+                    name: "task_send".to_owned(),
                     arguments: json!({
                         "task_id": task_id,
-                        "message": "take the steered path"
+                        "message": "take the steered path",
+                        "mode": "steer"
                     })
                     .into(),
                 }],
@@ -1355,7 +1343,586 @@ async fn steer_is_delivered_after_the_childs_current_tool_batch_before_its_next_
     let events = tokio::fs::read_to_string(store.paths(&result.run_id).events)
         .await
         .unwrap();
-    assert!(events.contains("\"type\":\"subagent_steered\""));
+    assert!(events.contains("\"type\":\"subagent_message_queued\""));
+    assert!(events.contains("\"mode\":\"steer\""));
+}
+
+struct FollowupProvider {
+    child_started: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl ModelProvider for FollowupProvider {
+    fn name(&self) -> &str {
+        "followup"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        if first_user_text(&request) == "child followup target" {
+            let followup_index = request.messages.iter().position(|message| {
+                message.role == Role::User && message.visible_text() == "run the second analysis"
+            });
+            if let Some(followup_index) = followup_index {
+                let first_result_index = request
+                    .messages
+                    .iter()
+                    .position(|message| {
+                        message.role == Role::Assistant
+                            && message.visible_text() == "first activity complete"
+                    })
+                    .context("follow-up activity omitted the first activity checkpoint")?;
+                if followup_index <= first_result_index {
+                    bail!("follow-up was inserted before the first activity completed");
+                }
+                return Ok(text_response(
+                    "second activity complete",
+                    ModelUsage::default(),
+                ));
+            }
+            let gate_done = request.messages.iter().any(|message| {
+                message.content.iter().any(|content| {
+                    matches!(
+                        content,
+                        MessageContent::ToolResult { call_id, .. }
+                            if call_id == "followup-gate-call"
+                    )
+                })
+            });
+            if gate_done {
+                return Ok(text_response(
+                    "first activity complete",
+                    ModelUsage::default(),
+                ));
+            }
+            self.child_started.notify_one();
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "followup-gate-call".to_owned(),
+                    name: "steering_gate".to_owned(),
+                    arguments: json!({}).into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+
+        let tool_results = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|content| match content {
+                MessageContent::ToolResult {
+                    call_id, content, ..
+                } => Some((call_id.as_str(), content.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let task_id = tool_results
+            .iter()
+            .find(|(call_id, _)| *call_id == "delegate-followup-child")
+            .and_then(|(_, content)| background_task_id(content));
+        if let Some((_, content)) = tool_results
+            .iter()
+            .find(|(call_id, _)| *call_id == "close-followup-child")
+        {
+            let closed: Value = serde_json::from_str(content)?;
+            if closed["status"] != "closed" {
+                bail!("task_close did not close the reusable agent: {closed}");
+            }
+            return Ok(text_response(
+                "parent completed reusable agent flow",
+                ModelUsage::default(),
+            ));
+        }
+        if let Some((_, content)) = tool_results
+            .iter()
+            .find(|(call_id, _)| *call_id == "list-followup-child")
+        {
+            let listed: Value = serde_json::from_str(content)?;
+            let listed_agent = listed["tasks"]
+                .as_array()
+                .and_then(|tasks| tasks.first())
+                .context("task_list omitted the reusable agent")?;
+            if listed_agent["task_id"].as_str() != task_id.as_deref()
+                || listed_agent["status"] != "idle"
+                || listed_agent["last_output_seq"] != 2
+            {
+                bail!("task_list returned the wrong reusable agent state: {listed}");
+            }
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "close-followup-child".to_owned(),
+                    name: "task_close".to_owned(),
+                    arguments:
+                        json!({"task_id": task_id.context("delegate result omitted task_id")?})
+                            .into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        let output_sequences = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|content| match content {
+                MessageContent::BackgroundTask {
+                    task_id: output_task_id,
+                    output_seq,
+                    ..
+                } if Some(output_task_id) == task_id.as_ref() => *output_seq,
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        if output_sequences == BTreeSet::from([1, 2]) {
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "list-followup-child".to_owned(),
+                    name: "task_list".to_owned(),
+                    arguments: json!({}).into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        if tool_results
+            .iter()
+            .any(|(call_id, _)| *call_id == "wait-followup-child")
+        {
+            return Ok(text_response(
+                "continue supervising the reusable agent",
+                ModelUsage::default(),
+            ));
+        }
+        if let Some((_, content)) = tool_results
+            .iter()
+            .find(|(call_id, _)| *call_id == "send-followup-child")
+        {
+            let sent: Value = serde_json::from_str(content)?;
+            if sent["accepted_as"] != "queued_followup" || sent["requested_mode"] != "followup" {
+                bail!("task_send did not queue the followup: {sent}");
+            }
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "wait-followup-child".to_owned(),
+                    name: "task_wait".to_owned(),
+                    arguments:
+                        json!({"task_ids": [task_id.context("delegate result omitted task_id")?]})
+                            .into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        if let Some(task_id) = task_id {
+            self.child_started.notified().await;
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "send-followup-child".to_owned(),
+                    name: "task_send".to_owned(),
+                    arguments: json!({
+                        "task_id": task_id,
+                        "message": "run the second analysis",
+                        "mode": "followup"
+                    })
+                    .into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        Ok(tool_response(
+            vec![ToolCall {
+                id: "delegate-followup-child".to_owned(),
+                name: "delegate".to_owned(),
+                arguments: json!({
+                    "name": "followup_target",
+                    "prompt": "child followup target"
+                })
+                .into(),
+            }],
+            ModelUsage::default(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn followup_reuses_one_child_then_list_and_close_preserve_its_outputs() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let child_started = Arc::new(tokio::sync::Notify::new());
+    let mut tools = ToolRegistry::default();
+    tools.register(Arc::new(SteeringGateTool)).unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(FollowupProvider { child_started }),
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_path_buf(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions {
+            max_parallel_model_calls: 2,
+            ..RunnerOptions::default()
+        },
+    });
+
+    let result = runner
+        .run(RunRequest::root("follow up with one child"))
+        .await
+        .unwrap();
+    assert_eq!(result.final_output, "parent completed reusable agent flow");
+    let task_path = store.paths(&result.run_id).directory.join("tasks/t1.json");
+    let record = serde_json::from_slice::<fiasco::agent::task::BackgroundTaskRecord>(
+        &tokio::fs::read(&task_path).await.unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record.state, BackgroundTaskState::Closed);
+    assert!(record.pending_followups.is_empty());
+    assert_eq!(
+        record
+            .outputs
+            .iter()
+            .map(|output| (output.seq, output.content.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (1, "first activity complete"),
+            (2, "second activity complete")
+        ]
+    );
+    let child_run_id = record.child_run_id.unwrap();
+    assert_eq!(
+        store.load_run(&child_run_id).await.unwrap().state,
+        RunState::Closed
+    );
+    let parent_events = tokio::fs::read_to_string(store.paths(&result.run_id).events)
+        .await
+        .unwrap();
+    assert_eq!(
+        parent_events
+            .matches("\"type\":\"subagent_activity_completed\"")
+            .count(),
+        2
+    );
+    assert_eq!(
+        parent_events
+            .matches("\"type\":\"subagent_closed\"")
+            .count(),
+        1
+    );
+    let child_events = tokio::fs::read_to_string(store.paths(&child_run_id).events)
+        .await
+        .unwrap();
+    assert_eq!(
+        child_events
+            .matches("\"type\":\"run_activity_completed\"")
+            .count(),
+        2
+    );
+    assert_eq!(child_events.matches("\"type\":\"run_started\"").count(), 1);
+    assert_eq!(child_events.matches("\"type\":\"run_resumed\"").count(), 1);
+    assert!(!child_events.contains("\"type\":\"run_completed\""));
+    let child_messages = store.load_messages(&child_run_id).await.unwrap();
+    assert!(child_messages.iter().all(|message| {
+        message.content.iter().all(|content| {
+            !matches!(
+                content,
+                MessageContent::RuntimeReminder { text }
+                    if text.contains("previous fiasco process stopped")
+            )
+        })
+    }));
+    assert_eq!(
+        child_messages
+            .iter()
+            .filter(|message| {
+                message.role == Role::User && message.visible_text() == "run the second analysis"
+            })
+            .count(),
+        1
+    );
+    let parent_messages = store.load_messages(&result.run_id).await.unwrap();
+    assert_eq!(
+        parent_messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|content| match content {
+                MessageContent::BackgroundTask { output_seq, .. } => *output_seq,
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+}
+
+struct StopThenSendProvider {
+    child_background_started: Arc<tokio::sync::Notify>,
+    wait_calls: AtomicUsize,
+}
+
+#[async_trait]
+impl ModelProvider for StopThenSendProvider {
+    fn name(&self) -> &str {
+        "stop-then-send"
+    }
+
+    async fn complete(
+        &self,
+        request: ModelRequest,
+        _events: SharedEventSink,
+    ) -> Result<ModelResponse> {
+        if first_user_text(&request) == "child stop target" {
+            if request.messages.iter().any(|message| {
+                message.role == Role::User && message.visible_text() == "resume immediately"
+            }) {
+                return Ok(text_response(
+                    "resumed activity complete",
+                    ModelUsage::default(),
+                ));
+            }
+            let tool_results = request
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .filter_map(|content| match content {
+                    MessageContent::ToolResult {
+                        call_id, content, ..
+                    } => Some((call_id.as_str(), content.as_str())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if let Some((_, content)) = tool_results
+                .iter()
+                .find(|(call_id, _)| *call_id == "child-hang-call")
+            {
+                let task_id =
+                    background_task_id(content).context("hanging result omitted task_id")?;
+                self.child_background_started.notify_one();
+                return Ok(tool_response(
+                    vec![ToolCall {
+                        id: "wait-child-hang".to_owned(),
+                        name: "task_wait".to_owned(),
+                        arguments: json!({"task_ids": [task_id]}).into(),
+                    }],
+                    ModelUsage::default(),
+                ));
+            }
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "child-hang-call".to_owned(),
+                    name: "hanging".to_owned(),
+                    arguments: json!({}).into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+
+        let tool_results = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|content| match content {
+                MessageContent::ToolResult {
+                    call_id, content, ..
+                } => Some((call_id.as_str(), content.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let task_id = tool_results
+            .iter()
+            .find(|(call_id, _)| *call_id == "delegate-stop-child")
+            .and_then(|(_, content)| background_task_id(content));
+        if let Some((_, content)) = tool_results
+            .iter()
+            .find(|(call_id, _)| *call_id == "close-stopped-child")
+        {
+            let closed: Value = serde_json::from_str(content)?;
+            if closed["status"] != "closed" {
+                bail!("task_close did not close the stopped child: {closed}");
+            }
+            return Ok(text_response(
+                "stop then immediate send completed",
+                ModelUsage::default(),
+            ));
+        }
+        let completed_after_stop = request.messages.iter().any(|message| {
+            message.content.iter().any(|content| {
+                matches!(
+                    content,
+                    MessageContent::BackgroundTask {
+                        task_id: output_task_id,
+                        output_seq: Some(2),
+                        status: Some(status),
+                        ..
+                    } if Some(output_task_id) == task_id.as_ref() && status == "completed"
+                )
+            })
+        });
+        if completed_after_stop {
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "close-stopped-child".to_owned(),
+                    name: "task_close".to_owned(),
+                    arguments: json!({
+                        "task_id": task_id.context("delegate result omitted task_id")?
+                    })
+                    .into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        if let Some((_, content)) = tool_results
+            .iter()
+            .find(|(call_id, _)| *call_id == "send-stopped-child")
+        {
+            let sent: Value = serde_json::from_str(content)?;
+            if sent["accepted_as"] != "started" || sent["status"] != "running" {
+                bail!("task_send did not restart the stopped child: {sent}");
+            }
+            let wait = self.wait_calls.fetch_add(1, Ordering::SeqCst);
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: format!("wait-stopped-child-{wait}"),
+                    name: "task_wait".to_owned(),
+                    arguments: json!({
+                        "task_ids": [task_id.context("delegate result omitted task_id")?]
+                    })
+                    .into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        if tool_results
+            .iter()
+            .any(|(call_id, _)| call_id.starts_with("wait-stopped-child-"))
+        {
+            let wait = self.wait_calls.fetch_add(1, Ordering::SeqCst);
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: format!("wait-stopped-child-{wait}"),
+                    name: "task_wait".to_owned(),
+                    arguments: json!({
+                        "task_ids": [task_id.context("delegate result omitted task_id")?]
+                    })
+                    .into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        if let Some((_, content)) = tool_results
+            .iter()
+            .find(|(call_id, _)| *call_id == "stop-child")
+        {
+            let stopped: Value = serde_json::from_str(content)?;
+            if stopped["status"] != "idle"
+                || stopped["paused"] != true
+                || stopped["last_output_seq"] != 1
+            {
+                bail!("task_stop returned the wrong reusable state: {stopped}");
+            }
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "send-stopped-child".to_owned(),
+                    name: "task_send".to_owned(),
+                    arguments: json!({
+                        "task_id": task_id.context("delegate result omitted task_id")?,
+                        "message": "resume immediately",
+                        "mode": "followup"
+                    })
+                    .into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        if let Some(task_id) = task_id {
+            self.child_background_started.notified().await;
+            return Ok(tool_response(
+                vec![ToolCall {
+                    id: "stop-child".to_owned(),
+                    name: "task_stop".to_owned(),
+                    arguments: json!({"task_id": task_id}).into(),
+                }],
+                ModelUsage::default(),
+            ));
+        }
+        Ok(tool_response(
+            vec![ToolCall {
+                id: "delegate-stop-child".to_owned(),
+                name: "delegate".to_owned(),
+                arguments: json!({
+                    "name": "stop_target",
+                    "prompt": "child stop target"
+                })
+                .into(),
+            }],
+            ModelUsage::default(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn stop_then_immediate_send_waits_for_child_cleanup_before_reuse() {
+    let workspace = TempDir::new().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    let mut tools = ToolRegistry::default();
+    tools.register(Arc::new(HangingTool)).unwrap();
+    let runner = AgentRunner::new(AgentRunnerConfig {
+        provider: Arc::new(StopThenSendProvider {
+            child_background_started: Arc::new(tokio::sync::Notify::new()),
+            wait_calls: AtomicUsize::new(0),
+        }),
+        model: "scripted".to_owned(),
+        workspace: workspace.path().to_path_buf(),
+        skill_catalog: String::new(),
+        tools,
+        artifacts: ArtifactStore::default(),
+        store: store.clone(),
+        hooks: HookPipeline::new(),
+        memory: None,
+        extra_events: Arc::new(NoopEventSink),
+        options: RunnerOptions {
+            foreground_tool_timeout_seconds: 1,
+            task_wait_timeout_seconds: 1,
+            max_parallel_model_calls: 2,
+            ..RunnerOptions::default()
+        },
+    });
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        runner.run(RunRequest::root("stop and immediately reuse child")),
+    )
+    .await
+    .expect("stop and immediate send flow timed out")
+    .unwrap();
+    assert_eq!(result.final_output, "stop then immediate send completed");
+    let record = serde_json::from_slice::<fiasco::agent::task::BackgroundTaskRecord>(
+        &tokio::fs::read(store.paths(&result.run_id).directory.join("tasks/t1.json"))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record.state, BackgroundTaskState::Closed);
+    assert_eq!(
+        record
+            .outputs
+            .iter()
+            .map(|output| (output.seq, output.status))
+            .collect::<Vec<_>>(),
+        [
+            (
+                1,
+                fiasco::agent::task::BackgroundTaskOutputStatus::Interrupted,
+            ),
+            (
+                2,
+                fiasco::agent::task::BackgroundTaskOutputStatus::Completed,
+            ),
+        ]
+    );
+    assert_eq!(record.outputs[1].content, "resumed activity complete");
 }
 
 struct HangingTool;
@@ -1484,7 +2051,13 @@ async fn parent_failure_aborts_and_settles_background_tasks() {
     assert_eq!(tasks.len(), 2);
     for task in tasks {
         assert_eq!(task["state"], "cancelled");
-        assert!(task["error"].as_str().unwrap().contains("parent run ended"));
+        assert_eq!(task["outputs"][0]["status"], "cancelled");
+        assert!(
+            task["outputs"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("parent run ended")
+        );
     }
 }
 

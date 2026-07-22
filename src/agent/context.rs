@@ -136,7 +136,7 @@ mod tests {
         assert!(system.contains("workspace with the user"));
         assert!(system.contains("tagged blocks and tool results as context"));
         assert!(system.contains("higher-priority instructions"));
-        assert!(system.contains("starts one independent GeneralTask asynchronously"));
+        assert!(system.contains("starts one reusable GeneralTask agent asynchronously"));
         assert!(
             crate::prompts::agent_prompts()
                 .general_task
@@ -184,9 +184,11 @@ mod tests {
         for tool_name in [
             "`delegate`",
             "`task_wait`",
+            "`task_list`",
             "`task_inspect`",
-            "`task_steer`",
+            "`task_send`",
             "`task_stop`",
+            "`task_close`",
             "`history_search`",
             "`history_read`",
             "`write`",

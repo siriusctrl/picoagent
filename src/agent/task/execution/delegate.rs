@@ -56,41 +56,19 @@ impl TaskManager {
                 origin_call_id.to_owned(),
             )
             .await?;
-        let handle = self.launch_agent_task(task_id.clone());
-        self.track(task_id.clone(), handle);
+        self.launch_agent_task(task_id.clone());
         self.get(&task_id).await
     }
 
-    pub async fn resume_agent_task(
-        self: &Arc<Self>,
-        task: super::super::RecoverableSubagent,
-    ) -> Result<()> {
-        let record = self.get(&task.task_id).await?;
-        ensure!(
-            record.kind == "agent",
-            "task `{}` is not an agent",
-            task.task_id
-        );
-        ensure!(
-            !record.state.is_terminal(),
-            "agent task `{}` is already terminal",
-            task.task_id
-        );
-        ensure!(
-            record.child_run_id.as_deref() == Some(task.child_run_id.as_str()),
-            "agent task `{}` child run changed during recovery",
-            task.task_id
-        );
-        let child = self.store.load_run(&task.child_run_id).await?;
-        self.validate_child_run(&record, &child)?;
-        let handle = self.launch_agent_task(task.task_id.clone());
-        self.track(task.task_id, handle);
-        Ok(())
-    }
-
-    fn launch_agent_task(self: &Arc<Self>, task_id: String) -> tokio::task::JoinHandle<()> {
+    fn launch_agent_task(self: &Arc<Self>, task_id: String) {
         let manager = self.clone();
-        tokio::spawn(async move {
+        let tracked_task_id = task_id.clone();
+        let (start, wait_for_tracking) = tokio::sync::oneshot::channel();
+        let (cleanup_done, wait_for_cleanup) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            if wait_for_tracking.await.is_err() {
+                return;
+            }
             let record = match manager.get(&task_id).await {
                 Ok(record) => record,
                 Err(error) => {
@@ -109,34 +87,49 @@ impl TaskManager {
                 Ok(permit) => permit,
                 Err(error) => {
                     manager
-                        .finish_failed(&task_id, &task_name, error.into())
+                        .finish_agent_failed_activity(
+                            &task_id,
+                            &task_name,
+                            &child_run_id,
+                            error.into(),
+                        )
                         .await;
                     return;
                 }
             };
-            if let Err(error) = manager.set_running(&task_id).await {
-                manager.finish_failed(&task_id, &task_name, error).await;
+            let Some(record) = (match manager.begin_agent_activity(&task_id).await {
+                Ok(record) => record,
+                Err(error) => {
+                    manager
+                        .finish_agent_failed_activity(&task_id, &task_name, &child_run_id, error)
+                        .await;
+                    return;
+                }
+            }) else {
                 return;
-            }
+            };
             manager
                 .emit_agent_started(&task_id, &task_name, &child_run_id, &prompt)
                 .await;
             let validation = async {
-                let record = manager.get(&task_id).await?;
                 let child = manager.store.load_run(&child_run_id).await?;
                 manager.validate_child_run(&record, &child)
             }
             .await;
             if let Err(error) = validation {
-                manager.finish_failed(&task_id, &task_name, error).await;
+                manager
+                    .finish_agent_failed_activity(&task_id, &task_name, &child_run_id, error)
+                    .await;
                 return;
             }
-            let outcome = manager.run_agent_child(&child_run_id).await;
+            let outcome = manager.run_agent_child(&child_run_id, cleanup_done).await;
             drop(permit);
             manager
                 .finish_agent_child(outcome, &task_id, &task_name, child_run_id)
                 .await;
-        })
+        });
+        self.track_agent(tracked_task_id, handle, wait_for_cleanup);
+        let _ = start.send(());
     }
 
     async fn emit_agent_started(
@@ -160,7 +153,7 @@ impl TaskManager {
             .events
             .emit(&RuntimeEvent::new(
                 &self.parent_run_id,
-                RuntimeEventKind::SubagentStarted {
+                RuntimeEventKind::SubagentActivityStarted {
                     child_run_id: child_run_id.to_owned(),
                     task: prompt.to_owned(),
                 },
@@ -168,14 +161,18 @@ impl TaskManager {
             .await;
     }
 
-    async fn run_agent_child(&self, child_run_id: &str) -> Result<crate::agent::runner::RunResult> {
+    async fn run_agent_child(
+        &self,
+        child_run_id: &str,
+        cleanup_done: tokio::sync::oneshot::Sender<()>,
+    ) -> Result<crate::agent::runner::RunResult> {
         self.runner
-            .resume_child(child_run_id.to_owned(), &self.parent_run_id)
+            .resume_child(child_run_id.to_owned(), &self.parent_run_id, cleanup_done)
             .await
     }
 
     async fn finish_agent_child(
-        &self,
+        self: &Arc<Self>,
         outcome: Result<crate::agent::runner::RunResult>,
         task_id: &str,
         task_name: &str,
@@ -207,24 +204,76 @@ impl TaskManager {
                         self.finish_agent_output(task_id, task_name, &child_run_id, output)
                             .await;
                     }
-                    Err(error) => self.finish_failed(task_id, task_name, error).await,
+                    Err(error) => {
+                        self.finish_agent_failed_activity(task_id, task_name, &child_run_id, error)
+                            .await
+                    }
                 }
             }
             Err(error) => {
-                let message = format!("{error:#}");
-                self.finish_failed(task_id, task_name, anyhow::anyhow!(message.clone()))
-                    .await;
-                let _ = self
-                    .events
-                    .emit(&RuntimeEvent::new(
-                        &self.parent_run_id,
-                        RuntimeEventKind::SubagentFailed {
-                            child_run_id,
-                            error: message,
-                        },
-                    ))
+                self.finish_agent_failed_activity(task_id, task_name, &child_run_id, error)
                     .await;
             }
         }
+    }
+
+    async fn begin_agent_activity(&self, task_id: &str) -> Result<Option<BackgroundTaskRecord>> {
+        let mut records = self.records.lock().await;
+        let mut record = records
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("unknown background task `{task_id}`"))?;
+        ensure!(record.kind == "agent", "task `{task_id}` is not an agent");
+        if !record.state.is_active() || record.paused {
+            return Ok(None);
+        }
+        if record.state == super::super::BackgroundTaskState::Queued {
+            record.state = super::super::BackgroundTaskState::Running;
+            self.persist(&record).await?;
+            records.insert(task_id.to_owned(), record.clone());
+            drop(records);
+            self.signal_activity();
+        }
+        Ok(Some(record))
+    }
+
+    pub(crate) async fn activate_agent_if_pending(self: &Arc<Self>, task_id: &str) -> Result<bool> {
+        let mut records = self.records.lock().await;
+        let record = records
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("unknown background task `{task_id}`"))?;
+        ensure!(record.kind == "agent", "task `{task_id}` is not an agent");
+        if record.state != super::super::BackgroundTaskState::Idle || record.paused {
+            return Ok(false);
+        }
+        let child_run_id = record
+            .child_run_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("agent task is missing child_run_id"))?;
+        let has_steer = self.store.has_pending_user_input(&child_run_id).await?;
+        if record.pending_followups.is_empty() && !has_steer {
+            return Ok(false);
+        }
+        for input in &record.pending_followups {
+            self.store
+                .enqueue_user_input_with_id(&child_run_id, input.id.clone(), input.message.clone())
+                .await?;
+        }
+        let child = self.store.load_run(&child_run_id).await?;
+        ensure!(
+            child.state == crate::storage::RunState::Idle,
+            "idle agent child `{child_run_id}` is unexpectedly {:?}",
+            child.state
+        );
+        let mut running = record;
+        running.pending_followups.clear();
+        running.state = super::super::BackgroundTaskState::Running;
+        self.persist(&running).await?;
+        records.insert(task_id.to_owned(), running.clone());
+        drop(records);
+        self.signal_activity();
+        self.launch_agent_task(task_id.to_owned());
+        Ok(true)
     }
 }

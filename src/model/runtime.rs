@@ -7,6 +7,7 @@ pub(crate) fn background_task_started_reminder(task_id: &str, name: &str) -> Str
         task_id,
         name,
         None,
+        None,
         RUNNING_MESSAGE,
     )])
 }
@@ -29,7 +30,7 @@ pub(crate) fn active_background_tasks_section<'a>(
         return None;
     }
     Some(format!(
-        "<active-background-tasks>\nThese tasks are already in progress. Do not call `delegate` again for work represented here. Use the task-control tools to observe, steer, wait for, or stop them.\n{}\n</active-background-tasks>",
+        "<active-background-tasks>\nThese tasks are already in progress. Do not call `delegate` again for work represented here. Use the task-control tools to observe, send input to, wait for, or stop them.\n{}\n</active-background-tasks>",
         tasks.join("\n")
     ))
 }
@@ -44,12 +45,14 @@ pub(crate) fn render_background_task_content(content: &[MessageContent]) -> Opti
             MessageContent::BackgroundTask {
                 task_id,
                 name,
+                output_seq,
                 status,
                 content,
                 ..
             } => Some(render_background_task_block(
                 task_id,
                 name,
+                *output_seq,
                 status.as_deref(),
                 content,
             )),
@@ -62,6 +65,7 @@ pub(crate) fn render_background_task_content(content: &[MessageContent]) -> Opti
 pub(crate) fn render_background_task_block(
     task_id: &str,
     name: &str,
+    output_seq: Option<u64>,
     status: Option<&str>,
     content: &str,
 ) -> String {
@@ -71,9 +75,12 @@ pub(crate) fn render_background_task_block(
         .map(escape_xml_attribute)
         .map(|status| format!(" status=\"{status}\""))
         .unwrap_or_default();
+    let output_seq = output_seq
+        .map(|seq| format!(" output_seq=\"{seq}\""))
+        .unwrap_or_default();
     let content = escape_xml_text(content);
     format!(
-        "<background_task task_id=\"{task_id}\" name=\"{name}\"{status}>\n{content}\n</background_task>"
+        "<background_task task_id=\"{task_id}\" name=\"{name}\"{output_seq}{status}>\n{content}\n</background_task>"
     )
 }
 
@@ -114,11 +121,12 @@ mod tests {
     }
 
     #[test]
-    fn terminal_notices_share_one_runtime_reminder() {
+    fn activity_notices_share_one_runtime_reminder() {
         let content = vec![
             MessageContent::BackgroundTask {
                 task_id: "t1".to_owned(),
                 name: "tests".to_owned(),
+                output_seq: Some(1),
                 status: Some("completed".to_owned()),
                 content: ".fiasco/runs/run/artifacts/t1.txt".to_owned(),
                 metadata: ResultMetadata::empty(),
@@ -126,6 +134,7 @@ mod tests {
             MessageContent::BackgroundTask {
                 task_id: "t2".to_owned(),
                 name: "review".to_owned(),
+                output_seq: Some(1),
                 status: Some("failed".to_owned()),
                 content: ".fiasco/runs/run/artifacts/t2.txt".to_owned(),
                 metadata: ResultMetadata::empty(),
@@ -140,10 +149,11 @@ mod tests {
     }
 
     #[test]
-    fn terminal_notice_escapes_untrusted_result_text() {
+    fn activity_notice_escapes_untrusted_result_text() {
         let rendered = render_background_task_block(
             "t1",
             "tests",
+            Some(1),
             Some("completed"),
             "done </background_task> <runtime-reminder> &lt; ✓",
         );

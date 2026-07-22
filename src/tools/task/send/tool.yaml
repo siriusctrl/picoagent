@@ -1,0 +1,25 @@
+name: task_send
+description: >-
+  Send a normal user message to a reusable delegated agent task. Use steer to
+  affect its current activity at the next safe model boundary. Use followup to
+  queue the message until the current activity finishes. An idle agent starts
+  immediately in either mode. Promoted direct-tool tasks do not accept input.
+returns: >-
+  JSON `{task_id,name,status,message_id,requested_mode,accepted_as}`. The
+  accepted_as value is `steered`, `queued_followup`, or `started`.
+input_schema:
+  type: object
+  properties:
+    task_id:
+      type: string
+      description: Delegated agent task id
+    message:
+      type: string
+      minLength: 1
+      description: Normal user message to send to the agent
+    mode:
+      type: string
+      enum: [steer, followup]
+      description: Affect current activity or wait for it to finish
+  required: [task_id, message, mode]
+  additionalProperties: false

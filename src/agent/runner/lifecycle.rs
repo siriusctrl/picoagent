@@ -17,7 +17,17 @@ use crate::agent::types::RunProfile;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RunMode {
     New,
-    Resume,
+    /// Reuse a completed child transcript for another explicitly requested
+    /// activity in the same process lifetime.
+    Continue,
+    /// Resume a durable run after its owning fiasco process stopped.
+    Restart,
+}
+
+impl RunMode {
+    pub(super) fn is_existing(self) -> bool {
+        self != Self::New
+    }
 }
 
 pub(super) struct RunPlan {
@@ -40,7 +50,7 @@ impl AgentRunner {
         self.prepare_run(&request, &run_id).await?;
 
         let lease = self.store.acquire_run_lease(&run_id).await?;
-        self.run_with_mode(request, run_id, RunMode::New, lease.clone())
+        self.run_with_mode(request, run_id, RunMode::New, lease.clone(), None)
             .await
     }
 
@@ -75,7 +85,9 @@ impl AgentRunner {
         run_id: String,
         mode: RunMode,
         cancellation_lease: RunLease,
+        cleanup_done: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<RunResult> {
+        let is_child = request.parent_run_id.is_some();
         let events: SharedEventSink = Arc::new(CompositeEventSink::new(vec![
             self.store.event_sink(),
             self.extra_events.clone(),
@@ -87,18 +99,21 @@ impl AgentRunner {
                 events.clone(),
                 mode,
                 cancellation_lease,
+                cleanup_done,
             )
             .await;
         if let Err(error) = &outcome {
             let _ = self.store.update_state(&run_id, RunState::Failed).await;
-            let _ = events
-                .emit(&RuntimeEvent::new(
-                    &run_id,
-                    RuntimeEventKind::RunFailed {
-                        error: format!("{error:#}"),
-                    },
-                ))
-                .await;
+            let kind = if is_child {
+                RuntimeEventKind::RunActivityFailed {
+                    error: format!("{error:#}"),
+                }
+            } else {
+                RuntimeEventKind::RunFailed {
+                    error: format!("{error:#}"),
+                }
+            };
+            let _ = events.emit(&RuntimeEvent::new(&run_id, kind)).await;
         }
         outcome
     }
@@ -136,7 +151,14 @@ impl AgentRunner {
         events: SharedEventSink,
     ) -> Result<()> {
         self.store.write_final(run_id, final_output).await?;
-        self.store.update_state(run_id, RunState::Completed).await?;
+        let run = self.store.load_run(run_id).await?;
+        let is_child = run.parent_run_id.is_some();
+        let state = if is_child {
+            RunState::Idle
+        } else {
+            RunState::Completed
+        };
+        self.store.update_state(run_id, state).await?;
         if let Err(error) = self
             .hooks
             .run(
@@ -148,16 +170,17 @@ impl AgentRunner {
         {
             tracing::warn!(run_id, error = %format!("{error:#}"), "run_end hook failed after completion");
         }
-        if let Err(error) = events
-            .emit(&RuntimeEvent::new(
-                run_id,
-                RuntimeEventKind::RunCompleted {
-                    final_output: final_output.to_owned(),
-                },
-            ))
-            .await
-        {
-            tracing::warn!(run_id, error = %format!("{error:#}"), "run_completed event failed after completion");
+        let kind = if is_child {
+            RuntimeEventKind::RunActivityCompleted {
+                final_output: final_output.to_owned(),
+            }
+        } else {
+            RuntimeEventKind::RunCompleted {
+                final_output: final_output.to_owned(),
+            }
+        };
+        if let Err(error) = events.emit(&RuntimeEvent::new(run_id, kind)).await {
+            tracing::warn!(run_id, error = %format!("{error:#}"), "run completion event failed after completion");
         }
         Ok(())
     }

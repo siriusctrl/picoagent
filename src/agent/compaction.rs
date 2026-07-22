@@ -441,12 +441,14 @@ pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
             MessageContent::BackgroundTask {
                 task_id,
                 name,
+                output_seq,
                 status,
                 content,
                 ..
             } => crate::model::runtime::render_background_task_block(
                 task_id,
                 name,
+                *output_seq,
                 status.as_deref(),
                 content,
             )
@@ -577,6 +579,7 @@ mod tests {
             content: vec![MessageContent::BackgroundTask {
                 task_id: "t1".into(),
                 name: "entity-heavy".into(),
+                output_seq: Some(1),
                 status: Some("completed".into()),
                 content: "&<>".repeat(10_000),
                 metadata: crate::artifact::ResultMetadata::empty(),

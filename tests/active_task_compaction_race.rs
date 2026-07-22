@@ -49,7 +49,7 @@ impl CompletingDuringCompactionProvider {
         })
     }
 
-    async fn wait_for_terminal_task(&self, run_id: &str) -> Result<()> {
+    async fn wait_for_idle_agent(&self, run_id: &str) -> Result<()> {
         let path = self
             .workspace
             .join(".fiasco/runs")
@@ -59,7 +59,7 @@ impl CompletingDuringCompactionProvider {
             loop {
                 if tokio::fs::read_to_string(&path)
                     .await
-                    .is_ok_and(|record| record.contains("\"state\": \"completed\""))
+                    .is_ok_and(|record| record.contains("\"state\": \"idle\""))
                 {
                     return;
                 }
@@ -67,7 +67,7 @@ impl CompletingDuringCompactionProvider {
             }
         })
         .await
-        .with_context(|| format!("task record did not become terminal: {}", path.display()))?;
+        .with_context(|| format!("agent task did not become idle: {}", path.display()))?;
         Ok(())
     }
 }
@@ -90,7 +90,7 @@ impl ModelProvider for CompletingDuringCompactionProvider {
         self.requests.lock().unwrap().push(request.clone());
         if is_compaction {
             self.release_child.notify_one();
-            self.wait_for_terminal_task(&request.run_id).await?;
+            self.wait_for_idle_agent(&request.run_id).await?;
             return Ok(text_response(
                 "# Compacted state\n\nThe delegated review was pending.",
             ));

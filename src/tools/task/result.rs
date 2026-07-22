@@ -10,8 +10,12 @@ pub(super) fn task_records(records: Vec<BackgroundTaskRecord>) -> Value {
 pub(super) fn task_record(record: BackgroundTaskRecord) -> Value {
     json!({
         "task_id": record.id,
+        "kind": record.kind,
         "name": record.name,
         "status": record.status(),
+        "paused": record.paused,
+        "pending_followups": record.pending_followups.len(),
+        "last_output_seq": record.outputs.last().map(|output| output.seq),
     })
 }
 
@@ -32,8 +36,12 @@ mod tests {
             json!({
                 "tasks": [{
                     "task_id": "t1",
+                    "kind": "tool",
                     "name": "bash",
-                    "status": "queued"
+                    "status": "queued",
+                    "paused": false,
+                    "pending_followups": 0,
+                    "last_output_seq": null
                 }]
             })
         );
@@ -51,8 +59,12 @@ mod tests {
             task_record(record),
             json!({
                 "task_id": "t1",
+                "kind": "tool",
                 "name": "bash",
-                "status": "queued"
+                "status": "queued",
+                "paused": false,
+                "pending_followups": 0,
+                "last_output_seq": null
             })
         );
     }

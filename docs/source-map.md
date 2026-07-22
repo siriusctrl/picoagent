@@ -9,11 +9,12 @@
   events, foreground promotion, and artifact-backed output persistence.
 - `src/agent/types.rs`: runner configuration, request, and result contracts.
 - `src/agent/task.rs`: background task coordination and delivery state.
-- `src/agent/task/control.rs`: status, message inspection, steering, and targeted stop.
+- `src/agent/task/control.rs`: status, listing, message routing, stop, and close.
+- `src/agent/task/coordination.rs`: wait-any, active snapshots, and output delivery.
 - `src/agent/task/execution.rs`: background tool and child-run execution.
-- `src/agent/task/lifecycle.rs`: failed task state and events.
+- `src/agent/task/lifecycle.rs`: activity outputs, interruption, and events.
 - `src/agent/task/record.rs`: persisted background task state and model envelope.
-- `src/agent/task/recovery.rs`: task reload, child reconciliation, and cancellation.
+- `src/agent/task/recovery.rs`: task reload, restart interruption, and cancellation.
 - `src/storage/input.rs`: durable pending user input used by non-interrupting child steering.
 - `src/agent/context.rs`: deterministic prompt framing and dynamic reminder assembly.
 - `src/prompts.rs`: typed access to the embedded agent prompt registry.

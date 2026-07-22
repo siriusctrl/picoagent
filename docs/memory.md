@@ -61,5 +61,7 @@ Memory contents are not injected wholesale. When memory is enabled, every
 ordinary root or GeneralTask reminder contains only the resolved paths; stable
 management practices stay in the system prompt. A delegated consolidation has
 its own run directory, transcript, events, artifacts, parent id, and durable
-task record, so it follows the existing child-resume contract without inflating
-the parent context.
+task record, so it follows the existing reusable-child contract without
+inflating the parent context. If the process stops mid-activity, recovery
+reports it interrupted and leaves the same child thread available for an
+explicit retry.

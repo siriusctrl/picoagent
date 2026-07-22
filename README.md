@@ -96,9 +96,11 @@ ordered tool results, and any attachment message. Resume discards an incomplete
 checkpoint and appends a user/runtime reminder that its workspace or external
 side effects may already have occurred. It never replays that discarded tool
 turn automatically. Committed background ordinary tools are marked
-`interrupted`; committed GeneralTask children keep their own transcripts and
-continue when their parent is resumed. Resume the parent run rather than
-invoking `fiasco resume` on a child id directly.
+`interrupted`. Committed GeneralTask children keep their own transcripts, but
+an activity that was active when the process stopped is reported
+`interrupted`; its agent becomes idle and paused until an explicit `task_send`.
+Resume the parent run rather than invoking `fiasco resume` on a child id
+directly.
 
 Before resume, the process supervisor, cgroup, or container must have killed
 the previous fiasco process and all locally managed descendants. Remote
@@ -422,12 +424,14 @@ The launch tool surface is intentionally small:
 - `history_search`: regex search over the compacted trajectory prefix
 - `history_read`: a bounded message window around a returned history ref
 - `load_skill`: progressive loading of a catalogued skill's full instructions
-- `delegate`: asynchronously start a GeneralTask child
+- `delegate`: asynchronously start a reusable GeneralTask agent
 - `task_status`: inspect current task state
-- `task_wait`: wait for selected tasks for one bounded interval
+- `task_wait`: wait until any selected task settles or one interval expires
+- `task_list`: list all delegated agents owned by the current run
 - `task_inspect`: read a bounded window of a child agent's messages
-- `task_steer`: queue input for a running child agent
-- `task_stop`: cancel one background task
+- `task_send`: send `steer` input now or queue `followup` input for later
+- `task_stop`: stop a task or pause a reusable agent after stopping its activity
+- `task_close`: explicitly close an idle delegated agent
 - `web_search`: optional Brave-backed public web search
 
 Root and GeneralTask receive the same built-in schemas, including `delegate`
@@ -455,14 +459,16 @@ batch and issue dependent work after seeing results.
 The tool result is a status-less `<background_task>` notice containing the task
 id and name; it only acknowledges that work is running.
 
-`delegate` requires a short model-supplied name and starts a `general-task`
-child asynchronously. The five `task_*` tools observe and control delegated
-children and automatically promoted direct tools. Terminal background results
-are always preserved as artifacts. At the next model boundary, one user/runtime
-message batches every ready `<background_task status="...">` notice; each body
-is only the complete artifact path. The model must read that path before using
-the result. Internal task records retain promoted calls' original provider ids,
-so the provider sees exactly one result for each original tool call.
+`delegate` requires a short model-supplied name and starts one isolated,
+reusable `general-task` agent asynchronously. Agent and task are one runtime
+concept: the delegated agent is a task with a child transcript and repeated
+activity outputs. The seven `task_*` tools observe and control delegated agents
+and automatically promoted direct tools where applicable. Each output is
+preserved under the ordinary artifact policy. At the next model boundary, one
+user/runtime message batches every ready
+`<background_task status="..." output_seq="...">` notice. Internal task records
+retain promoted calls' original provider ids, so the provider sees exactly one
+result for each original one-shot tool call.
 
 The task-control calls are intentionally small:
 
@@ -470,16 +476,21 @@ The task-control calls are intentionally small:
 delegate({"name":"inspect_tests","prompt":"inspect the failing tests and report the cause"})
 task_status({"task_ids":[]})
 task_wait({"task_ids":["t1"]})
+task_list({"include_closed":false})
 task_inspect({"task_id":"t1","limit":6,"before_seq":42})
-task_steer({"task_id":"t1","message":"check the failing test first"})
+task_send({"task_id":"t1","message":"check the failing test first","mode":"steer"})
+task_send({"task_id":"t1","message":"then compare the alternatives","mode":"followup"})
 task_stop({"task_id":"t1"})
+task_close({"task_id":"t1"})
 ```
 
-An empty `task_ids` means all tasks owned by that run. `before_seq` is exclusive
-and optional; inspect returns
-`next_before_seq` when older messages exist. Task ids are short references
-local to their parent run (`t1`, `t2`, ...); child run ids remain internal
-durable-storage identities.
+`task_wait` returns as soon as any selected task becomes inactive, while its
+snapshot may still show other selected tasks running. An empty `task_ids` means
+all tasks owned by that run. `task_list` returns all agents managed by the
+current run, including idle reusable agents and optionally closed ones.
+`before_seq` is exclusive and optional; inspect returns `next_before_seq` when
+older messages exist. Task ids are short references local to their parent run
+(`t1`, `t2`, ...); child run ids remain internal durable-storage identities.
 
 ## Skills
 
@@ -499,7 +510,8 @@ fiasco skills list
 
 ## Multi-Agent Orchestration
 
-`delegate` asynchronously starts the sole model-facing `general-task` role;
+`delegate` asynchronously starts the sole model-facing `general-task` role as
+a reusable agent task;
 there is no model-facing profile choice. The runtime reminder states the exact
 remaining delegation depth. With the default `max_subagent_depth = 1`, the
 first child has
@@ -519,8 +531,13 @@ capacity remains independently controlled by `runtime.max_parallel_subagents`.
 
 Every `delegate` call starts an isolated child with only its runtime reminder
 and delegated prompt. The prompt must include the complete objective and any
-task-specific context; the child does not inherit the parent conversation.
-Its own trajectory is stored in the child run, so resume and history retrieval
+task-specific context; the child does not inherit the parent conversation. A
+completed activity leaves that child idle. `task_send` resumes the same child
+with an ordinary user message, `followup` queues that message without blocking
+the parent, and a stopped agent stays paused until its next `task_send`.
+`task_close` is the explicit end of the agent's lifetime and
+discards any still-queued followups. Its
+trajectory is stored in the child run, so reuse, resume, and history retrieval
 do not depend on a live parent process.
 
 `runtime.model_stream_idle_timeout_seconds` (default 300) stops a model stream
@@ -529,14 +546,19 @@ that produces no valid SSE event for that interval, while
 API call even when the stream keeps making progress. Neither limit includes
 tool execution or time spent waiting for the shared model slot.
 
-Only child results return to the parent context; full child transcripts remain
+Only sequenced child activity results return to the parent context; full child transcripts remain
 in their own run directories. The parent stores coordination state under
 `tasks/`, but recovery recognizes a task only when its originating call has a
 tool result in a complete parent checkpoint. Pre-checkpoint task files and child
-runs are ignored as orphans. A recognized queued/running child continues from
-its own complete checkpoints, while terminal-result delivery is derived from
-the parent transcript. This guarantee applies to every committed GeneralTask
-task record, including one used for a large memory update.
+runs are ignored as orphans. Reactivation moves the parent task to `running`
+and launches the existing idle child; it does not use `child=queued` as a
+recovery marker. After process restart, a recognized queued/running activity is
+reported `interrupted`, the same child becomes idle and paused, and pending
+input is retained without automatic execution. The next explicit `task_send`
+reuses its complete transcript. Closed children stay closed. Activity-result
+delivery cursors are derived from the parent transcript. This guarantee applies
+to every committed GeneralTask task record, including one used for a large
+memory update.
 
 The parent can inspect a child's latest messages (six by default), page
 backward by sequence, and queue steering while it runs. Steering is stored as

@@ -42,12 +42,12 @@ impl ModelProvider for CrashRecoveryProvider {
         request: ModelRequest,
         _events: SharedEventSink,
     ) -> Result<ModelResponse> {
-        if first_user_text(&request) == "child work" {
+        if request.run_id == CHILD_RUN_ID {
             self.child_calls.fetch_add(1, Ordering::SeqCst);
             return Ok(text_response("child result"));
         }
 
-        self.parent_calls.fetch_add(1, Ordering::SeqCst);
+        let parent_call = self.parent_calls.fetch_add(1, Ordering::SeqCst);
         let acknowledgements = request
             .messages
             .iter()
@@ -75,32 +75,57 @@ impl ModelProvider for CrashRecoveryProvider {
             bail!("recovered delegate acknowledgement is invalid: {acknowledgement}");
         }
 
-        let terminal_results = request
+        let activity_statuses = request
             .messages
             .iter()
             .flat_map(|message| &message.content)
-            .filter(|content| {
-                matches!(
-                    content,
-                    MessageContent::BackgroundTask {
-                        task_id,
-                        status: Some(status),
-                        ..
-                    } if task_id == "t1" && status == "completed"
-                )
+            .filter_map(|content| match content {
+                MessageContent::BackgroundTask {
+                    task_id,
+                    status: Some(status),
+                    ..
+                } if task_id == "t1" => Some(status.as_str()),
+                _ => None,
             })
+            .collect::<Vec<_>>();
+        ensure!(
+            activity_statuses
+                .iter()
+                .filter(|status| **status == "interrupted")
+                .count()
+                == 1,
+            "restart did not deliver exactly one interrupted activity"
+        );
+        let completed = activity_statuses
+            .iter()
+            .filter(|status| **status == "completed")
             .count();
-        ensure!(terminal_results <= 1, "delegate result was delivered twice");
-        Ok(text_response(if terminal_results == 1 {
-            "parent consumed child result"
-        } else {
-            "parent waiting for child"
-        }))
+        ensure!(completed <= 1, "delegate result was delivered twice");
+        if completed == 1 {
+            return Ok(text_response("parent consumed retried child result"));
+        }
+        match parent_call {
+            0 => Ok(tool_response(
+                "retry-child",
+                "task_send",
+                json!({
+                    "task_id": "t1",
+                    "message": "retry explicitly after the interruption",
+                    "mode": "followup"
+                }),
+            )),
+            1 => Ok(tool_response(
+                "wait-child",
+                "task_wait",
+                json!({"task_ids": ["t1"]}),
+            )),
+            unexpected => bail!("unexpected parent call {unexpected} before child completion"),
+        }
     }
 }
 
 #[tokio::test]
-async fn resume_recovers_delegate_ack_child_and_delivery_exactly_once() {
+async fn resume_interrupts_then_explicitly_retries_a_reusable_child() {
     let workspace = TempDir::new().unwrap();
     let store = RunDirStore::new(workspace.path());
     let parent_calls = Arc::new(AtomicUsize::new(0));
@@ -130,12 +155,12 @@ async fn resume_recovers_delegate_ack_child_and_delivery_exactly_once() {
     });
 
     let result = runner.resume(PARENT_RUN_ID).await.unwrap();
-    assert_eq!(result.final_output, "parent consumed child result");
+    assert_eq!(result.final_output, "parent consumed retried child result");
     assert_eq!(child_calls.load(Ordering::SeqCst), 1);
-    assert!((1..=2).contains(&parent_calls.load(Ordering::SeqCst)));
+    assert!((2..=3).contains(&parent_calls.load(Ordering::SeqCst)));
     assert_eq!(
         store.load_run(CHILD_RUN_ID).await.unwrap().state,
-        RunState::Completed
+        RunState::Idle
     );
 
     let messages = store.load_messages(PARENT_RUN_ID).await.unwrap();
@@ -150,11 +175,6 @@ async fn resume_recovers_delegate_ack_child_and_delivery_exactly_once() {
             .count(),
         1
     );
-    assert!(
-        !messages
-            .iter()
-            .any(|message| message.visible_text().contains("side effects are unknown"))
-    );
     let terminal = messages
         .iter()
         .flat_map(|message| &message.content)
@@ -168,9 +188,10 @@ async fn resume_recovers_delegate_ack_child_and_delivery_exactly_once() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(terminal.len(), 1);
-    assert_eq!(terminal[0].0, "completed");
-    assert_eq!(terminal[0].1, "child result");
+    assert_eq!(terminal.len(), 2);
+    assert_eq!(terminal[0].0, "interrupted");
+    assert_eq!(terminal[1].0, "completed");
+    assert_eq!(terminal[1].1, "child result");
 
     let task: serde_json::Value = serde_json::from_slice(
         &tokio::fs::read(store.paths(PARENT_RUN_ID).directory.join("tasks/t1.json"))
@@ -178,7 +199,11 @@ async fn resume_recovers_delegate_ack_child_and_delivery_exactly_once() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(task["state"], "completed");
+    assert_eq!(task["state"], "idle");
+    assert_eq!(task["outputs"][0]["seq"], 1);
+    assert_eq!(task["outputs"][0]["status"], "interrupted");
+    assert_eq!(task["outputs"][1]["seq"], 2);
+    assert_eq!(task["outputs"][1]["status"], "completed");
     assert_eq!(task["origin_call_id"], DELEGATE_CALL_ID);
     let run_count = std::fs::read_dir(workspace.path().join(".fiasco/runs"))
         .unwrap()
@@ -188,12 +213,17 @@ async fn resume_recovers_delegate_ack_child_and_delivery_exactly_once() {
     let events = tokio::fs::read_to_string(store.paths(PARENT_RUN_ID).events)
         .await
         .unwrap();
-    assert_eq!(events.matches("\"type\":\"subagent_completed\"").count(), 1);
+    assert_eq!(
+        events
+            .matches("\"type\":\"subagent_activity_completed\"")
+            .count(),
+        1
+    );
     assert_eq!(
         events
             .matches("\"type\":\"background_task_delivered\"")
             .count(),
-        1
+        2
     );
 }
 
@@ -280,14 +310,15 @@ async fn create_crash_window(
     tokio::fs::write(
         tasks.join("t1.json"),
         serde_json::to_vec_pretty(&json!({
-            "version": 10,
+            "version": 12,
             "id": "t1",
             "kind": "agent",
             "name": "inspect_child",
             "origin_call_id": DELEGATE_CALL_ID,
             "state": "running",
-            "result": null,
-            "error": null,
+            "outputs": [],
+            "pending_followups": [],
+            "paused": false,
             "child_run_id": CHILD_RUN_ID,
             "child_remaining_delegation_depth": 0,
             "prompt": "child work",
@@ -299,20 +330,17 @@ async fn create_crash_window(
     .unwrap();
 }
 
-fn first_user_text(request: &ModelRequest) -> &str {
-    request
-        .messages
-        .iter()
-        .find(|message| message.role == Role::User)
-        .and_then(|message| {
-            message.content.iter().find_map(|content| match content {
-                MessageContent::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-        })
-        .unwrap_or_default()
-}
-
 fn text_response(text: &str) -> ModelResponse {
     ModelResponse::new(Message::text(Role::Assistant, text), ModelUsage::default())
+}
+
+fn tool_response(id: &str, name: &str, arguments: serde_json::Value) -> ModelResponse {
+    ModelResponse::new(
+        Message::assistant(vec![MessageContent::ToolCall {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            arguments: arguments.into(),
+        }]),
+        ModelUsage::default(),
+    )
 }

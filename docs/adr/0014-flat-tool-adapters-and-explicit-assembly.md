@@ -13,6 +13,9 @@ schema. Ordinary tools are direct capabilities with automatic foreground
 promotion; `delegate` and the five task controls are separate flat adapters.
 The common ownership and single assembly decisions here remain accepted.
 
+ADR 0035 later expands and revises the task-control leaves for reusable agents;
+they remain flat adapters with explicit assembly.
+
 ADR 0019 later refines only the source layout: cohesive task and history
 families are grouped beneath `src/tools/<family>/`, while each leaf adapter
 still owns its complete manifest and registration remains explicit.

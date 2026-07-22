@@ -195,34 +195,34 @@ tool calls, persist their results, then either repeat or complete. This makes
 crash boundaries and event ordering explicit without introducing a workflow
 engine.
 
-Background tasks have a separate persisted state:
+One-shot background tools have terminal persisted states, while reusable agent
+tasks return to idle after each activity:
 
 ```text
-queued -> running -> completed
-                  |-> failed
-                  |-> cancelled
-                  `-> interrupted
+tool:  queued -> running -> completed | failed | cancelled | interrupted
+agent: queued -> running -> idle -> running ... -> closed
 ```
 
-Whether a terminal result has entered the parent context is derived from the
-parent's committed `BackgroundTask` messages; task JSON does not carry a
-second authoritative `delivered` flag. A `delegate` result is one normal tool
+Whether an output has entered the parent context is derived from the highest
+`output_seq` in committed `BackgroundTask` messages; task JSON does not carry a
+second authoritative delivered cursor. A `delegate` result is one normal tool
 result. For an automatically promoted direct call, the running acknowledgement
 fills the original provider `tool_call_id` slot with a status-less runtime
-notice. Later completion is a new user/runtime message correlated by `task_id`,
+notice. Later output is a new user/runtime message correlated by `task_id`,
 never a second tool result with the same provider call id. One message batches
-all terminal records ready at that boundary. Each terminal body follows the
-ordinary independent inline/preview/artifact policy; the XML status wrapper is
-added and escaped afterward. Internal task state, not model-facing XML, retains
-the originating call id and task kind.
+all outputs ready at that boundary. Each body follows the ordinary independent
+inline/preview/artifact policy; the XML status wrapper is added and escaped
+afterward. Internal task state, not model-facing XML, retains the originating
+call id and task kind.
 
-Before every normal provider request, the runner snapshots nonterminal tasks in
+Before every normal provider request, the runner snapshots active tasks in
 stable task-id order and adds their id, name, and queued/running state to a
 synthetic runtime reminder. The reminder tells the model not to delegate work
 that is already represented there, exposes no child run id, and is never
 appended to the trajectory. The snapshot is refreshed after any compaction
-call: tasks that completed during compaction first receive their ordinary
-terminal result notice and are omitted from the active list. At a compacted
+call: activities that finish during compaction first receive their ordinary
+result notice and are omitted from the active list unless a followup has already
+reactivated the same agent. At a compacted
 boundary, the active-task section shares the existing synthetic continuation
 reminder instead of adding another runtime-reminder message.
 
@@ -336,8 +336,8 @@ directory and transcript, a `parent_run_id`, and a depth. The launch runtime run
 children in-process, shares the parent workspace and base tools, and caps depth
 at one. “Shared workspace” means parent and child operate on the same working
 project files; it is not a special second workspace abstraction. Child
-transcripts stay out of the parent context; only the bounded final result and
-artifact reference return to the parent.
+transcripts stay out of the parent context; only bounded, sequenced activity
+results and artifact references return to the parent.
 
 All direct calls returned in one assistant message start concurrently and share
 one foreground window. The runner returns as soon as all settle. At the
@@ -347,19 +347,25 @@ tracks every unfinished future before awaiting promotion events, then commits
 tool-result messages in original call order with their original provider call
 ids; events may show actual completion order. A promoted result containing a
 task id is only a running acknowledgement, so dependent work waits for the
-separate terminal background message correlated by that id.
+separate background result message correlated by that id.
 
-`delegate` starts a GeneralTask child in the background immediately.
-`task_status`, `task_wait`, `task_inspect`, `task_steer`, and `task_stop`
-provide explicit lifecycle operations. Inspect projects a bounded page of the
-child's durable messages. Steer appends a
-durable pending ordinary user message after the child's current assistant
-response and complete tool-call batch, before its next provider request. Stop
-aborts the selected future and commits `cancelled`; it does not affect unrelated
-tasks. Background work has no hard execution deadline.
+`delegate` starts a reusable GeneralTask agent task in the background
+immediately. `task_status` observes all task kinds, while `task_list` lists all
+delegated agents owned by the current run. `task_wait` uses wait-any semantics:
+it returns when any selected task becomes inactive or its bounded interval
+expires. `task_inspect`, `task_send`, and `task_close` operate only on agents.
+Inspect projects a bounded page of the child's durable messages. Send queues a
+normal user message with an explicit mode: `steer` makes it available after the
+current complete tool batch, while `followup` keeps it in the parent task record
+until the current activity finishes and then resumes the same child. An agent
+activity output moves the task to `idle`; it does not finish the agent. Stop
+interrupts only the current activity and leaves the agent idle and paused until
+the next explicit send. Close is
+the explicit permanent transition from idle to `closed` and discards queued
+followups. Background work has no hard execution deadline.
 
 Short task ids are local to the run that allocated them. Task controls accept
-only ids returned by that run's `delegate` or `task_status`.
+only ids returned by that run's `delegate`, `task_status`, or `task_list`.
 
 Every delegated child is isolated. It starts from its own runtime reminder and
 the delegated prompt, which must contain the complete objective and any
@@ -367,14 +373,23 @@ task-specific context. The parent conversation, compaction state, and artifact
 references are not copied. A child uses the configured GeneralTask model and
 resumes solely from its own run messages through the same `AgentRunner` path.
 
-Each task record is durable coordination state only. Child messages remain in
-the child's run directory. Recovery admits a task only when its originating
-call has a ToolResult in a complete parent checkpoint; other task files and
-child directories are orphans and stay hidden. It derives delivered ids from
-the parent transcript, marks recognized in-flight ordinary tools `interrupted`
-with unknown side effects, reconciles terminal children, and resumes recognized
-queued/running children through the same runner. Resume validates the frozen
-tool-schema hash before task reconciliation can update any of those records.
+Each task record is durable coordination state only. Agent records hold ordered
+activity outputs and followup input waiting for the current activity boundary;
+child messages remain in the child's run directory. Recovery admits a task only
+when its originating call has a ToolResult in a complete parent checkpoint;
+other task files and child directories are orphans and stay hidden. It derives
+the highest delivered output sequence per task from the parent transcript,
+marks recognized in-flight ordinary tools `interrupted`, and reports each
+active agent activity as an `interrupted` output on an idle paused reusable
+thread. Resume validates the frozen tool-schema hash before task reconciliation
+can update any of those records.
+
+An idle-agent reactivation writes `task=running` and launches the existing idle
+child; it does not move the child back to queued. Send, stop, close, and
+automatic activation serialize on the task-record lock. Restart never launches
+an agent activity: it retains pending input, queues an interruption reminder in
+the child, and requires a later explicit `task_send`. Recovery also repairs a
+half-committed `child=closed, task=idle` close.
 
 This recovery path assumes the runtime supervisor, cgroup, or container killed
 the previous fiasco process and all locally managed descendants before
@@ -408,8 +423,10 @@ without making cache behavior part of the core API.
 ### Hooks
 
 Command hooks observe `run_start`, `run_end`, `tool_before`, and `tool_after`.
-They receive JSON over stdin and inherit the host process permissions. Hooks do
-not define a second execution path.
+They receive JSON over stdin and inherit the host process permissions. For a
+root, `run_end` follows terminal completion; for a reusable child it follows
+each completed activity after the child becomes idle, not explicit close.
+Hooks do not define a second execution path.
 
 ## Headless Surface
 

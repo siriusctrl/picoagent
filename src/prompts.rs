@@ -50,7 +50,7 @@ mod tests {
         assert!(
             prompts
                 .system
-                .contains("starts one independent GeneralTask asynchronously")
+                .contains("starts one reusable GeneralTask agent asynchronously")
         );
         assert!(prompts.general_task.contains("complete assignment"));
         assert!(prompts.compaction_request.contains("# Compacted state"));

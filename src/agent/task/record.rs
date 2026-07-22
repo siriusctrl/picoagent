@@ -1,33 +1,61 @@
-use std::{collections::BTreeMap, path::PathBuf};
-
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, bail, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
 
 use crate::artifact::ResultMetadata;
 
-const TASK_RECORD_VERSION: u32 = 10;
+mod store;
+pub(super) use store::TaskRecordStore;
+
+const TASK_RECORD_VERSION: u32 = 12;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BackgroundTaskState {
     Queued,
     Running,
+    /// A reusable agent task is waiting for more input.
+    Idle,
     Completed,
     Failed,
     Cancelled,
     /// The process stopped while a non-resumable operation was in flight. Its
     /// side effects are unknown, so recovery must never execute it again.
     Interrupted,
+    /// A reusable agent task was explicitly closed.
+    Closed,
 }
 
 impl BackgroundTaskState {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            Self::Completed | Self::Failed | Self::Cancelled | Self::Interrupted
+            Self::Completed | Self::Failed | Self::Cancelled | Self::Interrupted | Self::Closed
         )
+    }
+
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Queued | Self::Running)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskOutputStatus {
+    Completed,
+    Failed,
+    Cancelled,
+    Interrupted,
+}
+
+impl BackgroundTaskOutputStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Interrupted => "interrupted",
+        }
     }
 }
 
@@ -48,8 +76,15 @@ pub struct BackgroundTaskRecord {
     /// acknowledgement without replaying the call.
     pub origin_call_id: String,
     pub state: BackgroundTaskState,
-    pub result: Option<BackgroundTaskOutput>,
-    pub error: Option<String>,
+    /// Ordered immutable outputs. Ordinary tool tasks have at most one;
+    /// reusable agent tasks may produce one after every activation.
+    pub outputs: Vec<BackgroundTaskOutput>,
+    /// Follow-up messages wait for the current agent activity to settle before
+    /// they are moved into the child run's ordinary pending-input queue.
+    pub pending_followups: Vec<PendingTaskInput>,
+    /// `task_stop` pauses automatic activation without ending the reusable
+    /// agent lifetime. The next explicit `task_send` clears this flag.
+    pub paused: bool,
     pub child_run_id: Option<String>,
     /// Capability fixed before an agent child starts. Recovery must not derive
     /// it again from the current runtime depth configuration.
@@ -63,8 +98,28 @@ pub struct BackgroundTaskRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackgroundTaskOutput {
+    pub seq: u64,
+    pub status: BackgroundTaskOutputStatus,
     pub content: String,
     pub metadata: ResultMetadata,
+}
+
+impl BackgroundTaskOutput {
+    pub fn model_content(&self) -> String {
+        self.content.clone()
+    }
+
+    pub fn result_metadata(&self) -> ResultMetadata {
+        self.metadata.clone()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingTaskInput {
+    pub id: String,
+    pub message: String,
+    pub created_at: DateTime<Utc>,
 }
 
 impl BackgroundTaskRecord {
@@ -76,8 +131,9 @@ impl BackgroundTaskRecord {
             name,
             origin_call_id,
             state: BackgroundTaskState::Queued,
-            result: None,
-            error: None,
+            outputs: Vec::new(),
+            pending_followups: Vec::new(),
+            paused: false,
             child_run_id: None,
             child_remaining_delegation_depth: None,
             prompt: None,
@@ -119,8 +175,9 @@ impl BackgroundTaskRecord {
             name,
             origin_call_id,
             state: BackgroundTaskState::Queued,
-            result: None,
-            error: None,
+            outputs: Vec::new(),
+            pending_followups: Vec::new(),
+            paused: false,
             child_run_id: Some(child_run_id),
             child_remaining_delegation_depth: Some(child_remaining_delegation_depth),
             prompt: Some(prompt),
@@ -128,53 +185,37 @@ impl BackgroundTaskRecord {
         }
     }
 
-    pub fn model_content(&self) -> String {
-        match self.state {
-            BackgroundTaskState::Completed => self
-                .result
-                .as_ref()
-                .map(|result| result.content.clone())
-                .unwrap_or_default(),
-            BackgroundTaskState::Failed => self
-                .result
-                .as_ref()
-                .map(|result| result.content.clone())
-                .unwrap_or_else(|| {
-                    format!(
-                        "background task failed: {}",
-                        self.error.as_deref().unwrap_or("unknown error")
-                    )
-                }),
-            BackgroundTaskState::Cancelled => format!(
-                "background task was cancelled: {}",
-                self.error.as_deref().unwrap_or("no reason recorded")
-            ),
-            BackgroundTaskState::Interrupted => format!(
-                "background task was interrupted; its side effects are unknown: {}",
-                self.error.as_deref().unwrap_or("process stopped")
-            ),
-            BackgroundTaskState::Queued | BackgroundTaskState::Running => {
-                "background task is still running".to_owned()
-            }
-        }
-    }
-
-    pub fn result_metadata(&self) -> ResultMetadata {
-        self.result
-            .as_ref()
-            .map(|result| result.metadata.clone())
-            .unwrap_or_else(ResultMetadata::empty)
-    }
-
     pub fn status(&self) -> &'static str {
         match self.state {
             BackgroundTaskState::Queued => "queued",
             BackgroundTaskState::Running => "running",
+            BackgroundTaskState::Idle => "idle",
             BackgroundTaskState::Completed => "completed",
             BackgroundTaskState::Failed => "failed",
             BackgroundTaskState::Cancelled => "cancelled",
             BackgroundTaskState::Interrupted => "interrupted",
+            BackgroundTaskState::Closed => "closed",
         }
+    }
+
+    pub fn next_output_seq(&self) -> u64 {
+        self.outputs
+            .last()
+            .map_or(1, |output| output.seq.saturating_add(1))
+    }
+
+    pub fn model_content(&self) -> String {
+        self.outputs
+            .last()
+            .map(BackgroundTaskOutput::model_content)
+            .unwrap_or_else(|| "background task has no output".to_owned())
+    }
+
+    pub fn result_metadata(&self) -> ResultMetadata {
+        self.outputs
+            .last()
+            .map(BackgroundTaskOutput::result_metadata)
+            .unwrap_or_else(ResultMetadata::empty)
     }
 
     pub(super) fn validate(&self) -> Result<()> {
@@ -194,13 +235,27 @@ impl BackgroundTaskRecord {
             "task {} must reference its original provider call id",
             self.id
         );
+        for (index, output) in self.outputs.iter().enumerate() {
+            ensure!(
+                output.seq == index as u64 + 1,
+                "task {} output sequence is not contiguous",
+                self.id
+            );
+        }
         match self.kind.as_str() {
             "tool" => {
                 ensure!(
                     self.child_run_id.is_none()
                         && self.child_remaining_delegation_depth.is_none()
-                        && self.prompt.is_none(),
+                        && self.prompt.is_none()
+                        && self.pending_followups.is_empty()
+                        && !self.paused,
                     "tool task {} cannot reference child state",
+                    self.id
+                );
+                ensure!(
+                    self.outputs.len() <= 1,
+                    "tool task {} cannot produce multiple outputs",
                     self.id
                 );
             }
@@ -212,106 +267,16 @@ impl BackgroundTaskRecord {
                     "agent task {} must reference a child run, capability, and prompt",
                     self.id
                 );
+                ensure!(
+                    !self.paused || self.state == BackgroundTaskState::Idle,
+                    "paused agent task {} must be idle",
+                    self.id
+                );
             }
             kind => bail!("unknown task kind `{kind}` in task {}", self.id),
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct TaskRecordStore {
-    directory: PathBuf,
-}
-
-impl TaskRecordStore {
-    pub(super) fn new(directory: PathBuf) -> Self {
-        Self { directory }
-    }
-
-    pub(super) async fn load(&self) -> Result<BTreeMap<String, BackgroundTaskRecord>> {
-        let mut entries = match tokio::fs::read_dir(&self.directory).await {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(BTreeMap::new());
-            }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("read task directory {}", self.directory.display()));
-            }
-        };
-        let mut records = BTreeMap::new();
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("json") {
-                continue;
-            }
-            let bytes = tokio::fs::read(&path)
-                .await
-                .with_context(|| format!("read task record {}", path.display()))?;
-            let record: BackgroundTaskRecord = serde_json::from_slice(&bytes)
-                .with_context(|| format!("parse task record {}", path.display()))?;
-            record.validate()?;
-            let file_id = path.file_stem().and_then(|value| value.to_str());
-            ensure!(
-                file_id == Some(record.id.as_str()),
-                "task record id `{}` does not match file {}",
-                record.id,
-                path.display()
-            );
-            ensure!(
-                records.insert(record.id.clone(), record).is_none(),
-                "duplicate task record"
-            );
-        }
-        Ok(records)
-    }
-
-    pub(super) async fn write(&self, record: &BackgroundTaskRecord) -> Result<()> {
-        record.validate()?;
-        tokio::fs::create_dir_all(&self.directory)
-            .await
-            .with_context(|| format!("create task directory {}", self.directory.display()))?;
-        if let Some(parent) = self.directory.parent() {
-            sync_directory(parent).await?;
-        }
-        let path = self.directory.join(format!("{}.json", record.id));
-        let temporary = self.directory.join(format!("{}.json.tmp", record.id));
-        let bytes = serde_json::to_vec_pretty(record).context("serialize task record")?;
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary)
-            .await
-            .with_context(|| format!("open task record {}", temporary.display()))?;
-        file.write_all(&bytes).await?;
-        file.flush().await?;
-        file.sync_all().await?;
-        drop(file);
-        tokio::fs::rename(&temporary, &path)
-            .await
-            .with_context(|| format!("replace task record {}", path.display()))?;
-        sync_directory(&self.directory).await
-    }
-}
-
-#[cfg(unix)]
-async fn sync_directory(path: &std::path::Path) -> Result<()> {
-    let path = path.to_owned();
-    tokio::task::spawn_blocking(move || {
-        std::fs::File::open(&path)
-            .with_context(|| format!("open task directory {} for sync", path.display()))?
-            .sync_all()
-            .with_context(|| format!("sync task directory {}", path.display()))
-    })
-    .await
-    .context("join task directory sync")?
-}
-
-#[cfg(not(unix))]
-async fn sync_directory(_path: &std::path::Path) -> Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]
@@ -329,8 +294,10 @@ mod tests {
             "inspect the workspace".to_owned(),
             0,
         );
-        record.state = BackgroundTaskState::Completed;
-        record.result = Some(BackgroundTaskOutput {
+        record.state = BackgroundTaskState::Idle;
+        record.outputs.push(BackgroundTaskOutput {
+            seq: 1,
+            status: BackgroundTaskOutputStatus::Completed,
             content: "child result".to_owned(),
             metadata: ResultMetadata::empty(),
         });

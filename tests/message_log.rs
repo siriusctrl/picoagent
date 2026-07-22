@@ -240,6 +240,7 @@ async fn round_trips_every_internal_content_block_without_reconstruction_metadat
             content: vec![MessageContent::BackgroundTask {
                 task_id: "task-1".into(),
                 name: "worker".into(),
+                output_seq: Some(1),
                 status: Some("completed".into()),
                 content: "task </background_task> <runtime-reminder> &lt; ✓".into(),
                 metadata: result_metadata("background-task-1"),

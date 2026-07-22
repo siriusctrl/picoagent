@@ -28,9 +28,13 @@ const RUN_RECORD_VERSION: u32 = 10;
 pub enum RunState {
     Queued,
     Running,
+    /// A reusable delegated agent is waiting for more input.
+    Idle,
     Completed,
     Failed,
     Cancelled,
+    /// A reusable delegated agent was explicitly closed.
+    Closed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -33,6 +33,11 @@ ADR 0034 supersedes partial-batch acknowledgement reconstruction. The assistant,
 ordered tool results, and optional attachment now commit as one checkpoint;
 only task records acknowledged by that checkpoint participate in recovery.
 
+ADR 0035 later replaces `task_steer` with mode-required `task_send`, adds agent
+list and close controls, makes child-backed tasks reusable, and changes bounded
+wait from wait-all to wait-any. The direct-tool concurrency decisions remain
+accepted.
+
 ## Context
 
 The runner executed tool calls from one assistant message sequentially. This

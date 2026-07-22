@@ -29,7 +29,10 @@ the fork fields are removed, and the pre-release records advance to version 10.
 
 ADR 0034 replaces per-message partial-turn repair with atomic logical
 checkpoints. It keeps separate child transcripts and parent-owned delivery, but
-uncommitted task files are now ignored instead of reconstructing acknowledgements.
+uncommitted task files are now ignored instead of reconstructing
+acknowledgements. ADR 0036 supersedes automatic queued/running child activity
+resume: child transcripts remain durable, but process restart interrupts the
+current activity and requires an explicit later `task_send`.
 
 ADR 0027 persists a delegated task's originating provider call id so recovery
 can reconstruct a missing acknowledgement without replaying `delegate`. It
@@ -69,8 +72,9 @@ once without copying a second transcript into task records.
 - Keep task JSON as parent-child coordination state: kind, state, child id,
   prompt, timeout, result, and error. Derive terminal-result delivery from
   committed `BackgroundTaskResult.task_id` entries in the parent transcript.
-- Mark in-flight ordinary background tools `interrupted` after restart. Reconcile
-  completed/failed child runs and resume queued/running children.
+- Mark in-flight ordinary background tools `interrupted` after restart. Keep
+  child transcripts, but move active child activities to an `interrupted`
+  output and an idle paused reusable agent without launching them.
 - Hold a cancellation guard while a run owns background work. A dropped future
   aborts in-memory descendants but leaves durable task state for the next lease
   owner; explicit failure paths settle state before releasing the lease.
@@ -91,10 +95,10 @@ message makes that uncertainty part of the trajectory.
 
 - **Replay every missing tool result.** Rejected because writes, shell commands,
   network calls, and MCP tools may not be idempotent.
-- **Do not resume durable GeneralTask subagents.** Rejected because those
-  children have normal run transcripts and task records. Synchronous
-  MemoryMaintenance children remain direct-tool work and are not covered by
-  this guarantee.
+- **Discard durable GeneralTask threads after interruption.** Rejected because
+  those children have useful normal run transcripts and task records. Their
+  in-flight activity is interrupted, but an explicit later send can reuse the
+  same thread.
 - **Store child messages in task JSON.** Rejected because it duplicates the
   child transcript and creates two recovery authorities.
 - **Persist a `delivered` flag.** Rejected because a crash between message append
@@ -109,3 +113,4 @@ message makes that uncertainty part of the trajectory.
 - [Architecture](../architecture.md)
 - [ADR 0001](0001-durable-messages-transient-stream-deltas.md)
 - [ADR 0005](0005-openai-chat-compatible-message-log.md)
+- [ADR 0036](0036-interrupt-agent-activities-on-restart.md)

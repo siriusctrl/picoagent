@@ -1,0 +1,14 @@
+name: task_list
+description: >-
+  List every delegated agent task owned by the current run. Idle agents remain
+  reusable through task_send. Closed agents are hidden unless requested.
+returns: >-
+  JSON `{tasks:[{task_id,kind,name,status,paused,pending_followups,last_output_seq}]}`.
+input_schema:
+  type: object
+  properties:
+    include_closed:
+      type: boolean
+      default: false
+      description: Include explicitly closed agent tasks
+  additionalProperties: false

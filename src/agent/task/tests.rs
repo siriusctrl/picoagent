@@ -236,6 +236,61 @@ async fn task_activity_broadcast_wakes_every_waiter_for_its_completed_task() {
 }
 
 #[tokio::test]
+async fn wait_returns_when_any_selected_task_settles() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    let mut task_config = config(workspace.path(), &store, "parent");
+    task_config.wait_timeout_seconds = 5;
+    let manager = TaskManager::new(task_config);
+    let first = manager
+        .create_tool_task("first".to_owned(), "first-call".to_owned())
+        .await
+        .unwrap();
+    let second = manager
+        .create_tool_task("second".to_owned(), "second-call".to_owned())
+        .await
+        .unwrap();
+    manager.set_running(&first).await.unwrap();
+    manager.set_running(&second).await.unwrap();
+
+    let waiter = tokio::spawn({
+        let manager = manager.clone();
+        let selected = vec![first.clone(), second.clone()];
+        async move { manager.wait(&selected).await }
+    });
+    tokio::task::yield_now().await;
+    manager
+        .complete(
+            &first,
+            ToolOutput {
+                preview: "first done".to_owned(),
+                artifact: None,
+                truncated: false,
+                is_error: false,
+                preview_info: None,
+                attachment: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let records = tokio::time::timeout(Duration::from_millis(500), waiter)
+        .await
+        .expect("wait slept until every selected task settled")
+        .unwrap()
+        .unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].state, BackgroundTaskState::Completed);
+    assert_eq!(records[1].state, BackgroundTaskState::Running);
+
+    manager
+        .cancel(&second, "test cleanup".to_owned())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn recovery_ignores_an_uncommitted_task_but_reserves_its_id() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
@@ -250,7 +305,7 @@ async fn recovery_ignores_an_uncommitted_task_but_reserves_its_id() {
         .await
         .unwrap();
 
-    let (manager, _) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
     assert!(manager.status(&[]).await.unwrap().is_empty());
@@ -286,15 +341,14 @@ async fn recovery_does_not_link_an_orphan_to_an_older_reused_call_id() {
         .await
         .unwrap();
 
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
-    assert!(recoverable.is_empty());
     assert!(manager.status(&[]).await.unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn recovery_starts_a_committed_queued_child_from_its_prepared_run() {
+async fn recovery_interrupts_a_committed_queued_child_without_starting_it() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -310,32 +364,23 @@ async fn recovery_starts_a_committed_queued_child_from_its_prepared_run() {
     task_store.write(&task).await.unwrap();
     commit_task_start(&store, "parent", &task).await;
 
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
-    assert_eq!(recoverable.len(), 1);
-    manager
-        .resume_agent_task(recoverable[0].clone())
-        .await
-        .unwrap();
-    let completed = tokio::time::timeout(Duration::from_secs(3), manager.wait_all())
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(completed.len(), 1);
-    assert_eq!(completed[0].state, BackgroundTaskState::Completed);
+    let recovered = manager.get("t1").await.unwrap();
+    assert_eq!(recovered.state, BackgroundTaskState::Idle);
+    assert!(recovered.paused);
+    assert_eq!(recovered.outputs.len(), 1);
     assert_eq!(
-        store.load_run("child").await.unwrap().state,
-        RunState::Completed
+        recovered.outputs[0].status,
+        BackgroundTaskOutputStatus::Interrupted
     );
-    let child_messages = store.load_messages("child").await.unwrap();
-    assert_eq!(child_messages[0].role, Role::User);
-    assert!(child_messages[0].visible_text().contains("start me"));
+    assert_eq!(store.load_run("child").await.unwrap().state, RunState::Idle);
+    assert!(store.load_messages("child").await.unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn restore_reconciles_tools_and_completed_children() {
+async fn restore_interrupts_tools_and_completed_child_activities() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -362,31 +407,32 @@ async fn restore_reconciles_tools_and_completed_children() {
     task_store.write(&agent).await.unwrap();
     commit_task_start(&store, "parent", &agent).await;
 
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
-    assert!(recoverable.is_empty());
     assert_eq!(
         manager.get("tool-task").await.unwrap().state,
         BackgroundTaskState::Interrupted
     );
     let agent = manager.get("agent-task").await.unwrap();
-    assert_eq!(agent.state, BackgroundTaskState::Completed);
+    assert_eq!(agent.state, BackgroundTaskState::Idle);
+    assert!(agent.paused);
     assert_eq!(
-        agent.result.as_ref().map(|result| result.content.as_str()),
-        Some("child result")
+        agent.outputs.last().map(|result| result.status),
+        Some(BackgroundTaskOutputStatus::Interrupted)
     );
+    assert!(!agent.model_content().contains("child result"));
 
     let restored = task_store.load().await.unwrap();
     assert_eq!(
         restored["tool-task"].state,
         BackgroundTaskState::Interrupted
     );
-    assert_eq!(restored["agent-task"].state, BackgroundTaskState::Completed);
+    assert_eq!(restored["agent-task"].state, BackgroundTaskState::Idle);
 }
 
 #[tokio::test]
-async fn restore_prefers_a_durable_completed_child_regardless_of_task_age() {
+async fn restore_does_not_salvage_a_completed_child_as_a_delivered_activity() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -408,20 +454,139 @@ async fn restore_prefers_a_durable_completed_child_regardless_of_task_age() {
     task_store.write(&agent).await.unwrap();
     commit_task_start(&store, "parent", &agent).await;
 
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
 
-    assert!(recoverable.is_empty());
     let recovered = manager.get("agent-task").await.unwrap();
-    assert_eq!(recovered.state, BackgroundTaskState::Completed);
+    assert_eq!(recovered.state, BackgroundTaskState::Idle);
+    assert!(recovered.paused);
     assert_eq!(
-        recovered
-            .result
-            .as_ref()
-            .map(|result| result.content.as_str()),
-        Some("late durable result")
+        recovered.outputs.last().map(|result| result.status),
+        Some(BackgroundTaskOutputStatus::Interrupted)
     );
+    assert!(!recovered.model_content().contains("late durable result"));
+}
+
+#[tokio::test]
+async fn recovery_interrupts_a_reactivation_and_preserves_prior_output() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "repeat work", RunState::Running).await;
+    store
+        .write_final("child", "stale previous output")
+        .await
+        .unwrap();
+    store
+        .enqueue_user_input_with_id(
+            "child",
+            "input-next".to_owned(),
+            "new activity input".to_owned(),
+        )
+        .await
+        .unwrap();
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_agent(
+        "agent-task".to_owned(),
+        "reusable".to_owned(),
+        "child".to_owned(),
+        "repeat work".to_owned(),
+        0,
+    );
+    task.state = BackgroundTaskState::Running;
+    task.outputs.push(BackgroundTaskOutput {
+        seq: 1,
+        status: BackgroundTaskOutputStatus::Completed,
+        content: "previous output".to_owned(),
+        metadata: crate::artifact::ResultMetadata::empty(),
+    });
+    task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
+
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+
+    let recovered = manager.get("agent-task").await.unwrap();
+    assert_eq!(recovered.state, BackgroundTaskState::Idle);
+    assert!(recovered.paused);
+    assert_eq!(recovered.outputs.len(), 2);
+    assert_eq!(recovered.outputs[0].content, "previous output");
+    assert_eq!(
+        recovered.outputs[1].status,
+        BackgroundTaskOutputStatus::Interrupted
+    );
+    assert_eq!(store.load_run("child").await.unwrap().state, RunState::Idle);
+    assert!(store.has_pending_user_input("child").await.unwrap());
+}
+
+#[tokio::test]
+async fn recovery_does_not_duplicate_a_failed_activity_after_parent_commit() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "work", RunState::Failed).await;
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_agent(
+        "agent-task".to_owned(),
+        "reusable".to_owned(),
+        "child".to_owned(),
+        "work".to_owned(),
+        0,
+    );
+    task.state = BackgroundTaskState::Idle;
+    task.outputs.push(BackgroundTaskOutput {
+        seq: 1,
+        status: BackgroundTaskOutputStatus::Failed,
+        content: "activity failed".to_owned(),
+        metadata: crate::artifact::ResultMetadata::empty(),
+    });
+    task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
+
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+
+    let recovered = manager.get("agent-task").await.unwrap();
+    assert_eq!(recovered.state, BackgroundTaskState::Idle);
+    assert_eq!(recovered.outputs.len(), 1);
+    assert_eq!(store.load_run("child").await.unwrap().state, RunState::Idle);
+}
+
+#[tokio::test]
+async fn recovery_repairs_a_half_committed_agent_close() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "work", RunState::Closed).await;
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_agent(
+        "agent-task".to_owned(),
+        "reusable".to_owned(),
+        "child".to_owned(),
+        "work".to_owned(),
+        0,
+    );
+    task.state = BackgroundTaskState::Idle;
+    task.paused = true;
+    task.pending_followups.push(PendingTaskInput {
+        id: "discarded".to_owned(),
+        message: "discard me".to_owned(),
+        created_at: chrono::Utc::now(),
+    });
+    task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
+
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+
+    let recovered = manager.get("agent-task").await.unwrap();
+    assert_eq!(recovered.state, BackgroundTaskState::Closed);
+    assert!(!recovered.paused);
+    assert!(recovered.pending_followups.is_empty());
 }
 
 #[tokio::test]
@@ -442,10 +607,9 @@ async fn restore_and_repeated_stop_repair_a_cancelled_tasks_live_child() {
     task_store.write(&task).await.unwrap();
     commit_task_start(&store, "parent", &task).await;
 
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
-    assert!(recoverable.is_empty());
     assert_eq!(
         store.load_run("child").await.unwrap().state,
         RunState::Cancelled
@@ -501,10 +665,9 @@ async fn restore_validates_a_live_child_against_its_stored_capability() {
 
     // The current parent configuration says a new child would be a leaf, but
     // this existing child was durably fixed as delegating before it started.
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
-    assert_eq!(recoverable.len(), 1);
     assert_eq!(
         manager
             .get("agent-task")
@@ -513,10 +676,13 @@ async fn restore_validates_a_live_child_against_its_stored_capability() {
             .child_remaining_delegation_depth,
         Some(1)
     );
+    let recovered = manager.get("agent-task").await.unwrap();
+    assert_eq!(recovered.state, BackgroundTaskState::Idle);
+    assert!(recovered.paused);
 }
 
 #[tokio::test]
-async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
+async fn restore_interrupts_live_subagents_and_derives_delivery_from_messages() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -562,10 +728,12 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
 
     let delivered = BackgroundTaskRecord {
         state: BackgroundTaskState::Completed,
-        result: Some(record::BackgroundTaskOutput {
+        outputs: vec![record::BackgroundTaskOutput {
+            seq: 1,
+            status: record::BackgroundTaskOutputStatus::Completed,
             content: "already delivered".to_owned(),
             metadata: crate::artifact::ResultMetadata::empty(),
-        }),
+        }],
         ..BackgroundTaskRecord::queued_tool(
             "done-task".to_owned(),
             "read".to_owned(),
@@ -582,6 +750,7 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
                 content: vec![MessageContent::BackgroundTask {
                     task_id: "done-task".to_owned(),
                     name: "read".to_owned(),
+                    output_seq: Some(1),
                     status: Some("completed".to_owned()),
                     content: "already delivered".to_owned(),
                     metadata: crate::artifact::ResultMetadata::empty(),
@@ -591,46 +760,78 @@ async fn restore_returns_live_subagents_and_derives_delivery_from_messages() {
         .await
         .unwrap();
 
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
-    assert_eq!(recoverable.len(), 1);
-    assert_eq!(recoverable[0].task_id, "agent-task");
-    assert_eq!(recoverable[0].child_run_id, "child");
-    assert_eq!(recoverable[0].prompt, "resume me");
+    let ready = manager.drain_ready_outputs().await.unwrap();
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0].task_id, "agent-task");
     assert_eq!(
-        manager
-            .drain_completed()
-            .await
-            .unwrap()
-            .iter()
-            .map(|record| record.id.as_str())
-            .collect::<Vec<_>>(),
-        Vec::<&str>::new()
+        ready[0].output.status,
+        BackgroundTaskOutputStatus::Interrupted
     );
+    let recovered = manager.get("agent-task").await.unwrap();
+    assert_eq!(recovered.state, BackgroundTaskState::Idle);
+    assert!(recovered.paused);
+}
 
-    manager
-        .resume_agent_task(recoverable[0].clone())
+#[tokio::test]
+async fn recovery_delivers_only_agent_outputs_after_the_parent_sequence_cursor() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "repeat work", RunState::Idle).await;
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut agent = BackgroundTaskRecord::queued_agent(
+        "agent-task".to_owned(),
+        "reusable".to_owned(),
+        "child".to_owned(),
+        "repeat work".to_owned(),
+        0,
+    );
+    agent.state = BackgroundTaskState::Idle;
+    agent.outputs = vec![
+        BackgroundTaskOutput {
+            seq: 1,
+            status: BackgroundTaskOutputStatus::Completed,
+            content: "first output".to_owned(),
+            metadata: crate::artifact::ResultMetadata::empty(),
+        },
+        BackgroundTaskOutput {
+            seq: 2,
+            status: BackgroundTaskOutputStatus::Completed,
+            content: "second output".to_owned(),
+            metadata: crate::artifact::ResultMetadata::empty(),
+        },
+    ];
+    task_store.write(&agent).await.unwrap();
+    commit_task_start(&store, "parent", &agent).await;
+    store
+        .append_message(
+            "parent",
+            &Message {
+                role: Role::User,
+                content: vec![MessageContent::BackgroundTask {
+                    task_id: agent.id.clone(),
+                    name: agent.name.clone(),
+                    output_seq: Some(1),
+                    status: Some("completed".to_owned()),
+                    content: "first output".to_owned(),
+                    metadata: crate::artifact::ResultMetadata::empty(),
+                }],
+            },
+        )
         .await
         .unwrap();
-    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), manager.wait_all())
+
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
-        .unwrap()
         .unwrap();
-    assert_eq!(completed.len(), 1);
-    assert_eq!(completed[0].id, "agent-task");
-    assert_eq!(
-        completed[0].state,
-        BackgroundTaskState::Completed,
-        "{:#?}",
-        completed[0]
-    );
-    assert!(
-        completed[0]
-            .result
-            .as_ref()
-            .is_some_and(|result| result.content.contains("received:"))
-    );
+    let ready = manager.drain_ready_outputs().await.unwrap();
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0].task_id, "agent-task");
+    assert_eq!(ready[0].output.seq, 2);
+    assert_eq!(ready[0].output.content, "second output");
 }
 
 #[tokio::test]
@@ -657,7 +858,7 @@ async fn recovery_rejects_a_committed_agent_task_without_its_prepared_child_run(
 }
 
 #[tokio::test]
-async fn recovered_child_does_not_wait_for_a_busy_lease() {
+async fn recovery_interrupts_a_child_without_waiting_for_its_busy_lease() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -674,25 +875,16 @@ async fn recovered_child_does_not_wait_for_a_busy_lease() {
     task_store.write(&task).await.unwrap();
     commit_task_start(&store, "parent", &task).await;
     let child_lease = store.acquire_run_lease("child").await.unwrap();
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
 
-    manager
-        .resume_agent_task(recoverable[0].clone())
-        .await
-        .unwrap();
-    let completed = tokio::time::timeout(Duration::from_secs(3), manager.wait_all())
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(completed.len(), 1);
-    assert_eq!(completed[0].state, BackgroundTaskState::Failed);
-    assert!(
-        completed[0]
-            .model_content()
-            .contains("already being executed")
+    let recovered = manager.get("agent-task").await.unwrap();
+    assert_eq!(recovered.state, BackgroundTaskState::Idle);
+    assert!(recovered.paused);
+    assert_eq!(
+        recovered.outputs[0].status,
+        BackgroundTaskOutputStatus::Interrupted
     );
     drop(child_lease);
 }
@@ -758,10 +950,9 @@ async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current
     task.state = BackgroundTaskState::Running;
     task_store.write(&task).await.unwrap();
     commit_task_start(&store, "parent", &task).await;
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::load_existing(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
-    assert_eq!(recoverable.len(), 1);
 
     let latest = manager.inspect("agent-task", None, 6).await.unwrap();
     assert_eq!(latest["messages"][0]["seq"], 3);
@@ -780,17 +971,15 @@ async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current
     assert!(earlier["next_before_seq"].is_null());
 
     let steering = manager
-        .steer("agent-task", "change direction".to_owned())
+        .send(
+            "agent-task",
+            "change direction".to_owned(),
+            TaskSendMode::Steer,
+        )
         .await
         .unwrap();
-    assert_eq!(
-        steering,
-        serde_json::json!({
-            "task_id": "agent-task",
-            "name": "general-task",
-            "status": "running"
-        })
-    );
+    assert_eq!(steering["task_id"], "agent-task");
+    assert_eq!(steering["accepted_as"], "steered");
     let mut trajectory = store.load_trajectory("child").await.unwrap();
     let appended = store
         .append_pending_inputs("child", &mut trajectory)
@@ -813,6 +1002,176 @@ async fn inspect_pages_native_child_messages_and_steer_appends_after_the_current
 }
 
 #[tokio::test]
+async fn stopping_an_agent_activity_leaves_the_same_child_reusable() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "do work", RunState::Running).await;
+    let task_store = TaskRecordStore::new(store.paths("parent").directory.join("tasks"));
+    let mut task = BackgroundTaskRecord::queued_agent(
+        "agent-task".to_owned(),
+        "general-task".to_owned(),
+        "child".to_owned(),
+        "do work".to_owned(),
+        0,
+    );
+    task.state = BackgroundTaskState::Running;
+    task_store.write(&task).await.unwrap();
+    commit_task_start(&store, "parent", &task).await;
+    let manager = TaskManager::load_existing(config(workspace.path(), &store, "parent"))
+        .await
+        .unwrap();
+
+    let queued = manager
+        .send(
+            "agent-task",
+            "queued before stop".to_owned(),
+            TaskSendMode::Followup,
+        )
+        .await
+        .unwrap();
+    assert_eq!(queued["accepted_as"], "queued_followup");
+
+    let stopped = manager.stop("agent-task").await.unwrap();
+    assert_eq!(stopped.state, BackgroundTaskState::Idle);
+    assert!(stopped.paused);
+    assert_eq!(stopped.outputs.len(), 1);
+    assert_eq!(stopped.pending_followups.len(), 1);
+    assert_eq!(
+        stopped.outputs[0].status,
+        BackgroundTaskOutputStatus::Interrupted
+    );
+    assert_eq!(store.load_run("child").await.unwrap().state, RunState::Idle);
+    tokio::task::yield_now().await;
+    let still_stopped = manager.get("agent-task").await.unwrap();
+    assert_eq!(still_stopped.state, BackgroundTaskState::Idle);
+    assert!(still_stopped.paused);
+    assert_eq!(still_stopped.pending_followups.len(), 1);
+
+    let sent = manager
+        .send(
+            "agent-task",
+            "continue safely".to_owned(),
+            TaskSendMode::Followup,
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent["accepted_as"], "started");
+    let settled = tokio::time::timeout(Duration::from_secs(3), manager.wait_all())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0].state, BackgroundTaskState::Idle);
+    assert!(!settled[0].paused);
+    assert_eq!(settled[0].outputs.len(), 2);
+    assert!(settled[0].pending_followups.is_empty());
+    assert_eq!(
+        settled[0].outputs[1].status,
+        BackgroundTaskOutputStatus::Completed
+    );
+    assert!(settled[0].outputs[1].content.contains("continue safely"));
+    assert_eq!(settled[0].child_run_id.as_deref(), Some("child"));
+    let child_user_messages = store
+        .load_messages("child")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|message| message.role == Role::User)
+        .map(|message| message.visible_text())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        child_user_messages,
+        ["do work", "queued before stop", "continue safely"]
+    );
+}
+
+#[tokio::test]
+async fn close_and_activation_are_linearized_by_the_task_record_lock() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "work", RunState::Idle).await;
+    let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
+    let task_id = manager
+        .create_agent_task(
+            "reusable".to_owned(),
+            "child".to_owned(),
+            "work".to_owned(),
+            "delegate-call".to_owned(),
+        )
+        .await
+        .unwrap();
+    manager
+        .update(&task_id, |record| {
+            record.state = BackgroundTaskState::Idle;
+            record.pending_followups.push(PendingTaskInput {
+                id: "next-input".to_owned(),
+                message: "next activity".to_owned(),
+                created_at: chrono::Utc::now(),
+            });
+        })
+        .await
+        .unwrap();
+
+    let (activated, closed) = tokio::join!(
+        manager.activate_agent_if_pending(&task_id),
+        manager.close(&task_id)
+    );
+    let activated = activated.unwrap();
+    match closed {
+        Ok(record) => {
+            assert!(!activated);
+            assert_eq!(record.state, BackgroundTaskState::Closed);
+            assert_eq!(
+                store.load_run("child").await.unwrap().state,
+                RunState::Closed
+            );
+        }
+        Err(error) => {
+            assert!(activated);
+            assert!(error.to_string().contains("must be idle"));
+            let settled = tokio::time::timeout(Duration::from_secs(3), manager.wait_all())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(settled[0].state, BackgroundTaskState::Idle);
+            manager.close(&task_id).await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn parent_error_cleanup_preserves_idle_reusable_agents() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = RunDirStore::new(workspace.path());
+    create_run(&store, "parent", None).await;
+    create_child_run(&store, "child", "parent", "work", RunState::Idle).await;
+    let manager = TaskManager::new(config(workspace.path(), &store, "parent"));
+    let task_id = manager
+        .create_agent_task(
+            "reusable".to_owned(),
+            "child".to_owned(),
+            "work".to_owned(),
+            "delegate-call".to_owned(),
+        )
+        .await
+        .unwrap();
+    manager
+        .update(&task_id, |record| record.state = BackgroundTaskState::Idle)
+        .await
+        .unwrap();
+
+    manager.abort_and_settle("parent failed").await;
+
+    let preserved = manager.get(&task_id).await.unwrap();
+    assert_eq!(preserved.state, BackgroundTaskState::Idle);
+    assert!(!preserved.paused);
+    assert_eq!(store.load_run("child").await.unwrap().state, RunState::Idle);
+}
+
+#[tokio::test]
 async fn in_flight_tool_recovers_as_interrupted_regardless_of_task_age() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
@@ -828,10 +1187,9 @@ async fn in_flight_tool_recovers_as_interrupted_regardless_of_task_age() {
     task_store.write(&task).await.unwrap();
     commit_task_start(&store, "parent", &task).await;
 
-    let (manager, recoverable) = TaskManager::restore(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::restore(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
-    assert!(recoverable.is_empty());
     let recovered = manager.get("tool-task").await.unwrap();
     assert_eq!(recovered.state, BackgroundTaskState::Interrupted);
     assert_eq!(recovered.origin_call_id, "bash-call");
@@ -843,7 +1201,7 @@ async fn in_flight_tool_recovers_as_interrupted_regardless_of_task_age() {
 }
 
 #[tokio::test]
-async fn resume_load_does_not_reconcile_tasks_before_capability_validation() {
+async fn existing_load_does_not_reconcile_tasks_before_capability_validation() {
     let workspace = tempfile::tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     create_run(&store, "parent", None).await;
@@ -857,7 +1215,7 @@ async fn resume_load_does_not_reconcile_tasks_before_capability_validation() {
     task_store.write(&task).await.unwrap();
     commit_task_start(&store, "parent", &task).await;
 
-    let manager = TaskManager::load_for_resume(config(workspace.path(), &store, "parent"))
+    let manager = TaskManager::load_existing(config(workspace.path(), &store, "parent"))
         .await
         .unwrap();
     assert_eq!(
@@ -865,7 +1223,7 @@ async fn resume_load_does_not_reconcile_tasks_before_capability_validation() {
         BackgroundTaskState::Running
     );
 
-    manager.reconcile_after_restart().await.unwrap();
+    manager.reconcile_stale_tasks().await.unwrap();
     assert_eq!(
         manager.get("tool-task").await.unwrap().state,
         BackgroundTaskState::Interrupted
@@ -942,7 +1300,7 @@ async fn background_tool_errors_use_the_artifact_and_preview_contract() {
 #[derive(Default)]
 struct CompletionEventSink {
     background_completed: std::sync::atomic::AtomicBool,
-    subagent_completed: std::sync::atomic::AtomicBool,
+    subagent_activity_completed: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait::async_trait]
@@ -954,8 +1312,9 @@ impl EventSink for CompletionEventSink {
             RuntimeEventKind::BackgroundTaskCompleted { .. } => {
                 self.background_completed.store(true, Ordering::SeqCst);
             }
-            RuntimeEventKind::SubagentCompleted { .. } => {
-                self.subagent_completed.store(true, Ordering::SeqCst);
+            RuntimeEventKind::SubagentActivityCompleted { .. } => {
+                self.subagent_activity_completed
+                    .store(true, Ordering::SeqCst);
             }
             _ => {}
         }
@@ -1009,7 +1368,7 @@ async fn cancelled_agent_does_not_emit_completion_events_when_its_output_arrives
         BackgroundTaskState::Cancelled
     );
     assert!(!events.background_completed.load(Ordering::SeqCst));
-    assert!(!events.subagent_completed.load(Ordering::SeqCst));
+    assert!(!events.subagent_activity_completed.load(Ordering::SeqCst));
 }
 
 struct FailingEventSink;
@@ -1040,10 +1399,14 @@ async fn committed_steering_succeeds_when_its_observation_event_fails() {
     commit_task_start(&store, "parent", &task).await;
     let mut task_config = config(workspace.path(), &store, "parent");
     task_config.events = Arc::new(FailingEventSink);
-    let (manager, _) = TaskManager::restore(task_config).await.unwrap();
+    let manager = TaskManager::load_existing(task_config).await.unwrap();
 
     manager
-        .steer("agent-task", "change direction".to_owned())
+        .send(
+            "agent-task",
+            "change direction".to_owned(),
+            TaskSendMode::Steer,
+        )
         .await
         .unwrap();
     let mut trajectory = store.load_trajectory("child").await.unwrap();
@@ -1085,7 +1448,7 @@ async fn cancellation_cleanup_holds_the_parent_lease_until_tasks_are_settled() {
         tokio::task::yield_now().await;
     }
 
-    let guard = manager.cancellation_guard(store.acquire_run_lease("parent").await.unwrap());
+    let guard = manager.cancellation_guard(store.acquire_run_lease("parent").await.unwrap(), None);
     drop(guard);
     let busy = store.acquire_run_lease("parent").await.unwrap_err();
     assert!(

@@ -2,10 +2,11 @@
 
 ## Run
 
-A run is one task executed by `AgentRunner`. Its states are queued, running,
-completed, or failed. `fiasco resume <run-id>` continues a non-completed root run
-from its last complete checkpoint. The implementation does not resume inside a
-provider stream or shell command.
+A run is one task executed by `AgentRunner`. Root runs use queued, running,
+completed, or failed. Reusable child runs additionally use idle between
+activities and closed after explicit lifetime termination. `fiasco resume
+<run-id>` continues a non-completed root run from its last complete checkpoint.
+The implementation does not resume inside a provider stream or shell command.
 One per-run execution lease prevents two processes from advancing the same
 trajectory concurrently. Resume also requires the same non-secret provider
 fingerprint: endpoint and wire protocol, plus provider-specific continuation
@@ -42,7 +43,7 @@ run-record versions.
 
 For each model step:
 
-1. append newly completed background results to the current messages;
+1. append newly ready background activity results to the current messages;
 2. if compaction is enabled and the tracked usage threshold is reached, send
    the native older prefix plus one compaction user instruction, then commit
    the instruction and assistant compacted state as one checkpoint;
@@ -123,13 +124,14 @@ loading the file, creating an artifact, or attaching content.
 
 ## Delegated Agents
 
-`delegate` starts a general-task child asynchronously. Each child creates a
-normal run with a parent id. Children share the workspace, provider, and base
-tools. The persisted delegating/leaf profile and exact remaining delegation
-depth protect resume semantics; both profiles expose the same built-in schemas.
-The default maximum depth of one gives the initial child zero remaining depth.
-`task_wait` is a bounded join; a wait timeout does not cancel the task.
-`task_stop` is the explicit cancellation operation.
+`delegate` starts a reusable general-task agent asynchronously. Each agent is a
+task backed by one normal child run with a parent id. Children share the
+workspace, provider, and base tools. The persisted delegating/leaf profile and
+exact remaining delegation depth protect resume semantics; both profiles expose
+the same built-in schemas. The default maximum depth of one gives the initial
+child zero remaining depth. `task_wait` is bounded wait-any: it returns when any
+selected task becomes inactive or the interval expires, without cancelling
+unfinished work.
 
 `delegate` accepts a short name and a self-contained prompt. Every child is
 isolated: it starts with its own runtime reminder and delegated task, without
@@ -143,35 +145,45 @@ root run. It does not consult parent messages; only parent-child coordination
 and eventual result delivery remain in the parent task record.
 
 `task_inspect` returns a child's latest durable Chat-compatible messages and
-can page backward by sequence. `task_steer` queues a normal user message after
-the current assistant/tool batch and before the next provider call. It does not
-interrupt the current tool batch. `task_status` reports state without adding
-an explanatory pseudo-message. Task ids are run-local: controls use ids
-returned by this run's `delegate` or `task_status`.
+can page backward by sequence. `task_send` always requires `mode`. `steer`
+queues a normal user message after the current complete assistant/tool batch;
+`followup` waits for the current activity output before automatically resuming
+the same child. Neither mode interrupts a tool batch, and an idle agent starts
+immediately in either mode. Activity completion produces an ordered output and
+leaves the agent `idle`. `task_stop` interrupts only a current activity;
+the resulting idle agent is paused until its next explicit `task_send`.
+`task_close` permanently closes an idle agent and discards queued followups.
+`task_status` reports all task state, including `paused`, while `task_list`
+lists all agents owned by the current run. Task ids are
+run-local: controls use ids returned by this run's `delegate`, `task_status`, or
+`task_list`.
 
 Task JSON is coordination state, not a second transcript. A record belongs to
 the recoverable parent state only when its originating call has a ToolResult in
 a complete parent checkpoint. Pre-checkpoint records and child directories are
-ignored as orphans. Delivery is derived from `BackgroundTask` entries already
-committed to the parent log. After restart, recognized running ordinary tools
-become terminal `interrupted` tasks and are never replayed. A recognized
-queued/running child agent resumes its separate child run with the same
-`AgentRunner`; completed or failed children are reconciled into the parent
-exactly once.
+ignored as orphans. Delivery is derived from each task's highest `output_seq` in
+`BackgroundTask` entries already committed to the parent log. After restart,
+recognized running ordinary tools become terminal `interrupted` tasks and are
+never replayed. A recognized queued/running child activity produces an
+`interrupted` output; its agent thread and child transcript become idle and
+paused without launching a model call. Pending followups and steering remain
+durable but wait for an explicit `task_send`, which reuses the same child
+through `AgentRunner`. Normal in-process completion or failure can still
+autoactivate queued followups. A closed child stays closed.
 
 A status-less `<background_task>` tool result means only that work is running.
-At a later model boundary, terminal records are grouped in one
-`<runtime-reminder>` user message. Each terminal block includes its task id,
-name, and status. Its payload follows the ordinary per-result policy: small
+At a later model boundary, ready activity outputs are grouped in one
+`<runtime-reminder>` user message. Each result block includes its task id, name,
+status, and output sequence. Its payload follows the ordinary per-result policy: small
 UTF-8 text stays inline, while large or binary output uses the bounded
 `[Tool output]` artifact envelope. The runtime block is added after payload
 limiting and its text is XML-escaped, so status, artifact metadata, read
 instructions, and closing tags cannot be clipped or forged by task output.
 
 The CLI resumes the parent, not a child id. Parent recovery owns durable
-GeneralTask child reconciliation, which avoids two processes racing to advance
-the same child. Large memory updates use this same child path and need no
-separate recovery case.
+GeneralTask interruption and never advances a child automatically, which avoids
+two processes racing to execute the same activity. Large memory updates use
+this same child path and need no separate recovery case.
 
 Resume has a process-domain precondition: the supervisor, cgroup, or container
 has terminated the old fiasco process and all locally managed descendants.

@@ -135,7 +135,11 @@ impl TaskManager {
                         RuntimeEventKind::BackgroundTaskFailed {
                             task_id: task_id.to_owned(),
                             name: name.to_owned(),
-                            error: record.error.unwrap_or_else(|| "tool failed".to_owned()),
+                            error: record
+                                .outputs
+                                .last()
+                                .map(|output| output.content.clone())
+                                .unwrap_or_else(|| "tool failed".to_owned()),
                         },
                     ))
                     .await;

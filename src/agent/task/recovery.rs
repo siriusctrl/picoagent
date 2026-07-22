@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 
@@ -9,15 +12,6 @@ use crate::{
 
 use super::{BackgroundTaskRecord, TaskManager, TaskManagerConfig, TaskRecordStore};
 
-/// A child run which still needs to be resumed after its parent process was
-/// restarted. `TaskManager` reconciles every other recoverable state itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecoverableSubagent {
-    pub task_id: String,
-    pub child_run_id: String,
-    pub prompt: String,
-}
-
 /// Cancellation backstop owned by the agent loop. Normal completion disarms
 /// it; dropping the loop future asks the task manager to abort and settle every
 /// descendant instead of detaching their Tokio tasks.
@@ -25,12 +19,16 @@ pub struct RecoverableSubagent {
 pub(crate) struct TaskCancellationGuard {
     manager: Option<Arc<TaskManager>>,
     lease: Option<RunLease>,
+    cleanup_done: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl TaskCancellationGuard {
     pub(crate) fn disarm(&mut self) {
         self.manager = None;
         self.lease = None;
+        if let Some(cleanup_done) = self.cleanup_done.take() {
+            let _ = cleanup_done.send(());
+        }
     }
 }
 
@@ -40,6 +38,7 @@ impl Drop for TaskCancellationGuard {
             return;
         };
         let lease = self.lease.take();
+        let cleanup_done = self.cleanup_done.take();
         let handles = manager.abort_handles();
         // Cancellation can drop an agent-loop future, so the guard cannot
         // await cleanup itself. Abort descendants synchronously, then finish
@@ -47,10 +46,15 @@ impl Drop for TaskCancellationGuard {
         // crash still falls back to restart reconciliation.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-                let _lease = lease;
                 manager
                     .settle_aborted(handles, "owning agent run was cancelled")
                     .await;
+                // Waking task_stop is the permission to reuse this exact run,
+                // so release its execution lease before publishing completion.
+                drop(lease);
+                if let Some(cleanup_done) = cleanup_done {
+                    let _ = cleanup_done.send(());
+                }
             });
         }
     }
@@ -59,7 +63,7 @@ impl Drop for TaskCancellationGuard {
 impl TaskManager {
     /// Load durable task coordination without reconciling or mutating it. The
     /// runner validates the frozen capability schema before reconciliation.
-    pub async fn load_for_resume(config: TaskManagerConfig) -> Result<Arc<Self>> {
+    pub async fn load_existing(config: TaskManagerConfig) -> Result<Arc<Self>> {
         let task_store = TaskRecordStore::new(
             config
                 .store
@@ -94,35 +98,44 @@ impl TaskManager {
                 *call_id == record.origin_call_id && *created_at >= record.created_at
             })
         });
-        let delivered = trajectory
+        let mut delivered = BTreeMap::new();
+        for content in trajectory
             .into_iter()
             .flat_map(|record| record.message.content)
-            .filter_map(|content| match content {
-                crate::model::MessageContent::BackgroundTask {
-                    task_id,
-                    status: Some(_),
-                    ..
-                } => Some(task_id),
-                _ => None,
-            })
-            .collect();
+        {
+            if let crate::model::MessageContent::BackgroundTask {
+                task_id,
+                output_seq: Some(output_seq),
+                status: Some(_),
+                ..
+            } = content
+            {
+                delivered
+                    .entry(task_id)
+                    .and_modify(|seq: &mut u64| *seq = (*seq).max(output_seq))
+                    .or_insert(output_seq);
+            }
+        }
         let manager = Self::from_config(config, records, delivered, reserved_task_ids);
         Ok(manager)
     }
 
     #[cfg(test)]
-    pub async fn restore(
-        config: TaskManagerConfig,
-    ) -> Result<(Arc<Self>, Vec<RecoverableSubagent>)> {
-        let manager = Self::load_for_resume(config).await?;
-        let recoverable = manager.reconcile_after_restart().await?;
-        Ok((manager, recoverable))
+    pub async fn restore(config: TaskManagerConfig) -> Result<Arc<Self>> {
+        let manager = Self::load_existing(config).await?;
+        manager.reconcile_stale_tasks().await?;
+        Ok(manager)
     }
 
-    pub(crate) fn cancellation_guard(self: &Arc<Self>, lease: RunLease) -> TaskCancellationGuard {
+    pub(crate) fn cancellation_guard(
+        self: &Arc<Self>,
+        lease: RunLease,
+        cleanup_done: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> TaskCancellationGuard {
         TaskCancellationGuard {
             manager: Some(self.clone()),
             lease: Some(lease),
+            cleanup_done,
         }
     }
 
@@ -188,30 +201,30 @@ impl TaskManager {
         self.settle_aborted(handles, reason).await;
     }
 
-    fn abort_handles(&self) -> Vec<(String, tokio::task::JoinHandle<()>)> {
+    fn abort_handles(&self) -> Vec<(String, super::TrackedTask)> {
         let handles = self.take_handles();
-        for handle in handles.values() {
-            handle.abort();
+        for tracked in handles.values() {
+            tracked.abort();
         }
         handles.into_iter().collect()
     }
 
-    async fn settle_aborted(
-        &self,
-        handles: Vec<(String, tokio::task::JoinHandle<()>)>,
-        reason: &str,
-    ) {
-        for (_, handle) in handles {
-            let _ = handle.await;
+    async fn settle_aborted(&self, handles: Vec<(String, super::TrackedTask)>, reason: &str) {
+        for (_, tracked) in handles {
+            tracked.wait().await;
         }
         let pending = self
             .select(&[])
             .await
             .unwrap_or_default()
             .into_iter()
-            .filter(|record| !record.state.is_terminal())
+            .filter(|record| record.state.is_active())
             .collect::<Vec<_>>();
         for record in pending {
+            if record.kind == "agent" {
+                let _ = self.stop_agent(record).await;
+                continue;
+            }
             if let Some(child_run_id) = &record.child_run_id
                 && let Ok(run) = self.store.load_run(child_run_id).await
                 && matches!(
@@ -239,9 +252,11 @@ impl TaskManager {
         }
     }
 
-    pub async fn reconcile_after_restart(&self) -> Result<Vec<RecoverableSubagent>> {
+    /// Settle persisted active records loaded into a manager which owns no
+    /// corresponding in-memory handles. This is conservative for both a root
+    /// process restart and later reuse of an inactive child runner.
+    pub async fn reconcile_stale_tasks(self: &Arc<Self>) -> Result<()> {
         let records = self.select(&[]).await?;
-        let mut recoverable = Vec::new();
         for record in records {
             if record.state.is_terminal() {
                 if record.state == super::BackgroundTaskState::Cancelled {
@@ -262,7 +277,6 @@ impl TaskManager {
                 .child_run_id
                 .clone()
                 .context("agent task is missing child_run_id")?;
-            let child_paths = self.store.paths(&child_run_id);
             let child = self.store.load_run(&child_run_id).await.with_context(|| {
                 format!(
                     "committed agent task `{}` is missing child run `{child_run_id}`",
@@ -270,44 +284,36 @@ impl TaskManager {
                 )
             })?;
             self.validate_child_run(&record, &child)?;
-            match child.state {
-                crate::storage::RunState::Completed => {
-                    let result = tokio::fs::read_to_string(&child_paths.final_output)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "read completed child output {}",
-                                child_paths.final_output.display()
-                            )
-                        })?;
-                    let context = crate::tools::ToolContext {
-                        run_id: self.parent_run_id.clone(),
-                        call_id: format!("background-{}", record.id),
-                        workspace: self.workspace.clone(),
-                    };
-                    let output = self
-                        .persist_output(&context, crate::tools::RawToolOutput::text(result))
-                        .await?;
-                    self.complete(&record.id, output).await?;
-                    continue;
-                }
-                crate::storage::RunState::Failed => {
-                    self.fail(&record.id, "child run failed".to_owned()).await?;
-                    continue;
-                }
-                crate::storage::RunState::Cancelled => {
-                    self.cancel(&record.id, "child run was cancelled".to_owned())
-                        .await?;
-                    continue;
-                }
-                crate::storage::RunState::Queued | crate::storage::RunState::Running => {}
+            if child.state == crate::storage::RunState::Closed {
+                anyhow::ensure!(
+                    record.state == super::BackgroundTaskState::Idle,
+                    "agent task `{}` is {} while child `{child_run_id}` is closed",
+                    record.id,
+                    record.status()
+                );
+                self.update(&record.id, |record| {
+                    record.state = super::BackgroundTaskState::Closed;
+                    record.paused = false;
+                    record.pending_followups.clear();
+                })
+                .await?;
+                continue;
             }
-            recoverable.push(RecoverableSubagent {
-                task_id: record.id,
-                child_run_id,
-                prompt: record.prompt.context("agent task is missing prompt")?,
-            });
+            if record.state == super::BackgroundTaskState::Idle {
+                if child.state != crate::storage::RunState::Idle {
+                    self.store
+                        .update_state(&child_run_id, crate::storage::RunState::Idle)
+                        .await?;
+                }
+                continue;
+            }
+            self.interrupt_agent_activity(
+                &record.id,
+                "agent activity was interrupted when the fiasco process stopped; the agent thread remains available for an explicit task_send",
+                "The previous agent activity was interrupted after its last complete checkpoint because the fiasco process stopped. Any uncommitted tool side effects may still have occurred. Inspect state before continuing.",
+            )
+            .await?;
         }
-        Ok(recoverable)
+        Ok(())
     }
 }

@@ -1,30 +1,30 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 
 use crate::{
-    artifact::ResultMetadata,
     model::{Message, MessageContent, Role},
     storage::{RunDirStore, RunState},
     trajectory::TrajectoryMessage,
 };
 
 use super::{AgentRunner, RunRequest, RunResult, lifecycle::RunMode};
-use crate::agent::{compaction::estimate_message_tokens, task::BackgroundTaskRecord};
+use crate::agent::{compaction::estimate_message_tokens, task::TaskOutputNotice};
 
 const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous fiasco process stopped after the last complete checkpoint. Any uncommitted model/tool turn was discarded, but its workspace or external side effects may already have occurred. Inspect the current state before retrying any operation.\n</runtime-reminder>";
 
 impl AgentRunner {
     pub async fn resume(self: &Arc<Self>, run_id: impl Into<String>) -> Result<RunResult> {
-        self.resume_with_parent(run_id.into(), None).await
+        self.resume_with_parent(run_id.into(), None, None).await
     }
 
     pub(crate) async fn resume_child(
         self: &Arc<Self>,
         run_id: String,
         expected_parent_run_id: &str,
+        cleanup_done: tokio::sync::oneshot::Sender<()>,
     ) -> Result<RunResult> {
-        self.resume_with_parent(run_id, Some(expected_parent_run_id))
+        self.resume_with_parent(run_id, Some(expected_parent_run_id), Some(cleanup_done))
             .await
     }
 
@@ -32,6 +32,7 @@ impl AgentRunner {
         self: &Arc<Self>,
         run_id: String,
         expected_parent_run_id: Option<&str>,
+        cleanup_done: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<RunResult> {
         let lease = self.store.acquire_run_lease(&run_id).await?;
         let record = self.store.load_run(&run_id).await?;
@@ -46,17 +47,11 @@ impl AgentRunner {
                 record.parent_run_id.as_deref().unwrap_or_default()
             ),
         }
-        if expected_parent_run_id.is_some() && record.state == RunState::Completed {
-            let final_output = tokio::fs::read_to_string(&self.store.paths(&run_id).final_output)
-                .await
-                .with_context(|| format!("read completed child run `{run_id}` final output"))?;
-            return Ok(RunResult {
-                run_id,
-                final_output,
-            });
-        }
         ensure!(
-            !matches!(record.state, RunState::Completed | RunState::Cancelled),
+            !matches!(
+                record.state,
+                RunState::Completed | RunState::Cancelled | RunState::Closed
+            ),
             "run `{run_id}` is already {:?}",
             record.state
         );
@@ -87,12 +82,12 @@ impl AgentRunner {
             record.model_modalities,
             plan.modalities
         );
-        let mode = if record.state == RunState::Queued {
-            RunMode::New
-        } else {
-            RunMode::Resume
+        let mode = match (record.state, expected_parent_run_id) {
+            (RunState::Queued, _) => RunMode::New,
+            (_, Some(_)) => RunMode::Continue,
+            (_, None) => RunMode::Restart,
         };
-        self.run_with_mode(request, run_id, mode, lease.clone())
+        self.run_with_mode(request, run_id, mode, lease.clone(), cleanup_done)
             .await
     }
 }
@@ -101,35 +96,20 @@ pub(super) async fn append_background_results(
     store: &RunDirStore,
     run_id: &str,
     trajectory: &mut Vec<TrajectoryMessage>,
-    records: &[BackgroundTaskRecord],
+    notices: &[TaskOutputNotice],
 ) -> Result<u64> {
-    if records.is_empty() {
+    if notices.is_empty() {
         return Ok(0);
     }
-    let content = records
+    let content = notices
         .iter()
-        .map(|record| {
-            let (status, content, metadata) = if record.state.is_terminal() {
-                let metadata = record.result_metadata();
-                (
-                    Some(record.status().to_owned()),
-                    record.model_content(),
-                    metadata,
-                )
-            } else {
-                (
-                    None,
-                    "The task is still running in the background.".to_owned(),
-                    ResultMetadata::empty(),
-                )
-            };
-            MessageContent::BackgroundTask {
-                task_id: record.id.clone(),
-                name: record.name.clone(),
-                status,
-                content,
-                metadata,
-            }
+        .map(|notice| MessageContent::BackgroundTask {
+            task_id: notice.task_id.clone(),
+            name: notice.name.clone(),
+            output_seq: Some(notice.output.seq),
+            status: Some(notice.output.status.as_str().to_owned()),
+            content: notice.output.model_content(),
+            metadata: notice.output.result_metadata(),
         })
         .collect::<Vec<_>>();
     let message = Message {

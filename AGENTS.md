@@ -55,9 +55,16 @@ navigation, invariants, verification, and handoff.
   exact futures when the window elapses; never stop and restart them. Resume
   and track every pending future before awaiting any promotion event, then
   announce promotions in original call order.
-- Use `delegate` as the sole asynchronous GeneralTask start operation. Keep
-  status, bounded wait, inspect, steer, and stop as separate task-control tools;
-  ordinary tools enter task control only through foreground promotion.
+- Use `delegate` as the sole new GeneralTask start operation and model a
+  delegated agent as a reusable child-backed task. Keep status, wait-any, list,
+  inspect, mode-required send, activity stop, and explicit close as separate
+  task-control tools; ordinary tools enter task control only through foreground
+  promotion.
+- Keep agent lifetime separate from activity execution. Reactivating an idle
+  agent persists its parent task as `running` and launches the existing idle
+  child; do not move the child back to `queued` as a recovery marker.
+  `task_stop` leaves the agent idle and paused until the next explicit
+  `task_send`.
 - Every `delegate` starts an isolated child whose prompt contains its complete
   objective and task-specific context. Each child run is self-contained and
   resumable from its own messages; parent conversation and artifacts are not
@@ -68,9 +75,11 @@ navigation, invariants, verification, and handoff.
   Stream deltas are events, not durable conversation messages.
 - Resume assumes the supervisor, cgroup, or container has already terminated
   the old fiasco process and every locally managed descendant. Ignore task
-  files not acknowledged by a complete parent checkpoint; resume committed
-  child runs, mark committed ordinary background tools interrupted, and never
-  wait for a stale run lease to disappear.
+  files not acknowledged by a complete parent checkpoint. Mark committed
+  ordinary background tools interrupted; move each committed active agent
+  activity to an `interrupted` output plus idle paused thread without launching
+  it. Preserve pending input for the next explicit `task_send`, and never wait
+  for a stale run lease to disappear.
 - Keep provider function-call arguments as exact strings through message
   persistence and parse them only at the individual tool execution boundary.
   A malformed call returns its own ordered tool error and cannot suppress valid
@@ -98,10 +107,11 @@ navigation, invariants, verification, and handoff.
   larger results with a bounded head/tail preview. Do not carry a cumulative
   preview budget across tool calls or compaction boundaries.
 - Correlate foreground `ToolResult` messages by provider `tool_call_id` and
-  terminal background messages by `task_id`; keep promoted calls' originating
-  provider ids in internal task state rather than model-facing notices.
+  background activity outputs by `task_id` plus `output_seq`; keep promoted
+  calls' originating provider ids in internal task state rather than
+  model-facing notices.
 - Apply the same independent inline/preview/artifact policy to foreground and
-  terminal background results. Add the background status/XML envelope only
+  background activity results. Add the background status/XML envelope only
   after limiting the payload, so harness metadata and read instructions are
   never clipped. Escape inline payload text inside the XML envelope.
 - Keep artifact ids and metadata stable. Changing content under the same hash or
@@ -142,6 +152,11 @@ navigation, invariants, verification, and handoff.
 - Treat fiasco as an internal harness with no external compatibility promise.
   Optimize for maintainer convenience, readability, and fast iteration; do not
   add compatibility layers or generality for hypothetical users.
+- Before adding a persistent recovery state, name the concrete user-visible
+  guarantee, expected failure frequency, and external side-effect semantics it
+  protects. For rare process crashes, prefer one durable authority, complete
+  checkpoints, an explicit `interrupted` result, and model-directed retry over
+  a cross-file state machine for transparent continuation.
 - Do not add a TUI, frontend framework, built-in scheduler, vector database,
   native dynamic plugin ABI, or distributed worker system without a concrete
   request.

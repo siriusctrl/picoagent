@@ -1,6 +1,6 @@
 name: task_inspect
 description: >-
-  Read recent messages from a delegated subagent. Use next_before_seq as
+  Read recent messages from a delegated reusable agent. Use next_before_seq as
   before_seq to continue backward when has_earlier is true. This operation is
   valid only for agent tasks, not promoted direct tools.
 returns: >-

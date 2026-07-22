@@ -81,9 +81,10 @@ than an unbounded exception string in the next model request.
 
 ### Background delivery
 
-Terminal background results use the same independent result policy as
-foreground tools. Small UTF-8 output stays inline. Large, binary, and non-UTF-8
-output is preserved as an artifact and the terminal body contains the ordinary
+One-shot terminal background results and reusable-agent activity results use
+the same independent result policy as foreground tools. Small UTF-8 output
+stays inline. Large, binary, and non-UTF-8 output is preserved as an artifact
+and the delivered body contains the ordinary
 bounded `[Tool output]` envelope with its path, digest, byte counts, read
 instruction, and any safe head/tail preview. The parent receives one batched
 runtime message per ready set.
@@ -99,8 +100,8 @@ its binary result remains artifact-backed. Reading that artifact again attaches
 the image on demand.
 
 A status-less background notice is only a running acknowledgement and has no
-result artifact. A terminal notice includes `status` and keeps its result
-metadata in the same background-task content block. Artifact-backed results
+result artifact. An activity-result notice includes `status` and `output_seq`
+and keeps its result metadata in the same background-task content block. Artifact-backed results
 carry their exact path and `ArtifactRef`; small inline results have no artifact.
 
 ### History-query boundaries
@@ -116,8 +117,8 @@ Full-text history search reads the exact `ArtifactRef` stored with each
 foreground or background result in `messages.jsonl`. History retrieval does not
 parse the model-facing preview envelope. A foreground `ToolResult` is correlated by
 its provider `tool_call_id`. After promotion, the running acknowledgement still
-occupies that provider tool-result slot, while the later terminal background
-message is correlated by `task_id`. The local reader follows the exact
+occupies that provider tool-result slot, while a later background output is
+correlated by `task_id` and `output_seq`. The local reader follows the exact
 `ArtifactRef` paired with that message, streams the referenced candidate
 through SHA-256 verification, then performs its bounded `rg` search. Artifact
 matches return the exact path as well as the owning message ref, so a batched

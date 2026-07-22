@@ -104,3 +104,6 @@ Use these sections:
   record](0032-self-contained-message-log.md)
 - [ADR 0033: Isolate delegated context](0033-isolate-delegated-context.md)
 - [ADR 0034: Resume from atomic turn checkpoints](0034-atomic-turn-checkpoints.md)
+- [ADR 0035: Model delegated agents as reusable tasks](0035-reusable-agent-tasks.md)
+- [ADR 0036: Interrupt agent activities on process
+  restart](0036-interrupt-agent-activities-on-restart.md)

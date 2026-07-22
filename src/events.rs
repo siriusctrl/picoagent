@@ -113,30 +113,41 @@ pub enum RuntimeEventKind {
     },
     BackgroundTaskDelivered {
         task_id: String,
+        output_seq: u64,
     },
     ArtifactCreated {
         call_id: String,
         path: String,
         bytes: u64,
     },
-    SubagentStarted {
+    SubagentActivityStarted {
         child_run_id: String,
         task: String,
     },
-    SubagentSteered {
+    SubagentMessageQueued {
         task_id: String,
         child_run_id: String,
         input_id: String,
+        mode: String,
     },
-    SubagentCompleted {
+    SubagentActivityCompleted {
         child_run_id: String,
     },
-    SubagentFailed {
+    SubagentActivityFailed {
         child_run_id: String,
         error: String,
     },
-    SubagentCancelled {
+    SubagentActivityStopped {
         child_run_id: String,
+    },
+    SubagentClosed {
+        child_run_id: String,
+    },
+    RunActivityCompleted {
+        final_output: String,
+    },
+    RunActivityFailed {
+        error: String,
     },
     RunCompleted {
         final_output: String,

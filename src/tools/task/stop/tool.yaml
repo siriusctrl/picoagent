@@ -1,9 +1,11 @@
 name: task_stop
 description: >-
-  Stop one background task. A terminal task is returned unchanged. Stopping a
-  running delegated subagent also cancels its child run.
+  Stop one background task. A terminal one-shot task is returned unchanged.
+  Stopping a delegated agent interrupts only its current activity and leaves
+  the same child transcript idle and paused. The next task_send resumes it.
 returns: >-
-  JSON `{task_id,name,status}` for the selected task.
+  JSON `{task_id,kind,name,status,paused,pending_followups,last_output_seq}` for the
+  selected task.
 input_schema:
   type: object
   properties:

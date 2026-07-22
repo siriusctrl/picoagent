@@ -74,9 +74,12 @@ turn.
 
 Parent task files become recoverable only when the complete parent checkpoint
 contains their originating ToolResult. Orphans are ignored; committed ordinary
-background tools become interrupted, while committed children resume through
-their own runner. This assumes a supervisor has killed the old local process
-tree before resume. See [ADR 0034](adr/0034-atomic-turn-checkpoints.md).
+background tools become interrupted. A committed active child activity also
+becomes an interrupted output, while its reusable thread and complete
+transcript remain idle and paused for a later explicit `task_send`. This assumes
+a supervisor has killed the old local process tree before resume. See
+[ADR 0034](adr/0034-atomic-turn-checkpoints.md) and
+[ADR 0036](adr/0036-interrupt-agent-activities-on-restart.md).
 
 ## Self-Contained Message Log
 
@@ -181,11 +184,15 @@ and making raw transcripts or artifacts equivalent to curated memory. See
 
 Direct calls from one assistant message start concurrently under one shared
 foreground window. Results remain in original call order; only unfinished exact
-futures move to the background. `delegate` starts a GeneralTask child
-asynchronously. Separate `task_status`, `task_wait`, `task_inspect`,
-`task_steer`, and `task_stop` tools keep each schema small and explicit.
-Agent loops have no arbitrary model-step cap, and background work has no hard
-execution deadline. See [ADR 0017](adr/0017-concurrent-tool-batches-and-explicit-task-controls.md).
+futures move to the background. `delegate` starts a reusable GeneralTask agent
+task asynchronously. `task_status` covers every task, `task_wait` waits for any
+selected task, and agent-only `task_list`, `task_inspect`, `task_send`, and
+`task_close` expose the reusable child lifecycle. `task_send` distinguishes
+current-activity `steer` from queued `followup`; `task_stop` interrupts current
+work and pauses automatic followups without implicitly closing an agent. The
+next explicit send resumes the same child. Agent loops have no arbitrary
+model-step cap, and background work has no hard execution deadline. See
+[ADR 0035](adr/0035-reusable-agent-tasks.md).
 
 ## File-backed Planning Topology
 

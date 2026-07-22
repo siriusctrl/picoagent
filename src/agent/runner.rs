@@ -22,7 +22,7 @@ use super::{
         estimate_request_input_tokens, maybe_compact,
     },
     context::{append_active_task_reminder, build_runtime_reminder},
-    task::{TaskManager, TaskManagerConfig},
+    task::{PendingTaskBoundary, TaskManager, TaskManagerConfig},
     tool_execution::DirectToolRuntime,
 };
 
@@ -82,6 +82,7 @@ impl AgentRunner {
         events: SharedEventSink,
         mode: RunMode,
         cancellation_lease: RunLease,
+        cleanup_done: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<RunResult> {
         let plan = self.plan(&request);
         let model = plan.model.clone();
@@ -106,7 +107,7 @@ impl AgentRunner {
                     .await?;
                 (Vec::new(), true)
             }
-            RunMode::Resume => {
+            RunMode::Continue | RunMode::Restart => {
                 let trajectory = self.store.load_trajectory(&run_id).await?;
                 let needs_initial_message = trajectory.is_empty();
                 events
@@ -169,8 +170,8 @@ impl AgentRunner {
             max_parallel_subagents: self.options.max_parallel_subagents,
             wait_timeout_seconds: self.options.task_wait_timeout_seconds,
         };
-        let manager = if mode == RunMode::Resume {
-            TaskManager::load_for_resume(task_config).await?
+        let manager = if mode.is_existing() {
+            TaskManager::load_existing(task_config).await?
         } else {
             TaskManager::new(task_config)
         };
@@ -184,12 +185,10 @@ impl AgentRunner {
         self.store
             .verify_tool_schema(&run_id, &tool_schema_sha256)
             .await?;
-        let recoverable_subagents = if mode == RunMode::Resume {
-            task_manager.reconcile_after_restart().await?
-        } else {
-            Vec::new()
-        };
-        let mut task_guard = task_manager.cancellation_guard(cancellation_lease);
+        if mode.is_existing() {
+            task_manager.reconcile_stale_tasks().await?;
+        }
+        let mut task_guard = task_manager.cancellation_guard(cancellation_lease, cleanup_done);
         let direct_tools = DirectToolRuntime {
             registry: &registry,
             hooks: &self.hooks,
@@ -200,9 +199,6 @@ impl AgentRunner {
             manager: task_manager.clone(),
             foreground_timeout_seconds: self.options.foreground_tool_timeout_seconds,
         };
-        for task in recoverable_subagents {
-            task_manager.resume_agent_task(task).await?;
-        }
         let outcome: Result<RunResult> = async {
             let completed_steps = trajectory
                 .iter()
@@ -210,9 +206,9 @@ impl AgentRunner {
                     record.compaction.is_none() && record.message.role == Role::Assistant
                 })
                 .count();
-            if mode == RunMode::Resume {
+            if mode.is_existing() {
                 let resumable_final = resumable_final_text(&trajectory);
-                if resumable_final.is_none() {
+                if mode == RunMode::Restart && resumable_final.is_none() {
                     append_restart_reminder(&self.store, &run_id, &mut trajectory).await?;
                 }
                 let resumed_inputs = self
@@ -222,8 +218,8 @@ impl AgentRunner {
                 if resumed_inputs.is_empty()
                     && let Some(final_text) = resumable_final
                 {
-                    let ready = task_manager.pending_before_finish().await?;
-                    if ready.is_empty() {
+                    let pending = task_manager.pending_before_finish().await?;
+                    if matches!(pending, PendingTaskBoundary::None) {
                         let input_lock = self.store.pending_input_lock();
                         let _input_guard = input_lock.lock().await;
                         let steered = self
@@ -238,7 +234,7 @@ impl AgentRunner {
                                 final_output: final_text,
                             });
                         }
-                    } else {
+                    } else if let PendingTaskBoundary::Ready(ready) = pending {
                         append_background_results(
                             &self.store,
                             &run_id,
@@ -259,7 +255,7 @@ impl AgentRunner {
 
             let mut step = completed_steps.saturating_add(1);
             loop {
-                let ready = task_manager.drain_completed().await?;
+                let ready = task_manager.drain_ready_outputs().await?;
                 let added =
                     append_background_results(
                         &self.store,
@@ -378,19 +374,25 @@ impl AgentRunner {
                         step = step.saturating_add(1);
                         continue;
                     }
-                    let ready = task_manager.pending_before_finish().await?;
-                    if !ready.is_empty() {
-                        let added = append_background_results(
-                            &self.store,
-                            &run_id,
-                            &mut trajectory,
-                            &ready,
-                        )
-                        .await?;
-                        task_manager.mark_delivered(&ready).await?;
-                        context_tokens = context_tokens.saturating_add(added);
-                        step = step.saturating_add(1);
-                        continue;
+                    match task_manager.pending_before_finish().await? {
+                        PendingTaskBoundary::Ready(ready) => {
+                            let added = append_background_results(
+                                &self.store,
+                                &run_id,
+                                &mut trajectory,
+                                &ready,
+                            )
+                            .await?;
+                            task_manager.mark_delivered(&ready).await?;
+                            context_tokens = context_tokens.saturating_add(added);
+                            step = step.saturating_add(1);
+                            continue;
+                        }
+                        PendingTaskBoundary::Active => {
+                            step = step.saturating_add(1);
+                            continue;
+                        }
+                        PendingTaskBoundary::None => {}
                     }
                     let input_lock = self.store.pending_input_lock();
                     let _input_guard = input_lock.lock().await;

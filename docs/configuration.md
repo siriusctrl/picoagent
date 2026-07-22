@@ -220,10 +220,12 @@ direct calls in an assistant message, not an execution deadline per call. The
 batch returns early when all calls settle. When the window expires, each
 already-running unfinished direct tool continues as a background task and the
 model receives a status-less runtime notice with its task id and name.
-Delegated subagents have no harness execution
-deadline. Each `task_wait` call returns after at most
-`wait_timeout_seconds` without cancelling work; this value must be strictly
-lower than the foreground window. `task_stop` performs cancellation.
+Delegated agents have no harness execution deadline. Each `task_wait` call
+returns when any selected task becomes inactive or after at most
+`wait_timeout_seconds`, without cancelling unfinished work; this value must be
+strictly lower than the foreground window. `task_stop` interrupts a one-shot
+task or only the current activity of a reusable agent; the stopped agent stays
+idle and paused until its next explicit `task_send`.
 `max_parallel_subagents` limits delegated child execution in one parent run;
 already-running direct calls are not paused when they are promoted. On Unix,
 cancelling `bash` terminates its process-group descendants too.
@@ -308,4 +310,6 @@ tool_after = []
 Hooks inherit fiasco's host permissions. A nonzero `run_start`,
 `tool_before`, or `tool_after` exit fails that operation. `run_end` is a
 best-effort post-commit notification: its failure is logged but cannot turn a
-completed run back into a resumable failed run and replay earlier hook effects.
+completed root or child activity back into resumable failed work and replay
+earlier hook effects. For a reusable child, it runs after every successful
+activity once the child is idle; explicit `task_close` does not invoke it.

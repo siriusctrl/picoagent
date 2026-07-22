@@ -1,13 +1,15 @@
 name: task_wait
 description: >-
-  Wait for selected background tasks for one bounded interval. Omit task_ids to
-  wait on every task. Waiting never stops unfinished work.
+  Wait until any selected background task becomes inactive or one bounded
+  interval expires. Omit task_ids to observe all tasks. Waiting never stops
+  unfinished work.
 returns: >-
-  JSON `{tasks:[{task_id,name,status}]}`. A task may still be queued or
-  running when the bounded wait interval expires. Terminal content is not
-  included here; it arrives separately as a terminal `<background_task>`
-  runtime notice. Small text is inline; larger or binary output uses the
-  ordinary bounded artifact envelope.
+  JSON `{tasks:[{task_id,kind,name,status,paused,pending_followups,last_output_seq}]}`
+  for every selected task. Some tasks may still be queued or running when
+  another settles or the bounded interval expires. Activity output is not
+  included here; it arrives separately as a `<background_task>` runtime
+  notice. Small text is inline; larger or binary output uses the ordinary
+  bounded artifact envelope.
 input_schema:
   type: object
   properties:
@@ -15,5 +17,5 @@ input_schema:
       type: array
       items:
         type: string
-      description: Task ids to wait for; omit to wait for all tasks
+      description: Task ids to wait on; omit to observe all current tasks
   additionalProperties: false

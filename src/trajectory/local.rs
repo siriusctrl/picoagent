@@ -253,12 +253,14 @@ fn match_message(record: &TrajectoryMessage, pattern: &Regex) -> Option<HistoryM
             MessageContent::BackgroundTask {
                 task_id,
                 name,
+                output_seq,
                 status,
                 content,
                 ..
             } => crate::model::runtime::render_background_task_block(
                 task_id,
                 name,
+                *output_seq,
                 status.as_deref(),
                 content,
             ),

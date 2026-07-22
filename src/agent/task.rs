@@ -10,21 +10,25 @@ use tokio::sync::{Mutex, Semaphore, watch};
 
 use crate::{
     artifact::{ArtifactStore, ToolOutput},
-    events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
+    events::SharedEventSink,
     storage::RunDirStore,
 };
 
 use super::runner::AgentRunner;
 
 mod control;
+mod coordination;
 mod execution;
 mod lifecycle;
 mod record;
 mod recovery;
 
+pub use control::TaskSendMode;
 use record::TaskRecordStore;
-pub use record::{BackgroundTaskRecord, BackgroundTaskState};
-pub use recovery::RecoverableSubagent;
+pub use record::{
+    BackgroundTaskOutput, BackgroundTaskOutputStatus, BackgroundTaskRecord, BackgroundTaskState,
+    PendingTaskInput,
+};
 
 pub struct TaskManager {
     runner: Arc<AgentRunner>,
@@ -39,9 +43,9 @@ pub struct TaskManager {
     /// Includes orphan task files which are intentionally hidden after
     /// recovery, so their readable `t<N>` ids are never reused.
     reserved_task_ids: BTreeSet<String>,
-    delivered: Mutex<BTreeSet<String>>,
+    delivered: Mutex<BTreeMap<String, u64>>,
     task_store: TaskRecordStore,
-    handles: StdMutex<BTreeMap<String, tokio::task::JoinHandle<()>>>,
+    handles: StdMutex<BTreeMap<String, TrackedTask>>,
     activity: watch::Sender<u64>,
     subagent_slots: Arc<Semaphore>,
     default_wait_timeout: Duration,
@@ -60,15 +64,46 @@ pub struct TaskManagerConfig {
     pub wait_timeout_seconds: u64,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct TaskOutputNotice {
+    pub task_id: String,
+    pub name: String,
+    pub output: BackgroundTaskOutput,
+}
+
+pub(crate) enum PendingTaskBoundary {
+    Ready(Vec<TaskOutputNotice>),
+    Active,
+    None,
+}
+
+struct TrackedTask {
+    handle: tokio::task::JoinHandle<()>,
+    cleanup_done: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+impl TrackedTask {
+    fn abort(&self) {
+        self.handle.abort();
+    }
+
+    async fn wait(self) {
+        let _ = self.handle.await;
+        if let Some(cleanup_done) = self.cleanup_done {
+            let _ = cleanup_done.await;
+        }
+    }
+}
+
 impl TaskManager {
     pub fn new(config: TaskManagerConfig) -> Arc<Self> {
-        Self::from_config(config, BTreeMap::new(), BTreeSet::new(), BTreeSet::new())
+        Self::from_config(config, BTreeMap::new(), BTreeMap::new(), BTreeSet::new())
     }
 
     fn from_config(
         config: TaskManagerConfig,
         records: BTreeMap<String, BackgroundTaskRecord>,
-        delivered: BTreeSet<String>,
+        delivered: BTreeMap<String, u64>,
         reserved_task_ids: BTreeSet<String>,
     ) -> Arc<Self> {
         let (activity, _) = watch::channel(0);
@@ -144,14 +179,16 @@ impl TaskManager {
     }
 
     async fn complete(&self, task_id: &str, output: ToolOutput) -> Result<BackgroundTaskRecord> {
-        let result = record::BackgroundTaskOutput {
-            content: output.model_content(),
-            metadata: output.result_metadata(),
-        };
         self.update(task_id, |record| {
             if !record.state.is_terminal() {
                 record.state = BackgroundTaskState::Completed;
-                record.result = Some(result);
+                let seq = record.next_output_seq();
+                record.outputs.push(BackgroundTaskOutput {
+                    seq,
+                    status: BackgroundTaskOutputStatus::Completed,
+                    content: output.model_content(),
+                    metadata: output.result_metadata(),
+                });
             }
         })
         .await
@@ -161,7 +198,13 @@ impl TaskManager {
         self.update(task_id, |record| {
             if !record.state.is_terminal() {
                 record.state = BackgroundTaskState::Failed;
-                record.error = Some(error);
+                let seq = record.next_output_seq();
+                record.outputs.push(BackgroundTaskOutput {
+                    seq,
+                    status: BackgroundTaskOutputStatus::Failed,
+                    content: format!("background task failed: {error}"),
+                    metadata: crate::artifact::ResultMetadata::empty(),
+                });
             }
         })
         .await
@@ -173,7 +216,13 @@ impl TaskManager {
             && !record.state.is_terminal()
         {
             record.state = BackgroundTaskState::Failed;
-            record.error = Some(error);
+            let seq = record.next_output_seq();
+            record.outputs.push(BackgroundTaskOutput {
+                seq,
+                status: BackgroundTaskOutputStatus::Failed,
+                content: format!("background task failed: {error}"),
+                metadata: crate::artifact::ResultMetadata::empty(),
+            });
         }
         drop(records);
         self.signal_activity();
@@ -183,7 +232,15 @@ impl TaskManager {
         self.update(task_id, |record| {
             if !record.state.is_terminal() {
                 record.state = BackgroundTaskState::Interrupted;
-                record.error = Some(error);
+                let seq = record.next_output_seq();
+                record.outputs.push(BackgroundTaskOutput {
+                    seq,
+                    status: BackgroundTaskOutputStatus::Interrupted,
+                    content: format!(
+                        "background task was interrupted; its side effects are unknown: {error}"
+                    ),
+                    metadata: crate::artifact::ResultMetadata::empty(),
+                });
             }
         })
         .await
@@ -193,7 +250,13 @@ impl TaskManager {
         self.update(task_id, |record| {
             if !record.state.is_terminal() {
                 record.state = BackgroundTaskState::Cancelled;
-                record.error = Some(reason);
+                let seq = record.next_output_seq();
+                record.outputs.push(BackgroundTaskOutput {
+                    seq,
+                    status: BackgroundTaskOutputStatus::Cancelled,
+                    content: format!("background task was cancelled: {reason}"),
+                    metadata: crate::artifact::ResultMetadata::empty(),
+                });
             }
         })
         .await
@@ -243,143 +306,40 @@ impl TaskManager {
             .with_context(|| format!("unknown background task `{task_id}`"))
     }
 
-    pub async fn wait(&self, task_ids: &[String]) -> Result<Vec<BackgroundTaskRecord>> {
-        let deadline = tokio::time::Instant::now() + self.default_wait_timeout;
-        let mut activity = self.activity.subscribe();
-        loop {
-            let records = self.select(task_ids).await?;
-            if records.iter().all(|record| record.state.is_terminal()) {
-                return Ok(records);
-            }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero()
-                || tokio::time::timeout(remaining, activity.changed())
-                    .await
-                    .is_err()
-            {
-                return Ok(records);
-            }
-        }
-    }
-
-    pub async fn status(&self, task_ids: &[String]) -> Result<Vec<BackgroundTaskRecord>> {
-        self.select(task_ids).await
-    }
-
-    async fn select(&self, task_ids: &[String]) -> Result<Vec<BackgroundTaskRecord>> {
-        let records = self.records.lock().await;
-        if task_ids.is_empty() {
-            return Ok(records.values().cloned().collect());
-        }
-        task_ids
-            .iter()
-            .map(|task_id| {
-                records
-                    .get(task_id)
-                    .cloned()
-                    .with_context(|| format!("unknown background task `{task_id}`"))
-            })
-            .collect()
-    }
-
-    /// Mark terminal records delivered only after the caller has durably
-    /// appended their terminal `BackgroundTask` messages. This marker is an
-    /// in-memory fast path; recovery derives truth from the parent transcript.
-    pub async fn mark_delivered(&self, records: &[BackgroundTaskRecord]) -> Result<()> {
-        let mut delivered = self.delivered.lock().await;
-        for record in records.iter().filter(|record| record.state.is_terminal()) {
-            if delivered.insert(record.id.clone()) {
-                self.events
-                    .emit(&RuntimeEvent::new(
-                        &self.parent_run_id,
-                        RuntimeEventKind::BackgroundTaskDelivered {
-                            task_id: record.id.clone(),
-                        },
-                    ))
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn drain_completed(&self) -> Result<Vec<BackgroundTaskRecord>> {
-        let delivered = self.delivered.lock().await.clone();
-        let records = self.select(&[]).await?;
-        Ok(records
-            .into_iter()
-            .filter(|record| record.state.is_terminal() && !delivered.contains(&record.id))
-            .collect())
-    }
-
-    /// Capture one coherent model-request view of background work. A task that
-    /// finishes after this snapshot remains in `active`, so the current request
-    /// cannot briefly forget it before the terminal result notice is appended
-    /// on the next loop iteration.
-    pub(crate) async fn snapshot_for_request(
-        &self,
-    ) -> (Vec<BackgroundTaskRecord>, Vec<BackgroundTaskRecord>) {
-        let delivered = self.delivered.lock().await.clone();
-        let records = self.records.lock().await;
-        let mut ready = Vec::new();
-        let mut active = Vec::new();
-        for record in records.values() {
-            if record.state.is_terminal() {
-                if !delivered.contains(&record.id) {
-                    ready.push(record.clone());
-                }
-            } else {
-                active.push(record.clone());
-            }
-        }
-        (ready, active)
-    }
-
-    /// Return anything the model must see before it can finish: first unseen
-    /// terminal results, otherwise the currently active tasks after one
-    /// bounded wait interval. The pause prevents a fast final-answer loop from
-    /// filling the trajectory with duplicate running snapshots.
-    pub async fn pending_before_finish(&self) -> Result<Vec<BackgroundTaskRecord>> {
-        let deadline = tokio::time::Instant::now() + self.default_wait_timeout;
-        let mut activity = self.activity.subscribe();
-        loop {
-            let records = self.select(&[]).await?;
-            let delivered = self.delivered.lock().await.clone();
-            let ready = records
-                .iter()
-                .filter(|record| record.state.is_terminal() && !delivered.contains(&record.id))
-                .cloned()
-                .collect::<Vec<_>>();
-            if !ready.is_empty() {
-                return Ok(ready);
-            }
-            let active = records
-                .into_iter()
-                .filter(|record| !record.state.is_terminal())
-                .collect::<Vec<_>>();
-            if active.is_empty() {
-                return Ok(Vec::new());
-            }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero()
-                || tokio::time::timeout(remaining, activity.changed())
-                    .await
-                    .is_err()
-            {
-                return Ok(active);
-            }
-        }
-    }
-
     fn track(&self, task_id: String, handle: tokio::task::JoinHandle<()>) {
+        self.track_with_cleanup(task_id, handle, None);
+    }
+
+    fn track_agent(
+        &self,
+        task_id: String,
+        handle: tokio::task::JoinHandle<()>,
+        cleanup_done: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        self.track_with_cleanup(task_id, handle, Some(cleanup_done));
+    }
+
+    fn track_with_cleanup(
+        &self,
+        task_id: String,
+        handle: tokio::task::JoinHandle<()>,
+        cleanup_done: Option<tokio::sync::oneshot::Receiver<()>>,
+    ) {
         let mut handles = self
             .handles
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        handles.retain(|_, handle| !handle.is_finished());
-        handles.insert(task_id, handle);
+        handles.retain(|_, tracked| !tracked.handle.is_finished());
+        handles.insert(
+            task_id,
+            TrackedTask {
+                handle,
+                cleanup_done,
+            },
+        );
     }
 
-    fn take_handles(&self) -> BTreeMap<String, tokio::task::JoinHandle<()>> {
+    fn take_handles(&self) -> BTreeMap<String, TrackedTask> {
         std::mem::take(
             &mut *self
                 .handles
@@ -388,26 +348,11 @@ impl TaskManager {
         )
     }
 
-    fn take_handle(&self, task_id: &str) -> Option<tokio::task::JoinHandle<()>> {
+    fn take_handle(&self, task_id: &str) -> Option<TrackedTask> {
         self.handles
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(task_id)
-    }
-
-    pub async fn wait_all(&self) -> Result<Vec<BackgroundTaskRecord>> {
-        let mut activity = self.activity.subscribe();
-        loop {
-            let records = self.select(&[]).await?;
-            if records.iter().all(|record| record.state.is_terminal()) {
-                let delivered = self.delivered.lock().await.clone();
-                return Ok(records
-                    .into_iter()
-                    .filter(|record| !delivered.contains(&record.id))
-                    .collect());
-            }
-            activity.changed().await?;
-        }
     }
 }
 

@@ -222,6 +222,7 @@ async fn background_search_snippet_matches_the_chat_projection_read_returns() {
         content: vec![MessageContent::BackgroundTask {
             task_id: "t1".to_owned(),
             name: "review".to_owned(),
+            output_seq: Some(1),
             status: Some("completed".to_owned()),
             content: "result contains <needle> & evidence".to_owned(),
             metadata: ResultMetadata::empty(),
@@ -695,6 +696,7 @@ async fn background_result_searches_its_linked_full_artifact() {
         vec![MessageContent::BackgroundTask {
             task_id: "task-1".to_owned(),
             name: "bash".to_owned(),
+            output_seq: Some(1),
             status: Some("completed".to_owned()),
             content: "bounded preview".to_owned(),
             metadata: artifact_metadata(&artifact),

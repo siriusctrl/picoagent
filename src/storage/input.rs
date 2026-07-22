@@ -22,17 +22,53 @@ struct PendingInput {
 }
 
 impl RunDirStore {
-    pub(crate) async fn enqueue_user_input(&self, run_id: &str, text: String) -> Result<String> {
+    pub(crate) async fn enqueue_user_input_with_id(
+        &self,
+        run_id: &str,
+        input_id: String,
+        text: String,
+    ) -> Result<()> {
         ensure!(
             !text.trim().is_empty(),
             "steering message must not be empty"
         );
+        self.enqueue_input_with_id(run_id, input_id, Message::text(Role::User, text))
+            .await
+    }
+
+    pub(crate) async fn enqueue_runtime_input_with_id(
+        &self,
+        run_id: &str,
+        input_id: String,
+        text: String,
+    ) -> Result<()> {
+        ensure!(!text.trim().is_empty(), "runtime input must not be empty");
+        self.enqueue_input_with_id(
+            run_id,
+            input_id,
+            Message {
+                role: Role::User,
+                content: vec![crate::model::MessageContent::RuntimeReminder { text }],
+            },
+        )
+        .await
+    }
+
+    async fn enqueue_input_with_id(
+        &self,
+        run_id: &str,
+        input_id: String,
+        message: Message,
+    ) -> Result<()> {
         let _guard = self.input_lock.lock().await;
         let paths = self.paths(run_id);
         if tokio::fs::try_exists(&paths.metadata).await? {
             let run = self.load_run(run_id).await?;
             ensure!(
-                matches!(run.state, RunState::Queued | RunState::Running),
+                matches!(
+                    run.state,
+                    RunState::Queued | RunState::Running | RunState::Idle
+                ),
                 "run `{run_id}` is already {:?}",
                 run.state
             );
@@ -45,11 +81,10 @@ impl RunDirStore {
                     paths.directory.display()
                 )
             })?;
-        let id = format!("input_{}", ulid::Ulid::new());
         let input = PendingInput {
-            id: id.clone(),
+            id: input_id,
             created_at: Utc::now(),
-            message: Message::text(Role::User, text),
+            message,
         };
         let mut line = serde_json::to_vec(&input).context("serialize pending input")?;
         line.push(b'\n');
@@ -62,7 +97,25 @@ impl RunDirStore {
         file.write_all(&line).await?;
         file.flush().await?;
         file.sync_data().await?;
-        Ok(id)
+        Ok(())
+    }
+
+    pub(crate) async fn has_pending_user_input(&self, run_id: &str) -> Result<bool> {
+        let _guard = self.input_lock.lock().await;
+        let path = self.paths(run_id).pending_inputs;
+        let bytes = match tokio::fs::read(&path).await {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        };
+        let inputs = parse_pending_inputs(&bytes, &path)?;
+        let committed = self
+            .load_trajectory(run_id)
+            .await?
+            .into_iter()
+            .filter_map(|message| message.pending_input_id)
+            .collect::<HashSet<_>>();
+        Ok(inputs.iter().any(|input| !committed.contains(&input.id)))
     }
 
     pub(crate) async fn append_pending_inputs(
@@ -89,16 +142,7 @@ impl RunDirStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
         };
-        let mut inputs = Vec::new();
-        for line in bytes.split(|byte| *byte == b'\n') {
-            if line.iter().all(u8::is_ascii_whitespace) {
-                continue;
-            }
-            inputs.push(
-                serde_json::from_slice::<PendingInput>(line)
-                    .with_context(|| format!("parse pending input in {}", path.display()))?,
-            );
-        }
+        let inputs = parse_pending_inputs(&bytes, &path)?;
 
         let mut committed = trajectory
             .iter()
@@ -118,4 +162,18 @@ impl RunDirStore {
         }
         Ok(appended)
     }
+}
+
+fn parse_pending_inputs(bytes: &[u8], path: &std::path::Path) -> Result<Vec<PendingInput>> {
+    let mut inputs = Vec::new();
+    for line in bytes.split(|byte| *byte == b'\n') {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        inputs.push(
+            serde_json::from_slice::<PendingInput>(line)
+                .with_context(|| format!("parse pending input in {}", path.display()))?,
+        );
+    }
+    Ok(inputs)
 }
