@@ -173,6 +173,14 @@ The writer trims an incomplete tail group before resuming appends. Malformed
 completed records and out-of-sequence refs fail loading. The current pre-release
 format intentionally does not load older run-record versions.
 
+One incremental checkpoint decoder owns this definition for every reader. Its
+synchronous core validates complete physical lines from any known sequence and
+byte offset, retains at most one incomplete checkpoint, and returns exact raw
+lines only after the whole group commits. The async file wrapper retains a torn
+final line across EOF and streams forward without reading the whole file;
+trajectory loading collects its committed records, while append recovery only
+counts them and uses the same committed byte offset.
+
 The message file is created and directory-synced with the run. The writer's
 cached next sequence is invalidated before cancellable I/O and restored only
 after a complete record has synced. Multiple independent writers for one run
