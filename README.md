@@ -7,9 +7,10 @@ delegated agents and long-running background jobs through one durable runtime
 for local automation and cloud workloads.
 
 The runtime deliberately shares one `AgentRunner` implementation and one tool
-contract across root and child agents. Runs are portable, resumable, and
-inspectable without an embedded TUI, database, distributed scheduler, sandbox,
-or approval system.
+contract across root and child agents. Runs are portable and resumable without
+a database, distributed scheduler, sandbox, or approval system. Transcript
+inspection embeds fmtview behind a storage-neutral boundary; the agent runtime
+itself remains headless.
 
 ## Features
 

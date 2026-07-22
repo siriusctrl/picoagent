@@ -1,7 +1,8 @@
 use std::{
     fs::{File, Metadata},
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    io::{self, BufRead, BufReader, Read, Seek, SeekFrom},
     path::Path,
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result, ensure};
@@ -11,15 +12,53 @@ use super::{TranscriptInstrumentation, TranscriptTimeline, read_run, scan::read_
 use crate::storage::message_log::decoder::CheckpointDecoder;
 
 const SAMPLE_BYTES: usize = 64;
+const REFRESH_SHORT_READ_ATTEMPTS: usize = 3;
 
 impl TranscriptTimeline {
     pub(super) fn refresh_timeline(&mut self) -> Result<TimelineRefresh> {
+        self.refresh_timeline_with_hook(|_| Ok(()))
+    }
+
+    pub(super) fn refresh_timeline_with_hook(
+        &mut self,
+        mut after_stat: impl FnMut(usize) -> Result<()>,
+    ) -> Result<TimelineRefresh> {
+        for attempt in 1..=REFRESH_SHORT_READ_ATTEMPTS {
+            let mut observation = None;
+            match self.refresh_once(&mut observation, || after_stat(attempt)) {
+                Ok(refresh) => return Ok(refresh),
+                Err(error) if is_unexpected_eof(&error) => {
+                    let changed = observation.is_some_and(|previous| {
+                        current_observation(&self.messages_path)
+                            .is_ok_and(|current| current != previous)
+                    });
+                    if changed {
+                        if attempt < REFRESH_SHORT_READ_ATTEMPTS {
+                            continue;
+                        }
+                        return Ok(TimelineRefresh::NoChange(self.snapshot()));
+                    }
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("refresh retry loop always returns")
+    }
+
+    fn refresh_once(
+        &mut self,
+        observation: &mut Option<FileObservation>,
+        after_stat: impl FnOnce() -> Result<()>,
+    ) -> Result<TimelineRefresh> {
         let run = read_run(&self.metadata_path)?;
         let mut file = File::open(&self.messages_path)
             .with_context(|| format!("reopen transcript {}", self.messages_path.display()))?;
         let metadata = file
             .metadata()
             .with_context(|| format!("stat transcript {}", self.messages_path.display()))?;
+        *observation = Some(FileObservation::from_metadata(&metadata));
+        after_stat()?;
         let identity = FileIdentity::from_metadata(&metadata);
         if identity != self.identity {
             return self.reset(TimelineResetReason::IdentityChanged);
@@ -37,33 +76,66 @@ impl TranscriptTimeline {
         }
 
         let old_committed_end = self.committed_end;
-        if !self.suffix_tracker.matches(
+        let suffix_matches = self.suffix_tracker.matches(
             &mut file,
             metadata.len(),
             &mut self.instrumentation,
             &self.label,
-        )? {
-            self.suffix_tracker = SuffixTracker::new(self.committed_end, self.committed_next_seq);
-        }
-        self.suffix_tracker.scan_to(
+        )?;
+        let mut suffix_tracker = if suffix_matches {
+            std::mem::replace(
+                &mut self.suffix_tracker,
+                SuffixTracker::new(self.committed_end, self.committed_next_seq),
+            )
+        } else {
+            SuffixTracker::new(self.committed_end, self.committed_next_seq)
+        };
+        if let Err(error) = suffix_tracker.scan_to(
             &mut file,
             &self.messages_path,
             metadata.len(),
             &mut self.instrumentation,
             &self.label,
-        )?;
+        ) {
+            // The working tracker may have consumed bytes from a concurrent
+            // truncate. Keep only a clean committed-boundary tracker so a
+            // retry cannot inherit its partial cursor or decoder state.
+            self.suffix_tracker = SuffixTracker::new(self.committed_end, self.committed_next_seq);
+            return Err(error);
+        }
+        let committed_end = suffix_tracker.committed_end();
+        let committed_next_seq = suffix_tracker.next_seq();
+        let prefix_sample = if committed_end != old_committed_end {
+            Some(PrefixSample::read(
+                &mut file,
+                committed_end,
+                &mut self.instrumentation,
+                &self.label,
+            )?)
+        } else {
+            None
+        };
+        let after_reads = current_observation(&self.messages_path)?;
+        if observation.is_some_and(|before_reads| after_reads != before_reads) {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("transcript {} changed during refresh", self.label),
+            )
+            .into());
+        }
+
+        // Publish the new snapshot only after every read against the statted
+        // length succeeds. A concurrent shrink leaves the prior decoder,
+        // partial line, cursor, and samples untouched for a clean retry.
         self.file = file;
         self.state = run.state;
         self.observed_end = metadata.len();
-        self.committed_end = self.suffix_tracker.committed_end();
-        self.committed_next_seq = self.suffix_tracker.next_seq();
+        self.committed_end = committed_end;
+        self.committed_next_seq = committed_next_seq;
+        self.suffix_tracker = suffix_tracker;
         if self.committed_end != old_committed_end {
-            self.prefix_sample = PrefixSample::read(
-                &mut self.file,
-                self.committed_end,
-                &mut self.instrumentation,
-                &self.label,
-            )?;
+            self.prefix_sample =
+                prefix_sample.context("appended transcript lost its prefix sample")?;
             return Ok(TimelineRefresh::Appended(self.snapshot()));
         }
         if self.is_terminal() {
@@ -92,6 +164,37 @@ impl TranscriptTimeline {
             snapshot: self.snapshot(),
         })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileObservation {
+    identity: FileIdentity,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+impl FileObservation {
+    fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            identity: FileIdentity::from_metadata(metadata),
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        }
+    }
+}
+
+fn current_observation(path: &Path) -> Result<FileObservation> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("restat transcript {} after short read", path.display()))?;
+    Ok(FileObservation::from_metadata(&metadata))
+}
+
+fn is_unexpected_eof(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<io::Error>()
+            .is_some_and(|error| error.kind() == io::ErrorKind::UnexpectedEof)
+    })
 }
 
 pub(super) struct SuffixTracker {
@@ -162,7 +265,14 @@ impl SuffixTracker {
                 instrumentation.read_operations = instrumentation.read_operations.saturating_add(1);
                 instrumentation.bytes_read = instrumentation.bytes_read.saturating_add(read as u64);
                 if read == 0 {
-                    break;
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        format!(
+                            "transcript {label} ended at byte {} before statted byte {observed_end}",
+                            self.scan_cursor
+                        ),
+                    )
+                    .into());
                 }
                 self.scan_cursor = self
                     .scan_cursor

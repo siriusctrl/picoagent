@@ -200,16 +200,19 @@ Fiasco depends on the released `fmtview` facade and does not depend directly on
 
 The timeline opens at the last committed checkpoint by scanning physical lines
 backward from EOF. It loads older checkpoints backward and newer checkpoints
-forward; one logical checkpoint may exceed a requested record/byte budget but
-is never split across published batches. Prefix probes are bounded. The initial
-tail path does not index or validate every earlier message, so a large history
-can show its first screen without a forward scan.
+forward; one logical checkpoint may exceed a requested record/byte budget when
+it is the first group in a batch, but is never split across published batches.
+Prefix probes are bounded. The initial tail path does not index or validate
+every earlier message, so a large history can show its first screen without a
+forward scan.
 
 Follow refresh retains the shared `CheckpointDecoder`, its pending checkpoint,
 a torn-line buffer, and the scanned suffix cursor. An unchanged large pending
 checkpoint therefore costs only bounded head/middle/tail probes per refresh.
 Rewriting only the uncommitted suffix invalidates and rebuilds this tracker from
-the unchanged committed boundary without changing the epoch. Truncating a
+the unchanged committed boundary without changing the epoch. Reads from a
+concurrently shrinking or rewritten suffix are retried from a clean working
+tracker and published only after one coherent file observation. Truncating a
 committed prefix, replacing the file identity, or changing bounded committed
 prefix probes starts a new epoch so fmtview discards old record identities.
 Queued, running, and idle runs report a live boundary; completed, failed,

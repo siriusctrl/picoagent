@@ -233,10 +233,38 @@ pub(super) fn read_forward_batch(
             read > 0,
             "transcript at byte {cursor} made no read progress"
         );
-        cursor = cursor
+        let line_end = cursor
             .checked_add(read as u64)
             .context("transcript byte offset overflow")?;
         ensure!(line.ends_with(b"\n"), "committed transcript line is torn");
+        if !records.is_empty() && decoder.committed_end() == cursor {
+            let declared_records = decoder.preflight_checkpoint_start(path, &line)?;
+            let remaining_records = limit.max_records.saturating_sub(records.len());
+            let remaining_bytes = limit.max_bytes.saturating_sub(bytes);
+            if declared_records > u64::try_from(remaining_records).unwrap_or(u64::MAX)
+                || line.len() > remaining_bytes
+            {
+                break;
+            }
+            if !remaining_checkpoint_lines_fit(
+                file,
+                line_end,
+                end,
+                declared_records.saturating_sub(1),
+                remaining_bytes.saturating_sub(line.len()),
+                instrumentation,
+                label,
+            )? {
+                break;
+            }
+            // `File::try_clone` may share the underlying file offset with
+            // `file`. The bounded preflight seeks that handle, so discard any
+            // BufReader read-ahead and restore this reader's logical position.
+            reader.seek(SeekFrom::Start(line_end)).with_context(|| {
+                format!("restore transcript {label} after checkpoint preflight")
+            })?;
+        }
+        cursor = line_end;
         if let DecodeResult::Checkpoint(checkpoint) =
             decoder.push_complete_line(path, line, cursor)?
         {
@@ -259,6 +287,53 @@ pub(super) fn read_forward_batch(
         cursor,
         next_seq: decoder.next_seq(),
     })
+}
+
+fn remaining_checkpoint_lines_fit(
+    file: &mut File,
+    start: u64,
+    committed_end: u64,
+    mut remaining_lines: u64,
+    byte_budget: usize,
+    instrumentation: &mut TranscriptInstrumentation,
+    label: &str,
+) -> Result<bool> {
+    if remaining_lines == 0 {
+        return Ok(true);
+    }
+    if start >= committed_end {
+        // Force the decoder to report the incomplete checkpoint instead of
+        // treating malformed metadata as a budget-limited boundary.
+        return Ok(true);
+    }
+    let budget_end = start
+        .saturating_add(u64::try_from(byte_budget).unwrap_or(u64::MAX))
+        .min(committed_end);
+    let mut cursor = start;
+    let mut buffer = vec![0_u8; REVERSE_SCAN_CHUNK_BYTES];
+    while cursor < budget_end {
+        let count =
+            usize::try_from((budget_end - cursor).min(buffer.len() as u64)).unwrap_or(buffer.len());
+        read_exact_at(file, cursor, &mut buffer[..count], instrumentation, label)?;
+        for byte in &buffer[..count] {
+            if *byte == b'\n' {
+                remaining_lines -= 1;
+                if remaining_lines == 0 {
+                    return Ok(true);
+                }
+            }
+        }
+        cursor = cursor
+            .checked_add(count as u64)
+            .context("transcript byte offset overflow")?;
+    }
+    if budget_end == committed_end {
+        // The declaration runs past the committed boundary. Decode it so the
+        // shared validator returns the structural error on this call.
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 pub(super) fn timeline_records(epoch: u64, checkpoint: CommittedCheckpoint) -> Vec<TimelineRecord> {

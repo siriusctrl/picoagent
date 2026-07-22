@@ -663,9 +663,9 @@ dependencies = [
 
 [[package]]
 name = "fmtview"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7256652607c8f5eff696a873e73690a3c4ad26fab62d00e85a3e4d6a4d4cdda"
+checksum = "9d2798863a1347f246f212fbf7e294de1728d84d692c8496d9f169632b04f54b"
 dependencies = [
  "anyhow",
  "clap",
@@ -677,9 +677,9 @@ dependencies = [
 
 [[package]]
 name = "fmtview-core"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80239d61ba3a62c8764d9d34bc939a637d4439a794a71abf4d2e427e684c9def"
+checksum = "1c281ad6eb69f32992a66bd07ee2c3c203faaeb17a43aad9bfb7166985404e02"
 dependencies = [
  "anyhow",
  "memchr",
