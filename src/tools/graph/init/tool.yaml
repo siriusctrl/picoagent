@@ -1,60 +1,97 @@
 name: graph_init
 description: |-
-  Initialize and validate one complete planning topology for the current run.
-  A graph records work items and accepted outcomes; it does not execute work or
-  track runtime execution. Supply every initial node in this call. For example:
+  Create one durable planning graph from a complete version-1 WIP document.
+  Use a graph when work has several independently accepted outcomes, dependency
+  or parallel structure, spans multiple turns or compaction, or needs durable
+  progress and knowledge. Do not use it for a short linear task or as a mirror
+  of live execution state.
 
-    {"goal":"Ship the API","nodes":{"inspect":{"objective":"Determine the API contract","depends_on":[]},"implement":{"objective":"Implement the accepted contract","depends_on":["inspect"]},"verify":{"objective":"Run the required tests","depends_on":["implement"]}}}
+  Supply the complete initial document in `graph`, including every node and any
+  knowledge already accepted as a resolution. A resolution summary is the
+  accepted outcome or fact; evidence lists project-relative supporting paths.
+  Leave unresolved work as `resolution: null`. For example:
 
-  Node ids are non-empty mapping keys without boundary whitespace. Dependencies
-  must name nodes in this same call, may not repeat, and must form a DAG. The
-  created version-1 YAML is `wip`, with every resolution set to null. Revise it
-  later with `write`; use `graph_list` to validate and derive ready nodes,
-  `delegate` to execute independent work, and runtime handle controls to
-  supervise it.
-  Because one assistant tool-call batch is concurrent, graph writes,
-  validation, and dependent delegations belong in separate turns.
+    {"graph":{"version":1,"status":"wip","goal":"Ship the API","nodes":{"inspect":{"objective":"Determine the contract","depends_on":[],"resolution":{"summary":"Contract accepted","evidence":["docs/api.md"]}},"implement":{"objective":"Implement it","depends_on":["inspect"],"resolution":null}}}}
+
+  Initialization validates the exact document before creating a file: version,
+  WIP status, non-empty topology, ids, dependencies, cycles, resolutions,
+  evidence paths, and top-level state. The graph records topology and accepted
+  knowledge; it does not execute nodes. Later changes edit the returned YAML
+  with an available file capability and validate it with an available graph
+  listing capability. Dependent edits, validation, and execution belong in
+  separate assistant turns because calls in one batch are concurrent.
 returns: >-
   JSON containing the short run-local graph `id`, project-relative YAML `path`,
-  `wip` status, resolved/unresolved counts, and initially ready node ids. An
-  invalid topology returns a tool error and creates no file.
+  `wip` status, resolved/unresolved counts, and ready node ids. An invalid
+  document returns a tool error and creates no file.
 input_schema:
   type: object
   properties:
-    goal:
-      type: string
-      minLength: 1
-      description: Concise overall outcome the graph should coordinate
-    nodes:
+    graph:
       type: object
-      minProperties: 1
-      description: Complete initial node map keyed by stable node id
-      additionalProperties:
-        type: object
-        properties:
-          objective:
-            type: string
-            minLength: 1
-          depends_on:
-            type: array
-            items:
-              type: string
-            uniqueItems: true
-        required:
-          - objective
-          - depends_on
-        additionalProperties: false
-  required:
-    - goal
-    - nodes
+      description: Complete initial version-1 WIP graph document
+      properties:
+        version:
+          type: integer
+          enum: [1]
+        status:
+          type: string
+          enum: [wip]
+        goal:
+          type: string
+          minLength: 1
+          description: Overall outcome coordinated by this graph
+        nodes:
+          type: object
+          minProperties: 1
+          description: Complete node map keyed by stable node id
+          additionalProperties:
+            type: object
+            properties:
+              objective:
+                type: string
+                minLength: 1
+              depends_on:
+                type: array
+                items:
+                  type: string
+                uniqueItems: true
+              resolution:
+                description: Accepted knowledge/outcome, or null while unresolved
+                anyOf:
+                  - type: "null"
+                  - type: object
+                    properties:
+                      summary:
+                        type: string
+                        minLength: 1
+                      evidence:
+                        type: array
+                        items:
+                          type: string
+                    required: [summary]
+                    additionalProperties: false
+            required: [objective, depends_on, resolution]
+            additionalProperties: false
+      required: [version, status, goal, nodes]
+      additionalProperties: false
+  required: [graph]
   examples:
-    - goal: Ship the API
-      nodes:
-        inspect:
-          objective: Determine the API contract
-          depends_on: []
-        implement:
-          objective: Implement the accepted contract
-          depends_on:
-            - inspect
+    - graph:
+        version: 1
+        status: wip
+        goal: Ship the API
+        nodes:
+          inspect:
+            objective: Determine the contract
+            depends_on: []
+            resolution:
+              summary: Contract accepted
+              evidence:
+                - docs/api.md
+          implement:
+            objective: Implement the contract
+            depends_on:
+              - inspect
+            resolution: null
   additionalProperties: false

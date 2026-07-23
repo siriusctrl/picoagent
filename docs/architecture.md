@@ -99,17 +99,18 @@ capability contract without a dynamic spawn allowlist.
 
 The fixed built-ins also include `graph_init` and `graph_list`. Their shared
 run-local store allocates short `g<N>` YAML files without overwriting a graph
-during concurrent initialization. `graph_init` accepts the complete initial
-node map, validates references and acyclicity, and creates no file when the
-topology is invalid. `graph_list` parses each file independently,
-validates its DAG and terminal state, and derives ready nodes; one malformed
-file is reported as invalid rather than failing the entire listing. Full graph
-inspection and mutation stay with `read` and `write`. Execution stays with
-`delegate` and the existing handle controls, so the graph family does not create
-a second scheduler or persist runtime handles. Ready nodes are projected only for a
-`wip` graph, and an accepted resolution is invalid until its direct dependencies
-are resolved. Since one assistant tool-call batch is concurrent, dependent
-`write`, `graph_list`, and `delegate` stages execute in separate turns.
+during concurrent initialization. `graph_init` accepts the complete version-1
+`wip` graph document, including any already accepted resolutions, validates the
+same shape that will be persisted, and creates no file when it is invalid.
+`graph_list` parses each file independently, validates its DAG and terminal
+state, and derives ready nodes; one malformed file is reported as invalid
+rather than failing the entire listing. Full graph inspection and mutation stay
+with `read` and `write`. Execution stays with `delegate` and the existing handle
+controls, so the graph family does not create a second scheduler or persist
+runtime handles. Ready nodes are projected only for a `wip` graph, and an
+accepted resolution is invalid until its direct dependencies are resolved.
+Since one assistant tool-call batch is concurrent, dependent `write`,
+`graph_list`, and `delegate` stages execute in separate turns.
 
 Root and the persisted delegating/leaf GeneralTask profiles have one identical
 built-in capability set. Both GeneralTask profiles appear to the model as the
@@ -344,14 +345,15 @@ preserving exact recovery as part of the compaction contract.
 
 ### Skills and instructions
 
-The system prompt contains only stable built-in instructions loaded from
+The system prompt contains only stable, tool-agnostic instructions loaded from
 the typed `prompts/agents.yaml` registry. YAML folded scalars remove source-only
 line wrapping before Rust receives each value. `src/prompts.rs` parses the
 embedded registry once and rejects unknown or empty fields. Rust owns prompt
 precedence, section ordering, dynamic values, and runtime-reminder framing.
-Stable task-control relationships, compacted-history recovery guidance, and
-planning-graph workflow live in that system prefix rather than Rust string
-literals. The first user message's ordinary text `content` carries a
+Each typed tool manifest owns its feature workflow, so ablating a tool schema
+also removes its instructions. Concrete run state and feature availability may
+still appear in dynamic reminders and results. The first user message's
+ordinary text `content` carries a
 `<runtime-reminder>` block with model/workspace state, the workspace
 `AGENTS.md`, sorted skill metadata, memory paths, and optional delegated
 instructions, followed by the original request. A skill body enters the
@@ -399,8 +401,9 @@ projects a bounded page of the child's durable messages. Send queues a normal
 user message with an explicit mode: `steer` makes it available after the
 current complete tool batch, while `followup` waits for the current activity
 boundary. An activity result leaves the thread idle; `stop` ends only current
-work, and `close` permanently closes an idle thread. Asynchronous work has no
-hard execution deadline.
+work, while `close` rejects new input, cancels and joins current work when
+necessary, clears queued input, and then durably closes the thread.
+Asynchronous work has no hard execution deadline.
 
 Every delegated child is isolated. It starts from its own runtime reminder and
 the delegated prompt, which must contain the complete objective and any
@@ -428,16 +431,17 @@ uses this same path rather than a special direct-tool child.
 
 ## Prompt And Cache Shape
 
-Agent and compaction calls use one invariant built-in system prompt and one
-sorted, frozen tool-schema set. The history schemas are included from the first
-call; automatic compaction never mutates this prefix. Stable tool-family
-workflow is part of the shared system prose, while project instructions, skill
-metadata, memory paths, and delegated instructions form a deterministic runtime
-reminder at the start of each run. That persisted reminder is frozen for the
-run. Optional startup schemas are selected before the run starts. Agent role
-and remaining delegation depth change only the initial runtime-reminder tail.
-Current-process active-handle state is a non-durable synthetic reminder in
-normal requests, while a compaction request changes only the message tail.
+Agent and compaction calls use one invariant, tool-agnostic built-in system
+prompt and one sorted, frozen tool-schema set. The history schemas are included
+from the first call; automatic compaction never mutates this prefix.
+Feature-specific workflow stays with the corresponding schema instead of the
+shared system prose. Project instructions, skill metadata, memory paths, and
+delegated instructions form a deterministic runtime reminder at the start of
+each run. That persisted reminder is frozen for the run. Optional startup
+schemas are selected before the run starts. Agent role and remaining delegation
+depth change only the initial runtime-reminder tail. Current-process
+active-handle state is a non-durable synthetic reminder in normal requests,
+while a compaction request changes only the message tail.
 
 The durable trajectory remains append-only; before a normal model call, an
 optional assistant compacted-state message can replace its older active prefix

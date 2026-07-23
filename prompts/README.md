@@ -10,12 +10,15 @@ Runtime assembly, precedence, dynamic values, argument validation, and
 execution contracts remain in Rust. Project `AGENTS.md`, model modalities,
 runtime role, remaining delegation depth, skill metadata, memory paths, and
 delegated instructions are dynamic inputs and are not copied into this
-registry. The stable system prompt defines universal cross-tool behavior,
-including runtime-handle lifecycle, compacted-history recovery, and file-backed graph
-workflow. The initial runtime reminder carries only concrete run state and
-concise GeneralTask role guidance. Its child guidance points to the paired,
-self-contained delegated task. Keeping those rules in the shared system prefix
-preserves byte-identical Root and GeneralTask prefixes.
+registry. The stable system prompt defines only tool-agnostic behavior:
+user-intent boundaries, evidence, schema authority, concurrent-call semantics,
+instruction precedence, process permissions, and final reporting. Tool names
+and feature workflows do not belong in that prefix, so removing a tool schema
+also removes its prompt influence. The initial runtime reminder carries
+concrete run state and concise feature guidance only when that feature is
+present. Its child guidance points to the paired, self-contained delegated
+task. Keeping the stable rules in the shared system prefix preserves
+byte-identical Root and GeneralTask prefixes.
 
 Every local model-facing tool adapter keeps a typed `tool.yaml` beside its Rust
 module. Standalone adapters live at `src/tools/<tool>/`; cohesive handle, history,
@@ -33,19 +36,22 @@ instructions live with the behavior that assembles them, such as
 
 When one call needs a structured aggregate rather than incremental mutation,
 the manifest may include a concise representative example in both its prose and
-JSON Schema. For example, `graph_init` accepts the complete initial node map in
-one call so Rust can validate dependency references and cycles before creating
-the graph file. Examples explain shape only; Rust remains authoritative for
-semantic validation.
+JSON Schema. For example, `graph_init` accepts a complete graph document,
+including any already accepted resolutions, in one call so Rust can validate
+the exact persisted shape before creating the graph file. Examples explain
+shape only; Rust remains authoritative for semantic validation.
 
 These are compile-time assets, not runtime overrides or dynamically discovered
 plugins. External executable tools integrate through MCP and keep their
 server-provided dynamic schemas rather than using local manifests.
 
-`returns` is required even when one short sentence is sufficient. Generic
-artifact spill and error behavior stays in shared runtime guidance rather than
-being copied into every manifest. This authoring split does not add a private
-provider field or claim a formal output schema.
+`returns` is required even when one short sentence is sufficient. A manifest
+should explain its own behavior without assuming that a sibling tool is
+available; cross-tool follow-up is described in capability terms unless the
+dependency is intrinsic to the returned data. Generic artifact spill and error
+behavior stays in runtime-generated result guidance rather than being copied
+into every manifest. This authoring split does not add a private provider field
+or claim a formal output schema.
 
 Tool descriptions are sent through the provider's sorted tool-schema field.
 Core history, delegation, and handle-control schemas are present in every Root

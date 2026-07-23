@@ -443,7 +443,8 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
         assert_eq!(&request.system, stable_system);
         assert_eq!(serde_json::to_value(&request.tools).unwrap(), stable_tools);
     }
-    assert!(stable_system.contains("`history_search` and `history_read`"));
+    assert!(!stable_system.contains("history_search"));
+    assert!(!stable_system.contains("history_read"));
     assert!(!text_content(&normal_requests[0].messages[0]).contains("history_search"));
 
     let resumed = normal_requests[2];

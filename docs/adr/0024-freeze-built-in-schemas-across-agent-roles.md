@@ -5,9 +5,9 @@
 - Refines: ADR 0004 (agent-role schema stability)
 - Refines: ADR 0017 (delegate availability)
 
-ADR 0028 refines only guidance placement below. Stable cross-tool workflow now
-lives in the shared system prompt; concrete role, delegation depth, and active
-task state remain runtime-reminder data.
+ADR 0039 supersedes ADR 0028's guidance placement. The shared system prompt is
+tool-agnostic; each capability owns its workflow guidance, while concrete role,
+delegation depth, and active handle state remain runtime-reminder data.
 
 ## Context
 

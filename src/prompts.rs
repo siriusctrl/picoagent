@@ -47,11 +47,10 @@ mod tests {
 
         assert!(prompts.system.contains("workspace with the user"));
         assert!(!prompts.system.contains("workspace with\nthe user"));
-        assert!(
-            prompts
-                .system
-                .contains("starts one reusable GeneralTask agent asynchronously")
-        );
+        assert!(prompts.system.contains("Tool schemas are authoritative"));
+        assert!(!prompts.system.contains("`delegate`"));
+        assert!(!prompts.system.contains("`graph_init`"));
+        assert!(!prompts.system.contains("`history_search`"));
         assert!(prompts.general_task.contains("complete assignment"));
         assert!(prompts.compaction_request.contains("# Compacted state"));
         assert!(!prompts.compaction_request.ends_with('\n'));

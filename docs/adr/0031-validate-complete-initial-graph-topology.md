@@ -4,6 +4,9 @@
 - Date: 2026-07-21
 - Refines: ADR 0026 (planning graph initialization)
 
+ADR 0040 refines the accepted input from a goal plus node map to the exact
+complete graph document, including already accepted resolutions.
+
 ## Context
 
 Creating an empty graph and asking the model to fill its nodes with a later

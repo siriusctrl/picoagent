@@ -2,14 +2,15 @@ name: delegate
 description: >-
   Start an isolated reusable general-task agent for independent work. The
   prompt must contain the complete objective and task-specific context. It
-  starts asynchronously; continue independent work or use wait before
-  consuming an activity result. Later send_message calls reuse the same agent.
+  starts asynchronously; continue independent work or use an available handle
+  control before consuming its result. The returned agent thread can be reused
+  for later messages.
 returns: >-
   A status-less `<runtime_handle>` notice with the child run id and name. This
   only acknowledges asynchronous execution. A later result notice carries
   either small text inline or the ordinary bounded artifact envelope for larger
-  or binary output. The agent becomes idle after that activity rather than
-  closing.
+  or binary output. After that activity the agent becomes idle and reusable
+  rather than closing.
 input_schema:
   type: object
   properties:

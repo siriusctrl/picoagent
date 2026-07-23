@@ -100,15 +100,24 @@ async fn graph_tools_initialize_validate_and_reuse_file_tools_for_mutation() {
         .execute(
             context(workspace.path(), "graph-init"),
             json!({
-                "goal": "Inspect and implement graph support",
-                "nodes": {
-                    "inspect": {
-                        "objective": "Inspect existing behavior",
-                        "depends_on": []
-                    },
-                    "implement": {
-                        "objective": "Implement the design",
-                        "depends_on": ["inspect"]
+                "graph": {
+                    "version": 1,
+                    "status": "wip",
+                    "goal": "Inspect and implement graph support",
+                    "nodes": {
+                        "inspect": {
+                            "objective": "Inspect existing behavior",
+                            "depends_on": [],
+                            "resolution": {
+                                "summary": "Inspection complete",
+                                "evidence": ["docs/architecture.md"]
+                            }
+                        },
+                        "implement": {
+                            "objective": "Implement the design",
+                            "depends_on": ["inspect"],
+                            "resolution": null
+                        }
                     }
                 }
             }),
@@ -129,20 +138,22 @@ async fn graph_tools_initialize_validate_and_reuse_file_tools_for_mutation() {
     let initial_graph = String::from_utf8(initial_graph.content).unwrap();
     assert!(initial_graph.contains("inspect:"));
     assert!(initial_graph.contains("depends_on:") && initial_graph.contains("- inspect"));
+    assert!(initial_graph.contains("summary: Inspection complete"));
     let initial_listing = list
         .execute(context(workspace.path(), "graph-list-initial"), json!({}))
         .await
         .unwrap();
     let initial_listing: serde_json::Value =
         serde_json::from_slice(&initial_listing.content).unwrap();
-    assert_eq!(initial_listing["wip"][0]["ready"], json!(["inspect"]));
+    assert_eq!(initial_listing["wip"][0]["ready"], json!(["implement"]));
+    assert_eq!(initial_listing["wip"][0]["resolved"], 1);
 
     write
         .execute(
             context(workspace.path(), "graph-write"),
             json!({
                 "path": path,
-                "content": "version: 1\nstatus: wip\ngoal: Implement graph support\nnodes:\n  inspect:\n    objective: Inspect existing behavior\n    depends_on: []\n    resolution:\n      summary: Inspection complete\n      evidence: [docs/architecture.md]\n  implement:\n    objective: Implement the design\n    depends_on: [inspect]\n    resolution: null\n"
+                "content": "version: 1\nstatus: completed\ngoal: Inspect and implement graph support\nsummary: Graph support implemented\nnodes:\n  inspect:\n    objective: Inspect existing behavior\n    depends_on: []\n    resolution:\n      summary: Inspection complete\n      evidence: [docs/architecture.md]\n  implement:\n    objective: Implement the design\n    depends_on: [inspect]\n    resolution:\n      summary: Implementation complete\n      evidence: [src/tools/graph/init/mod.rs]\n"
             }),
         )
         .await
@@ -152,9 +163,9 @@ async fn graph_tools_initialize_validate_and_reuse_file_tools_for_mutation() {
         .await
         .unwrap();
     let listing: serde_json::Value = serde_json::from_slice(&listing.content).unwrap();
-    assert_eq!(listing["wip"][0]["ready"], json!(["implement"]));
-    assert_eq!(listing["wip"][0]["resolved"], 1);
-    assert_eq!(listing["wip"][0]["unresolved"], 1);
+    assert_eq!(listing["completed"][0]["ready"], json!([]));
+    assert_eq!(listing["completed"][0]["resolved"], 2);
+    assert_eq!(listing["completed"][0]["unresolved"], 0);
 }
 
 #[tokio::test]

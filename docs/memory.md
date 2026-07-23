@@ -22,9 +22,9 @@ an explicit repository change.
 
 Memory has no dedicated model tool or agent profile. The ordinary `write` tool
 can create or make targeted edits to either absolute memory path, while `bash`
-can perform broader file operations. The stable system instructions require the
-model to inspect existing memory, keep user and project scopes distinct, and
-record curated durable knowledge rather than dumping a transcript.
+can perform broader file operations. The dynamic memory reminder asks the model
+to inspect existing memory, keep user and project scopes distinct, and record
+curated durable knowledge rather than dumping a transcript.
 
 For a small focused change, the current agent edits the Markdown directly. For
 a large independent consolidation, an agent with remaining delegation depth
@@ -58,8 +58,8 @@ projection, but vector search is not required for the launch runtime.
 ## Prompt And Persistence Behavior
 
 Memory contents are not injected wholesale. When memory is enabled, every
-ordinary root or GeneralTask reminder contains only the resolved paths; stable
-management practices stay in the system prompt. A delegated consolidation has
+ordinary root or GeneralTask reminder contains the resolved paths and a short
+management reminder. A delegated consolidation has
 its own run directory, transcript, events, artifacts, parent id, and durable
 task record, so it follows the existing reusable-child contract without
 inflating the parent context. If the process stops mid-activity, recovery

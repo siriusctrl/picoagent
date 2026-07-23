@@ -1,9 +1,9 @@
 name: history_read
 description: >-
-  Read completed messages around a `ref` returned by `history_search`. `ref` is
-  `m<N>`, where smaller `N` is older. `before` and `after` count nearby
-  messages omitted from active context, not compaction cycles. This tool cannot
-  modify history.
+  Read completed messages around a history-search `ref`. `ref` is `m<N>`,
+  where smaller `N` is older. `before` and `after` count nearby messages
+  omitted from active context, not compaction cycles. This tool cannot modify
+  history.
 returns: >-
   Chronological JSONL with one object per message:
   `{"ref":"m<N>","message":<OpenAI Chat-compatible message>}`. Tool
@@ -11,7 +11,8 @@ returns: >-
   than the requested window. Harness-only context-management records are
   excluded. For a search match with `source: "artifact"`, the matching text
   came from the full spilled result and may be outside the returned message's
-  bounded preview; use the match's `artifact` path with `read`.
+  bounded preview; inspect the match's `artifact` path with an available
+  bounded file capability.
 input_schema:
   type: object
   properties:
@@ -19,7 +20,7 @@ input_schema:
       type: string
       minLength: 1
       pattern: "^m[1-9][0-9]*$"
-      description: Stable m<N> ref from history_search; smaller N is older
+      description: Stable m<N> ref from a history search; smaller N is older
     before:
       type: integer
       minimum: 0

@@ -217,13 +217,20 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
             "write"
         ]
     );
-    assert!(
-        requests[0]
-            .system
-            .contains("`history_search` and `history_read`")
-    );
-    assert!(requests[0].system.contains("`delegate` starts"));
-    assert!(requests[0].system.contains("`graph_list`"));
+    for tool_name in [
+        "`delegate`",
+        "history_search",
+        "history_read",
+        "graph_init",
+        "graph_list",
+        "list_handles",
+        "send_message",
+    ] {
+        assert!(
+            !requests[0].system.contains(tool_name),
+            "stable system prompt names tool `{tool_name}`"
+        );
+    }
     let reminder = text_content(&requests[0].messages[0]);
     assert!(!reminder.contains("<context-management>"));
     assert!(!reminder.contains("<tool-guidance>"));
@@ -367,7 +374,8 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
     let delegating_reminder = text_content(&delegating[0].messages[0]);
     let leaf_reminder = text_content(&leaf[0].messages[0]);
     for reminder in [&root_reminder, &delegating_reminder, &leaf_reminder] {
-        assert!(reminder.contains("<memory>\nuser:"));
+        assert!(reminder.contains("<memory>\nThese ordinary Markdown roots"));
+        assert!(reminder.contains("\nuser:"));
         assert!(reminder.contains("project:"));
         assert!(!reminder.contains("memory_update"));
     }

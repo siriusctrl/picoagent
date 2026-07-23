@@ -1,8 +1,8 @@
 name: stop
 description: >-
   Stop the selected current-process activity or asynchronous tool job. Stopping
-  an agent leaves its durable thread open and reusable through send_message.
-  An already idle agent or settled tool job is returned unchanged.
+  an agent leaves its durable thread open and reusable. An already idle agent
+  or settled tool job is returned unchanged.
 returns: >-
   JSON `{handle,kind,name,status}`.
 input_schema:

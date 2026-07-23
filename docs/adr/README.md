@@ -93,7 +93,7 @@ Use these sections:
 - [ADR 0027: Correlate delegate recovery with its originating
   call](0027-correlate-delegate-recovery-with-originating-call.md)
 - [ADR 0028: Keep cross-tool workflow in the stable system
-  prompt](0028-stable-cross-tool-workflow.md)
+  prompt](0028-stable-cross-tool-workflow.md) (superseded by ADR 0039)
 - [ADR 0029: Recover incomplete model output at narrow
   boundaries](0029-recover-incomplete-model-output.md)
 - [ADR 0030: Use one result policy for foreground and background
@@ -111,3 +111,9 @@ Use these sections:
   timeline](0037-embed-fmtview-over-checkpoint-timeline.md)
 - [ADR 0038: Use runtime handles and explicit
   restart](0038-runtime-handles-and-explicit-restart.md)
+- [ADR 0039: Keep feature guidance with
+  capabilities](0039-keep-feature-guidance-with-capabilities.md)
+- [ADR 0040: Initialize complete graph
+  documents](0040-initialize-complete-graph-documents.md)
+- [ADR 0041: Close active agent
+  threads](0041-close-active-agent-threads.md)

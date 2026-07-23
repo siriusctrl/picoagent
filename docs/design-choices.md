@@ -116,19 +116,18 @@ tool contract, vector retrieval without a demonstrated need, and relying on a
 provider-specific server-side compaction API. See
 [ADR 0012](adr/0012-record-compaction-as-messages.md).
 
-## Stable Cross-Tool Workflow
+## Tool-Local Workflow Guidance
 
-Universal relationships between built-in tool families live once in the
-stable system prompt: task lifecycle and run-local ids, exact recovery from
-compacted history, and the separation of graph topology from delegated
-execution. Dynamic run facts such as remaining delegation depth and active task
-state stay in runtime reminders; complete arguments and result contracts stay
-in each `tool.yaml`. Benchmark prompts should state the task outcome rather
-than repeat harness workflow merely to force tool coverage.
+The stable system prompt contains only behavior that remains valid with any
+tool subset. Each `tool.yaml` is the authority for its capability's purpose,
+workflow, arguments, and results; references to optional sibling capabilities
+stay generic. Dynamic run facts such as remaining delegation depth and active
+handle state stay in runtime reminders or results. This lets tool ablations
+remove both a schema and its prompting influence.
 
-Rejected: hard-coded Rust prose in every initial reminder, duplicating complete
-tool schemas in the system prompt, and appending harness-validation steps to
-ordinary user tasks. See [ADR 0028](adr/0028-stable-cross-tool-workflow.md).
+Rejected: hard-coded feature prose in the shared system prompt, duplicating
+tool schemas there, and appending harness-validation steps to ordinary user
+tasks. See [ADR 0039](adr/0039-keep-feature-guidance-with-capabilities.md).
 
 ## Uniform Background Delivery
 
@@ -191,11 +190,13 @@ foreground window. Results remain in original call order; only unfinished exact
 futures receive process-local `j_<ulid>` handles. `delegate` starts a reusable
 GeneralTask whose handle is its durable child run id. `list_handles`, `status`,
 wait-any `wait`, `inspect`, mode-required `send_message`, `stop`, and `close`
-form one small control surface. Only agent identity, name, transcript, and
-open/closed lifetime survive a process restart; activity coordination does not.
-Agent loops have no arbitrary model-step cap, and asynchronous work has no hard
-execution deadline. See
-[ADR 0038](adr/0038-runtime-handles-and-explicit-restart.md).
+form one small control surface. `close` also cancels and joins active agent work
+before making the durable lifetime closed. Only agent identity, name,
+transcript, and open/closed lifetime survive a process restart; activity
+coordination does not. Agent loops have no arbitrary model-step cap, and
+asynchronous work has no hard execution deadline. See
+[ADR 0038](adr/0038-runtime-handles-and-explicit-restart.md) and
+[ADR 0041](adr/0041-close-active-agent-threads.md).
 
 ## File-backed Planning Topology
 
@@ -203,13 +204,17 @@ Complex tasks may keep a run-local YAML DAG whose nodes are work items and whose
 resolutions are outcomes accepted by the main agent. Two fixed tools initialize
 and summarize/validate these files; ordinary `read`/`write` maintain them, while
 `delegate` and handle controls execute and supervise work independently. The
-graph never stores runtime handles, automatically launches successors, or treats an
-agent completion as an accepted node resolution.
+initializer accepts the complete versioned WIP document, including knowledge
+already accepted as node resolutions, and validates it before creation. The
+graph never stores runtime handles, automatically launches successors, or
+treats an agent completion as an accepted node resolution.
 
 Rejected: equating every node with an agent, a graph-specific mutation DSL, and
 a second graph scheduler with its own dispatch/wait/stop lifecycle. These would
 couple durable planning state to transient execution and duplicate existing
 tools. See [ADR 0026](adr/0026-file-backed-planning-graphs.md).
+The complete initialization contract is recorded in
+[ADR 0040](adr/0040-initialize-complete-graph-documents.md).
 
 ## Isolated Delegation
 
@@ -253,12 +258,12 @@ interleaving under concurrent completion. See
 
 ## Stable Prompt Prefix
 
-The built-in system prompt contains only product identity and stable operating
-rules. Workspace `AGENTS.md`, skill metadata, memory paths, and delegated-task
-instructions are snapshotted into a synthetic runtime reminder at the start of
-each run. Tool
-descriptions remain in sorted tool schemas rather than being duplicated in the
-system prompt. Core history schemas are present from the first normal call.
+The built-in system prompt contains only product identity and tool-agnostic
+operating rules. Workspace `AGENTS.md`, skill metadata, memory paths, and
+delegated-task instructions are snapshotted into a synthetic runtime reminder
+at the start of each run. Tool descriptions and feature workflows remain in
+sorted tool schemas rather than being duplicated in the system prompt. Core
+history schemas are present from the first normal call.
 Root and GeneralTask use the same built-in schema set and freeze it for the run;
 compaction reuses the same system and schemas. Remaining delegation depth is
 persisted runtime state and never changes schema membership. Optional startup

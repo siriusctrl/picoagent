@@ -16,7 +16,7 @@ impl MemoryPaths {
 
     pub fn runtime_reminder_section(&self) -> String {
         format!(
-            "user: {}\nproject: {}",
+            "These ordinary Markdown roots hold durable knowledge, not raw transcripts. Read existing content before making a focused update, and keep user knowledge separate from project knowledge.\nuser: {}\nproject: {}",
             self.user.display(),
             self.project.display()
         )

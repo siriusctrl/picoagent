@@ -1,7 +1,8 @@
 name: close
 description: >-
-  Permanently close one idle delegated agent thread while preserving its
-  transcript and artifacts. A running agent must be stopped first.
+  Permanently close one delegated agent thread while preserving its transcript
+  and artifacts. If an activity is active, close cancels it, waits for child
+  cleanup, and discards queued input before making the thread durably closed.
   Asynchronous tool-job handles cannot be closed.
 returns: >-
   JSON `{handle,kind,name,status}`.

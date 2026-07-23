@@ -84,19 +84,20 @@ pub(super) struct GraphListing {
 }
 
 impl GraphDocument {
-    pub(super) fn initial(goal: String, nodes: BTreeMap<String, GraphNode>) -> Self {
-        Self {
-            version: GRAPH_VERSION,
-            status: GraphStatus::Wip,
-            goal,
-            summary: None,
-            abort_reason: None,
-            nodes,
-        }
-    }
-
     pub(super) fn parse(source: &str) -> Result<Self> {
         serde_yaml_ng::from_str(source).context("parse graph YAML")
+    }
+
+    pub(super) fn validate_initial(&self) -> Result<DerivedState> {
+        ensure!(
+            self.status == GraphStatus::Wip,
+            "initial graph status must be `wip`"
+        );
+        ensure!(
+            !self.nodes.is_empty(),
+            "initial graph must contain at least one node"
+        );
+        self.validate()
     }
 
     pub(super) fn validate(&self) -> Result<DerivedState> {

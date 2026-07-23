@@ -1,6 +1,6 @@
 use super::MessageContent;
 
-const RUNNING_MESSAGE: &str = "The runtime handle is active.";
+const RUNNING_MESSAGE: &str = "The asynchronous work is active. This notice acknowledges its handle; it is not the work's result. Continue independent work or use an available handle control, then reconcile the later status-bearing result before finishing.";
 
 pub(crate) fn runtime_handle_started_reminder(handle: &str, kind: &str, name: &str) -> String {
     wrap_runtime_reminder(&[render_runtime_handle_block(
@@ -31,7 +31,7 @@ pub(crate) fn active_runtime_handles_section<'a>(
         return None;
     }
     Some(format!(
-        "<active-runtime-handles>\nThese handles are already active. Do not call `delegate` again for agent work represented here. Use the runtime-handle controls to observe, send input to, wait for, or stop them.\n{}\n</active-runtime-handles>",
+        "<active-runtime-handles>\nThese handles already represent active work. Do not start duplicate work; use an available handle control when observation or intervention is needed.\n{}\n</active-runtime-handles>",
         handles.join("\n")
     ))
 }
@@ -115,7 +115,9 @@ mod tests {
     fn started_notice_escapes_opaque_display_metadata() {
         assert_eq!(
             runtime_handle_started_reminder("a1", "agent", "review <auth> & \"tests\""),
-            "<runtime-reminder>\n<runtime_handle handle=\"a1\" kind=\"agent\" name=\"review &lt;auth&gt; &amp; &quot;tests&quot;\">\nThe runtime handle is active.\n</runtime_handle>\n</runtime-reminder>"
+            format!(
+                "<runtime-reminder>\n<runtime_handle handle=\"a1\" kind=\"agent\" name=\"review &lt;auth&gt; &amp; &quot;tests&quot;\">\n{RUNNING_MESSAGE}\n</runtime_handle>\n</runtime-reminder>"
+            )
         );
     }
 

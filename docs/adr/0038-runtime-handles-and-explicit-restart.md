@@ -7,6 +7,9 @@
 - Supersedes: ADR 0036 (reconstructed interruption state)
 - Refines: ADR 0034 (checkpoint recovery scope)
 
+ADR 0041 refines `close` so it may terminate an active agent activity before
+persisting the thread's closed lifetime.
+
 ## Context
 
 Delegated agents and long-running ordinary tools need the same small control

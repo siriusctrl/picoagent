@@ -53,7 +53,8 @@ async fn skills_load_on_demand_and_memory_uses_ordinary_paths() {
     let prompt = memory.runtime_reminder_section();
     assert!(prompt.contains(memory.user.to_string_lossy().as_ref()));
     assert!(!prompt.contains("memory_update"));
-    assert_eq!(prompt.lines().count(), 2);
+    assert!(prompt.contains("ordinary Markdown roots hold durable knowledge"));
+    assert_eq!(prompt.lines().count(), 3);
 
     WriteTool::default()
         .execute(

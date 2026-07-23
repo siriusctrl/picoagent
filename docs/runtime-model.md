@@ -143,8 +143,9 @@ queues a normal user message after the current complete assistant/tool batch;
 `followup` waits for the current activity boundary. Neither mode interrupts a
 tool batch, and an idle agent starts immediately in either mode. Activity
 completion leaves the agent `idle`. `stop` interrupts only current activity;
-`close` permanently closes an idle agent. `list_handles`, `status`, and
-wait-any `wait` expose both delegated agents and current-process tool jobs.
+`close` rejects new input, cancels and joins active work when necessary, clears
+queued input, and then permanently closes the agent. `list_handles`, `status`,
+and wait-any `wait` expose both delegated agents and current-process tool jobs.
 
 There is no durable parent-side handle record. On root restart, active child
 work, tool jobs, queued followups, pending input, and undelivered output from
@@ -218,10 +219,12 @@ Reasoning is not included in `final.md`.
 
 ## Prompt Stability
 
-The normal agent's built-in system prompt is workspace-independent, loaded from
-the embedded typed YAML registry, and invariant across its calls. Sorted tool
-schemas form the other stable request prefix and are frozen before the first
-call. Core history schemas are included regardless of `compact_at_tokens`. Root
+The normal agent's built-in system prompt is workspace-independent,
+tool-agnostic, loaded from the embedded typed YAML registry, and invariant
+across its calls. Sorted tool schemas form the other stable request prefix and
+are frozen before the first call. Each schema owns its feature's workflow
+guidance, so removing a capability also removes its prompting influence. Core
+history schemas are included regardless of `compact_at_tokens`. Root
 and GeneralTask receive identical built-in schemas, including delegation and
 handle controls. Remaining delegation depth is runtime state; it appears in the
 initial reminder and a zero-depth `delegate` call fails before task creation.
@@ -241,7 +244,7 @@ enabled, the latest stored assistant compacted state replaces an older prefix
 only in the projected provider context; the stored compaction instruction is
 not replayed in normal requests. A synthetic runtime reminder immediately after
 the state only identifies it as continuation context rather than a final answer
-or another compaction request. The stable system prompt owns history-tool
+or another compaction request. The history tool manifests own their retrieval
 guidance. Large results remain behind stable artifact references.
 These choices reduce context growth and improve the opportunity for provider-side
 prefix-cache reuse without coupling the loop to one cache API.

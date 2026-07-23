@@ -130,36 +130,23 @@ async fn close_wins_atomically_over_a_concurrent_idle_send() {
     };
     tokio::time::timeout(Duration::from_millis(100), async {
         loop {
-            if manager.records.try_lock().is_err() {
+            if manager.records.lock().await["child"].state == HandleState::Closed {
                 break;
             }
             tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("close did not enter its serialized section");
-
-    let sending = {
-        let manager = manager.clone();
-        tokio::spawn(async move {
-            manager
-                .send("child", "late input".to_owned(), SendMode::Followup)
-                .await
-        })
-    };
-    tokio::task::yield_now().await;
-    assert!(!sending.is_finished());
+    .expect("close did not block new input before durable cleanup");
+    assert!(!closing.is_finished());
+    let error = manager
+        .send("child", "late input".to_owned(), SendMode::Followup)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("closed"));
     drop(input_guard);
 
     assert_eq!(closing.await.unwrap().unwrap().status, HandleState::Closed);
-    assert!(
-        sending
-            .await
-            .unwrap()
-            .unwrap_err()
-            .to_string()
-            .contains("closed")
-    );
     assert_eq!(
         manager.records.lock().await["child"].state,
         HandleState::Closed
@@ -169,6 +156,75 @@ async fn close_wins_atomically_over_a_concurrent_idle_send() {
         manager.store.load_run("child").await.unwrap().state,
         RunState::Closed
     );
+}
+
+#[tokio::test]
+async fn close_cancels_an_active_agent_before_durably_closing_it() {
+    let (workspace, manager) = test_manager(30);
+    create_open_child(&manager, &workspace, "child").await;
+    manager
+        .insert_agent("child".to_owned(), "child".to_owned())
+        .await
+        .unwrap();
+    manager
+        .store
+        .enqueue_user_input_with_id("child", "pending".to_owned(), "queued input".to_owned())
+        .await
+        .unwrap();
+    {
+        let mut records = manager.records.lock().await;
+        let record = records.get_mut("child").unwrap();
+        record.state = HandleState::Running;
+        record.generation = 1;
+        record.followups.push(super::PendingAgentInput {
+            id: "followup".to_owned(),
+            message: "later".to_owned(),
+        });
+    }
+    let activity = tokio::spawn(std::future::pending::<()>());
+    let (cleanup_done, wait_for_cleanup) = tokio::sync::oneshot::channel();
+    manager.track("child".to_owned(), 1, activity, Some(wait_for_cleanup));
+
+    let closing = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.close("child").await })
+    };
+    tokio::time::timeout(Duration::from_millis(100), async {
+        loop {
+            if manager.records.lock().await["child"].state == HandleState::Closed {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("close did not block new input before waiting for child cleanup");
+    assert!(!closing.is_finished());
+    let error = manager
+        .send("child", "too late".to_owned(), SendMode::Followup)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("closed"));
+
+    cleanup_done.send(()).unwrap();
+    let snapshot = closing.await.unwrap().unwrap();
+    assert_eq!(snapshot.status, HandleState::Closed);
+    assert_eq!(
+        manager.store.load_run("child").await.unwrap().state,
+        RunState::Closed
+    );
+    assert!(
+        !manager
+            .store
+            .paths("child")
+            .pending_inputs
+            .try_exists()
+            .unwrap()
+    );
+    let records = manager.records.lock().await;
+    assert!(records["child"].followups.is_empty());
+    assert!(records["child"].outputs.is_empty());
+    assert!(!manager.executions.lock().unwrap().contains_key("child"));
 }
 
 #[tokio::test]

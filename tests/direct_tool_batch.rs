@@ -600,7 +600,7 @@ impl ModelProvider for PartialPromotionProvider {
                 );
                 ensure!(results[0].1 == "first" && results[2].1 == "last");
                 ensure!(!results[1].1.contains("status="));
-                ensure!(results[1].1.contains("The runtime handle is active."));
+                ensure!(results[1].1.contains("The asynchronous work is active."));
                 let handle = runtime_handle_id(results[1].1)
                     .expect("promotion acknowledgement omitted handle");
                 *self.promoted_handle.lock().unwrap() = Some(handle);

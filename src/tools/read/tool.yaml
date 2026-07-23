@@ -7,13 +7,13 @@ description: >-
   newline-free long line stops at a valid UTF-8 boundary. Images support jpg,
   jpeg, png, gif, webp, and bmp; GIF uses its first frame and GIF/BMP are
   normalized to PNG. Image reads require `image` in the current model's
-  configured modalities; otherwise read returns an error. Use bash for
-  directory listing or content discovery.
+  configured modalities; otherwise the call returns an error. Use an available
+  directory or text-search capability for path and content discovery.
 returns: >-
   The selected UTF-8 text or an image attachment. If unread text remains
   because a limit was reached, the truncation marker reports total_bytes and
-  the exact line_offset or byte_offset for the next read. Images are preserved
-  as run artifacts and sent to the model as attachments.
+  the exact line_offset or byte_offset for the next bounded read. Images are
+  preserved as run artifacts and sent to the model as attachments.
 input_schema:
   type: object
   properties:

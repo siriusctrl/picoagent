@@ -10,16 +10,16 @@ returns: >-
   `matches` is newest-first; each match has:
 
   - `ref`: `m<N>`, the stable 1-based message position in this run. Smaller
-  `N` is older. Pass it unchanged to `history_read`.
+  `N` is older. Pass it unchanged to an available history reader.
 
   - `source`: `message` when the regex matched inline message content, or
   `artifact` when it matched the complete spilled tool result associated with
   that message. An artifact match may not appear in the bounded message
-  preview returned by `history_read`.
+  preview returned by a history reader.
 
   - `artifact`: the exact workspace-relative result path when `source` is
-  `artifact`; absent for inline message matches. Read this path to inspect the
-  matching complete result.
+  `artifact`; absent for inline message matches. Inspect this path with an
+  available bounded file capability to recover the matching complete result.
 
   - `snippet`: a bounded excerpt around the match.
 

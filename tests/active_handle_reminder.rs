@@ -174,6 +174,10 @@ async fn active_handle_reminder_survives_compaction_then_disappears_after_delive
     assert!(request_contains(root_normal[1], ACTIVE_MARKER));
     assert!(request_contains(
         root_normal[2],
+        "Do not start duplicate work; use an available handle control"
+    ));
+    assert!(!request_contains(
+        root_normal[2],
         "Do not call `delegate` again"
     ));
     assert!(request_contains(

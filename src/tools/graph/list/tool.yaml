@@ -1,23 +1,23 @@
 name: graph_list
 description: >-
-  List and validate every durable planning graph in the current run. Graphs are
-  topology and accepted outcomes only: modify their YAML with `write`, execute
-  ready work with ordinary `delegate`, and supervise executions with runtime
-  handle controls. A node is resolved only when its `resolution` object has a non-empty
-  `summary`; an unresolved node is ready when every `depends_on` node is
-  resolved. A resolved node whose direct dependency is unresolved is invalid.
-  Only `wip` graphs expose ready nodes; terminal graphs always expose `ready: []`.
-  Validation checks the version and schema, canonical ids, unknown or duplicate
-  dependencies, cycles, project-relative evidence paths, and
-  consistency of `wip`, `completed`, and `aborted` top-level state. Files use
-  version/status/goal/nodes at the top level; each node maps an id to
-  objective/depends_on/resolution, and a non-null resolution contains summary
-  plus optional evidence paths. A completed graph additionally requires
-  top-level summary and no unresolved nodes; an aborted graph requires
-  abort_reason. Use `read` on a returned path for the complete topology and the
-  literal values. Because one assistant tool-call batch is concurrent, a
-  dependent `write` -> `graph_list` -> `delegate` sequence must use separate
-  assistant turns so each stage observes the preceding result.
+  List and validate every durable planning graph in the current run. Use this
+  to resume multi-turn work, check progress after accepting an outcome, derive
+  newly ready work, or detect an invalid manual edit. Graphs are topology and
+  accepted knowledge only; they do not mirror live execution state.
+
+  A node is resolved only when `resolution.summary` records an accepted outcome
+  or fact. Its optional evidence contains project-relative supporting paths.
+  An unresolved node is ready when every dependency is resolved. Read a
+  returned YAML path when the complete topology or current knowledge is needed,
+  edit it with an available file capability, and validate again before relying
+  on changed readiness.
+
+  Validation checks the version and schema, canonical ids, dependencies,
+  cycles, evidence paths, resolution ordering, and terminal state. `completed`
+  requires every node resolved plus a top-level summary; `aborted` requires an
+  abort reason. Only WIP graphs expose ready nodes. Dependent edits, validation,
+  and execution belong in separate assistant turns because calls in one batch
+  are concurrent.
 returns: >-
   JSON arrays grouped as `wip`, `completed`, `aborted`, and `invalid`. Valid
   summaries contain id, project-relative path, goal, resolved and unresolved

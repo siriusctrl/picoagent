@@ -2,7 +2,7 @@ name: web_search
 description: >-
   Search the public web. Use this for information that may have changed,
   unfamiliar topics, or when sources are needed. This searches the internet;
-  use read for local files and bash with rg for workspace text search.
+  use available local file or command capabilities for workspace content.
 returns: >-
   JSON containing the query and current results. Each result includes a title,
   URL, and description, and may include age and extra snippets.

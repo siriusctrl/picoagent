@@ -254,13 +254,7 @@ impl RuntimeHandleManager {
     }
 
     pub async fn close(&self, handle: &str) -> Result<HandleSnapshot> {
-        let mut records = self.records.lock().await;
-        if let Some(record) = records.get(handle) {
-            ensure!(
-                record.kind == HandleKind::Agent,
-                "runtime handle `{handle}` is a tool job, not an agent"
-            );
-        }
+        let _close_guard = self.close_lock.lock().await;
         let child = self.load_child_run(handle).await?;
         if child.state == RunState::Closed {
             return Ok(HandleSnapshot {
@@ -270,22 +264,31 @@ impl RuntimeHandleManager {
                 status: HandleState::Closed,
             });
         }
-        if let Some(record) = records.get(handle) {
-            ensure!(
-                record.state == HandleState::Idle,
-                "agent handle `{handle}` must be idle before it can be closed"
-            );
+        let (snapshot, active_generation) = {
+            let mut records = self.records.lock().await;
+            if let Some(record) = records.get(handle) {
+                ensure!(
+                    record.kind == HandleKind::Agent,
+                    "runtime handle `{handle}` is a tool job, not an agent"
+                );
+            }
+            let record = records
+                .entry(handle.to_owned())
+                .or_insert_with(|| HandleRecord::agent(child.name.clone()));
+            let active_generation = record.state.is_active().then_some(record.generation);
+            record.state = HandleState::Closed;
+            record.followups.clear();
+            (record.snapshot(handle), active_generation)
+        };
+        self.signal_activity();
+        if let Some(generation) = active_generation
+            && let Some(tracked) = self.take_execution(handle, generation)
+        {
+            tracked.abort();
+            tracked.wait().await;
         }
         self.store.clear_pending_inputs(handle).await?;
         self.store.update_state(handle, RunState::Closed).await?;
-        let record = records
-            .entry(handle.to_owned())
-            .or_insert_with(|| HandleRecord::agent(child.name.clone()));
-        record.state = HandleState::Closed;
-        record.followups.clear();
-        let snapshot = record.snapshot(handle);
-        drop(records);
-        self.signal_activity();
         self.events
             .emit(&RuntimeEvent::new(
                 &self.parent_run_id,

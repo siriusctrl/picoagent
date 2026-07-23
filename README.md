@@ -125,16 +125,18 @@ jobs and other external side effects are not covered by that assumption.
 
 ## Prompt Layout
 
-Fiasco keeps its built-in system prompt independent of the workspace and
-unchanged across normal agent calls. At the start of each run, the first user
-message contains a synthetic `<runtime-reminder>` block before the original
-request. The reminder snapshots the workspace path, `AGENTS.md`, discovered
-skill metadata, memory locations, and any delegated-task instructions that
-apply to the role. It also records the role and remaining delegation depth;
-GeneralTask guidance lives here rather than in a second system prompt. Built-in
-tool schemas are identical for Root and GeneralTask, sorted, and frozen for the
-run; configuration or file changes take effect on the next run. The environment
-section also states `current model supported
+Fiasco keeps its built-in system prompt independent of the workspace,
+tool-agnostic, and unchanged across normal agent calls. Each typed `tool.yaml`
+owns its capability's workflow guidance as well as its schema, so removing a
+tool removes its model-facing instructions too. At the start of each run, the
+first user message contains a synthetic `<runtime-reminder>` block before the
+original request. The reminder snapshots the workspace path, `AGENTS.md`,
+discovered skill metadata, memory locations, and any delegated-task
+instructions that apply to the role. It also records the role and remaining
+delegation depth; GeneralTask guidance lives here rather than in a second
+system prompt. Built-in tool schemas are identical for Root and GeneralTask,
+sorted, and frozen for the run; configuration or file changes take effect on
+the next run. The environment section also states `current model supported
 modalities: [text]` (or `[text, image]`); the stable system prompt tells the
 agent not to request an absent modality. Compaction reuses this stable
 system/tool prefix and adds one final user instruction only to the compaction
@@ -176,28 +178,39 @@ provider description and owns validation, assembly, and execution.
 
 ## File-backed Planning Graphs
 
-For a complex task, `graph_init` accepts the goal and complete initial node map,
-validates the DAG, and creates a short run-local path such as
+For a complex task, `graph_init` accepts one complete version-1 `wip` graph
+document, validates its topology and any accepted resolutions, and creates a
+short run-local path such as
 `.fiasco/runs/<run-id>/graphs/g1.yaml`. Invalid initialization creates no file.
 The graph is durable coordination state, not a scheduler: nodes are work items,
 dependencies are accepted-outcome dependencies, and a node is resolved only
-when the main agent writes a resolution. Use ordinary `read` and `write` for
-later revisions, then call `graph_list` to validate them and derive ready nodes.
-Execute independent ready work with concurrent `delegate` calls and supervise
-those runs with the runtime-handle controls; handles are not stored in the
-graph.
+when the main agent accepts a resolution. Initial resolutions let the first
+document record knowledge already established before the graph was created.
+Use ordinary `read` and `write` for later revisions, then call `graph_list` to
+validate them and derive ready nodes. Execute independent ready work with
+concurrent `delegate` calls and supervise those runs with the runtime-handle
+controls; handles are not stored in the graph.
 
 ```json
 {
-  "goal": "Implement and verify image input support",
-  "nodes": {
-    "inspect_api": {
-      "objective": "Determine the provider request contract",
-      "depends_on": []
-    },
-    "implement": {
-      "objective": "Implement the accepted contract",
-      "depends_on": ["inspect_api"]
+  "graph": {
+    "version": 1,
+    "status": "wip",
+    "goal": "Implement and verify image input support",
+    "nodes": {
+      "inspect_api": {
+        "objective": "Determine the provider request contract",
+        "depends_on": [],
+        "resolution": {
+          "summary": "The provider accepts native image content blocks",
+          "evidence": ["docs/provider-contract.md"]
+        }
+      },
+      "implement": {
+        "objective": "Implement the accepted contract",
+        "depends_on": ["inspect_api"],
+        "resolution": null
+      }
     }
   }
 }
@@ -456,7 +469,7 @@ The launch tool surface is intentionally small:
 - `inspect`: read a bounded window of a child agent's messages
 - `send_message`: send `steer` input now or queue `followup` input for later
 - `stop`: stop a tool job or the current activity of a reusable agent
-- `close`: explicitly close an idle delegated agent
+- `close`: cancel current agent activity if needed, then permanently close it
 - `web_search`: optional Brave-backed public web search
 
 Root and GeneralTask receive the same built-in schemas, including `delegate`
@@ -557,7 +570,8 @@ task-specific context; the child does not inherit the parent conversation. A
 completed activity leaves that child idle. `send_message` resumes the same child
 with an ordinary user message, `followup` queues that message without blocking
 the parent, and a stopped agent stays paused until its next `send_message`.
-`close` is the explicit end of the agent's lifetime and
+`close` is the explicit end of the agent's lifetime. It cancels and waits for
+current activity when needed, rejects new input once closing begins, and
 discards any still-queued followups. Its
 trajectory is stored in the child run, so reuse, resume, and history retrieval
 do not depend on a live parent process.

@@ -1,11 +1,14 @@
 # ADR 0028: Keep Cross-Tool Workflow in the Stable System Prompt
 
-- Status: Accepted
+- Status: Superseded by ADR 0039
 - Date: 2026-07-21
 - Refines: ADR 0004 (history guidance placement)
 - Refines: ADR 0024 (tool-family guidance placement)
 
 ## Context
+
+ADR 0039 replaces this placement after tool ablation became a concrete product
+requirement. This document remains the record of the earlier tradeoff.
 
 The initial runtime reminder repeated a fixed task-control paragraph on every
 run, while compacted-history and graph workflow could be restated in benchmark
