@@ -218,8 +218,8 @@ async fn run_action(
             model_stream_idle_timeout_seconds: config.runtime.model_stream_idle_timeout_seconds,
             model_request_deadline_seconds: config.runtime.model_request_deadline_seconds,
             max_output_tokens: config.runtime.max_output_tokens,
-            foreground_tool_timeout_seconds: config.tasks.foreground_tool_timeout_seconds,
-            task_wait_timeout_seconds: config.tasks.wait_timeout_seconds,
+            foreground_tool_timeout_seconds: config.handles.foreground_tool_timeout_seconds,
+            handle_wait_timeout_seconds: config.handles.wait_timeout_seconds,
             compaction: fiasco::agent::CompactionOptions {
                 compact_at_tokens: config.compaction.compact_at_tokens,
                 context_window_tokens: config.compaction.context_window_tokens,

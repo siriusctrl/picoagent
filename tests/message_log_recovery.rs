@@ -10,6 +10,7 @@ use tokio::io::AsyncWriteExt;
 fn record(workspace: &Path) -> RunRecord {
     RunRecord::new(
         "run-1",
+        "root",
         "do the work",
         "test-provider",
         "test-model",

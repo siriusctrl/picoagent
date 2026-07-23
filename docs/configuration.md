@@ -120,7 +120,7 @@ streaming, authentication refresh, and compatible-endpoint rate-limit backoff,
 but not tool execution or time waiting for the model slot. Normal and
 compaction calls use the same pair. An expired normal call fails the run, while
 an expired compaction call leaves the current context unchanged. Both parallel
-capacities, configured output token limits, model timeout values, and task
+capacities, configured output token limits, model timeout values, and handle
 wait/foreground limits must be greater than zero.
 
 The OpenAI-compatible adapter additionally retries initial HTTP 429 responses
@@ -182,7 +182,7 @@ would keep its full context instead of compacting without an exact-recovery
 path.
 
 Root and GeneralTask each assemble the same sorted built-in registry and freeze
-it before their first provider call. `delegate` and all task controls remain in
+it before their first provider call. `delegate` and all handle controls remain in
 that registry at every depth. Delegating and leaf remain separate persisted
 profiles for recovery, but do not change schema membership. The exact remaining
 delegation depth is frozen in run metadata and shown in the runtime reminder;
@@ -203,10 +203,10 @@ that subprocess. Remote readers may implement the same interface directly.
 Compaction is local and model-generated. Fiasco does not currently call a
 provider's server-side compaction API.
 
-## Background Tasks And Agent Profiles
+## Runtime Handles And Agent Profiles
 
 ```toml
-[tasks]
+[handles]
 foreground_tool_timeout_seconds = 30
 wait_timeout_seconds = 10
 
@@ -218,14 +218,14 @@ wait_timeout_seconds = 10
 `foreground_tool_timeout_seconds` is one shared promotion window for all
 direct calls in an assistant message, not an execution deadline per call. The
 batch returns early when all calls settle. When the window expires, each
-already-running unfinished direct tool continues as a background task and the
-model receives a status-less runtime notice with its task id and name.
-Delegated agents have no harness execution deadline. Each `task_wait` call
-returns when any selected task becomes inactive or after at most
+already-running unfinished direct tool continues under a process-local handle
+and the model receives a status-less runtime notice with its handle and name.
+Delegated agents have no harness execution deadline. Each `wait` call returns
+when any selected handle has a result or status change, or after at most
 `wait_timeout_seconds`, without cancelling unfinished work; this value must be
-strictly lower than the foreground window. `task_stop` interrupts a one-shot
-task or only the current activity of a reusable agent; the stopped agent stays
-idle and paused until its next explicit `task_send`.
+strictly lower than the foreground window. `stop` interrupts a tool job or only
+the current activity of a reusable agent; the stopped agent stays idle and
+paused until its next explicit `send_message`.
 `max_parallel_subagents` limits delegated child execution in one parent run;
 already-running direct calls are not paused when they are promoted. On Unix,
 cancelling `bash` terminates its process-group descendants too.
@@ -312,4 +312,4 @@ Hooks inherit fiasco's host permissions. A nonzero `run_start`,
 best-effort post-commit notification: its failure is logged but cannot turn a
 completed root or child activity back into resumable failed work and replay
 earlier hook effects. For a reusable child, it runs after every successful
-activity once the child is idle; explicit `task_close` does not invoke it.
+activity once the child is idle; explicit `close` does not invoke it.

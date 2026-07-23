@@ -8,13 +8,11 @@
 - `src/agent/tool_execution.rs`: shared direct/background ordinary-tool hooks,
   events, foreground promotion, and artifact-backed output persistence.
 - `src/agent/types.rs`: runner configuration, request, and result contracts.
-- `src/agent/task.rs`: background task coordination and delivery state.
-- `src/agent/task/control.rs`: status, listing, message routing, stop, and close.
-- `src/agent/task/coordination.rs`: wait-any, active snapshots, and output delivery.
-- `src/agent/task/execution.rs`: background tool and child-run execution.
-- `src/agent/task/lifecycle.rs`: activity outputs, interruption, and events.
-- `src/agent/task/record.rs`: persisted background task state and model envelope.
-- `src/agent/task/recovery.rs`: task reload, restart interruption, and cancellation.
+- `src/agent/handle.rs`: process-local runtime-handle coordination.
+- `src/agent/handle/control.rs`: discovery, status, message routing, stop, and close.
+- `src/agent/handle/coordination.rs`: wait-any, active snapshots, and output delivery.
+- `src/agent/handle/execution.rs`: promoted-tool and child-activity execution.
+- `src/agent/handle/lifecycle.rs`: activity completion, cancellation, and events.
 - `src/storage/input.rs`: durable pending user input used by non-interrupting child steering.
 - `src/agent/context.rs`: deterministic prompt framing and dynamic reminder assembly.
 - `src/prompts.rs`: typed access to the embedded agent prompt registry.
@@ -37,8 +35,8 @@
   `src/tools/history/mod.rs` registers the complete family.
 - `src/tools/graph/{init,list}/`: run-local YAML planning-graph initialization
   and validation; `src/tools/graph/model.rs` owns the file contract.
-- `src/tools/task/{inspect,status,steer,stop,wait}/`: background-task controls;
-  `src/tools/task/mod.rs` registers the complete family and owns their shared
+- `src/tools/handle/{close,inspect,list,send,status,stop,wait}/`: runtime-handle controls;
+  `src/tools/handle/mod.rs` registers the complete family and owns their shared
   result projection.
 - Every leaf manifest contains its complete provider-visible name, purpose,
   return guidance, and input schema; directory paths never derive names.

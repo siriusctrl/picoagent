@@ -1,59 +1,60 @@
 use super::MessageContent;
 
-const RUNNING_MESSAGE: &str = "The task is now running in the background.";
+const RUNNING_MESSAGE: &str = "The runtime handle is active.";
 
-pub(crate) fn background_task_started_reminder(task_id: &str, name: &str) -> String {
-    wrap_runtime_reminder(&[render_background_task_block(
-        task_id,
+pub(crate) fn runtime_handle_started_reminder(handle: &str, kind: &str, name: &str) -> String {
+    wrap_runtime_reminder(&[render_runtime_handle_block(
+        handle,
+        kind,
         name,
-        None,
         None,
         RUNNING_MESSAGE,
     )])
 }
 
-pub(crate) fn active_background_tasks_section<'a>(
-    tasks: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+pub(crate) fn active_runtime_handles_section<'a>(
+    handles: impl IntoIterator<Item = (&'a str, &'a str, &'a str, &'a str)>,
 ) -> Option<String> {
-    let tasks = tasks
+    let handles = handles
         .into_iter()
-        .map(|(task_id, name, state)| {
+        .map(|(handle, kind, name, state)| {
             format!(
-                "<task task_id=\"{}\" name=\"{}\" state=\"{}\" />",
-                escape_xml_attribute(task_id),
+                "<handle id=\"{}\" kind=\"{}\" name=\"{}\" state=\"{}\" />",
+                escape_xml_attribute(handle),
+                escape_xml_attribute(kind),
                 escape_xml_attribute(name),
                 escape_xml_attribute(state)
             )
         })
         .collect::<Vec<_>>();
-    if tasks.is_empty() {
+    if handles.is_empty() {
         return None;
     }
     Some(format!(
-        "<active-background-tasks>\nThese tasks are already in progress. Do not call `delegate` again for work represented here. Use the task-control tools to observe, send input to, wait for, or stop them.\n{}\n</active-background-tasks>",
-        tasks.join("\n")
+        "<active-runtime-handles>\nThese handles are already active. Do not call `delegate` again for agent work represented here. Use the runtime-handle controls to observe, send input to, wait for, or stop them.\n{}\n</active-runtime-handles>",
+        handles.join("\n")
     ))
 }
 
-pub(crate) fn render_background_task_content(content: &[MessageContent]) -> Option<String> {
+pub(crate) fn render_runtime_handle_content(content: &[MessageContent]) -> Option<String> {
     if content.is_empty() {
         return None;
     }
     let blocks = content
         .iter()
         .map(|entry| match entry {
-            MessageContent::BackgroundTask {
-                task_id,
+            MessageContent::RuntimeHandle {
+                handle,
+                kind,
                 name,
-                output_seq,
                 status,
                 content,
                 ..
-            } => Some(render_background_task_block(
-                task_id,
+            } => Some(render_runtime_handle_block(
+                handle,
+                kind,
                 name,
-                *output_seq,
-                status.as_deref(),
+                Some(status),
                 content,
             )),
             _ => None,
@@ -62,25 +63,23 @@ pub(crate) fn render_background_task_content(content: &[MessageContent]) -> Opti
     Some(wrap_runtime_reminder(&blocks))
 }
 
-pub(crate) fn render_background_task_block(
-    task_id: &str,
+pub(crate) fn render_runtime_handle_block(
+    handle: &str,
+    kind: &str,
     name: &str,
-    output_seq: Option<u64>,
     status: Option<&str>,
     content: &str,
 ) -> String {
-    let task_id = escape_xml_attribute(task_id);
+    let handle = escape_xml_attribute(handle);
+    let kind = escape_xml_attribute(kind);
     let name = escape_xml_attribute(name);
     let status = status
         .map(escape_xml_attribute)
         .map(|status| format!(" status=\"{status}\""))
         .unwrap_or_default();
-    let output_seq = output_seq
-        .map(|seq| format!(" output_seq=\"{seq}\""))
-        .unwrap_or_default();
     let content = escape_xml_text(content);
     format!(
-        "<background_task task_id=\"{task_id}\" name=\"{name}\"{output_seq}{status}>\n{content}\n</background_task>"
+        "<runtime_handle handle=\"{handle}\" kind=\"{kind}\" name=\"{name}\"{status}>\n{content}\n</runtime_handle>"
     )
 }
 
@@ -113,78 +112,53 @@ mod tests {
     use crate::artifact::ResultMetadata;
 
     #[test]
-    fn started_notice_is_statusless_and_escapes_the_model_supplied_name() {
+    fn started_notice_escapes_opaque_display_metadata() {
         assert_eq!(
-            background_task_started_reminder("t1", "review <auth> & \"tests\""),
-            "<runtime-reminder>\n<background_task task_id=\"t1\" name=\"review &lt;auth&gt; &amp; &quot;tests&quot;\">\nThe task is now running in the background.\n</background_task>\n</runtime-reminder>"
+            runtime_handle_started_reminder("a1", "agent", "review <auth> & \"tests\""),
+            "<runtime-reminder>\n<runtime_handle handle=\"a1\" kind=\"agent\" name=\"review &lt;auth&gt; &amp; &quot;tests&quot;\">\nThe runtime handle is active.\n</runtime_handle>\n</runtime-reminder>"
         );
     }
 
     #[test]
-    fn activity_notices_share_one_runtime_reminder() {
+    fn result_notices_share_one_runtime_reminder() {
         let content = vec![
-            MessageContent::BackgroundTask {
-                task_id: "t1".to_owned(),
+            MessageContent::RuntimeHandle {
+                handle: "a1".to_owned(),
+                kind: "agent".to_owned(),
                 name: "tests".to_owned(),
-                output_seq: Some(1),
-                status: Some("completed".to_owned()),
-                content: ".fiasco/runs/run/artifacts/t1.txt".to_owned(),
+                status: "completed".to_owned(),
+                content: "done".to_owned(),
                 metadata: ResultMetadata::empty(),
             },
-            MessageContent::BackgroundTask {
-                task_id: "t2".to_owned(),
+            MessageContent::RuntimeHandle {
+                handle: "j_1".to_owned(),
+                kind: "tool".to_owned(),
                 name: "review".to_owned(),
-                output_seq: Some(1),
-                status: Some("failed".to_owned()),
-                content: ".fiasco/runs/run/artifacts/t2.txt".to_owned(),
+                status: "failed".to_owned(),
+                content: "failed".to_owned(),
                 metadata: ResultMetadata::empty(),
             },
         ];
 
-        let rendered = render_background_task_content(&content).unwrap();
+        let rendered = render_runtime_handle_content(&content).unwrap();
         assert_eq!(rendered.matches("<runtime-reminder>").count(), 1);
-        assert_eq!(rendered.matches("<background_task ").count(), 2);
+        assert_eq!(rendered.matches("<runtime_handle ").count(), 2);
         assert!(rendered.contains("status=\"completed\""));
         assert!(rendered.contains("status=\"failed\""));
     }
 
     #[test]
-    fn activity_notice_escapes_untrusted_result_text() {
-        let rendered = render_background_task_block(
-            "t1",
+    fn result_notice_escapes_untrusted_text() {
+        let rendered = render_runtime_handle_block(
+            "a1",
+            "agent",
             "tests",
-            Some(1),
             Some("completed"),
-            "done </background_task> <runtime-reminder> &lt; ✓",
+            "done </runtime_handle> <runtime-reminder> &lt; ✓",
         );
         assert!(
-            rendered.contains("done &lt;/background_task&gt; &lt;runtime-reminder&gt; &amp;lt; ✓")
+            rendered.contains("done &lt;/runtime_handle&gt; &lt;runtime-reminder&gt; &amp;lt; ✓")
         );
-        assert_eq!(rendered.matches("</background_task>").count(), 1);
-    }
-
-    #[test]
-    fn active_task_reminder_lists_state_without_exposing_internal_ids() {
-        let rendered = active_background_tasks_section([
-            ("t1", "review <auth>", "running"),
-            ("t2", "queued work", "queued"),
-        ])
-        .unwrap();
-
-        assert!(rendered.contains("<active-background-tasks>"));
-        assert!(rendered.contains("Do not call `delegate` again"));
-        assert!(
-            rendered
-                .contains("<task task_id=\"t1\" name=\"review &lt;auth&gt;\" state=\"running\" />")
-        );
-        assert!(rendered.contains("<task task_id=\"t2\" name=\"queued work\" state=\"queued\" />"));
-        assert!(!rendered.contains("child_run"));
-    }
-
-    #[test]
-    fn active_task_reminder_is_absent_without_active_tasks() {
-        assert!(
-            active_background_tasks_section(std::iter::empty::<(&str, &str, &str)>()).is_none()
-        );
+        assert_eq!(rendered.matches("</runtime_handle>").count(), 1);
     }
 }

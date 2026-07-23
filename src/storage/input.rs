@@ -22,6 +22,16 @@ struct PendingInput {
 }
 
 impl RunDirStore {
+    pub(crate) async fn clear_pending_inputs(&self, run_id: &str) -> Result<()> {
+        let _guard = self.input_lock.lock().await;
+        let path = self.paths(run_id).pending_inputs;
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
+        }
+    }
+
     pub(crate) async fn enqueue_user_input_with_id(
         &self,
         run_id: &str,
@@ -67,7 +77,7 @@ impl RunDirStore {
             ensure!(
                 matches!(
                     run.state,
-                    RunState::Queued | RunState::Running | RunState::Idle
+                    RunState::Queued | RunState::Running | RunState::Open
                 ),
                 "run `{run_id}` is already {:?}",
                 run.state
@@ -98,24 +108,6 @@ impl RunDirStore {
         file.flush().await?;
         file.sync_data().await?;
         Ok(())
-    }
-
-    pub(crate) async fn has_pending_user_input(&self, run_id: &str) -> Result<bool> {
-        let _guard = self.input_lock.lock().await;
-        let path = self.paths(run_id).pending_inputs;
-        let bytes = match tokio::fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
-        };
-        let inputs = parse_pending_inputs(&bytes, &path)?;
-        let committed = self
-            .load_trajectory(run_id)
-            .await?
-            .into_iter()
-            .filter_map(|message| message.pending_input_id)
-            .collect::<HashSet<_>>();
-        Ok(inputs.iter().any(|input| !committed.contains(&input.id)))
     }
 
     pub(crate) async fn append_pending_inputs(

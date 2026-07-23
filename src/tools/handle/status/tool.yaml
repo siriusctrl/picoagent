@@ -1,0 +1,16 @@
+name: status
+description: >-
+  Inspect selected runtime handles without waiting. Agent handles address
+  durable threads; tool-job handles address current-process asynchronous work.
+  Omit handles to inspect all visible handles.
+returns: >-
+  JSON `{handles:[{handle,kind,name,status}]}`.
+input_schema:
+  type: object
+  properties:
+    handles:
+      type: array
+      items:
+        type: string
+      description: Runtime handles to inspect; omit to inspect all
+  additionalProperties: false

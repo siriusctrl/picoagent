@@ -69,12 +69,12 @@ fn tool_results(request: &ModelRequest) -> Vec<(&str, &str)> {
         .collect()
 }
 
-fn background_task_id(content: &str) -> Option<String> {
+fn runtime_handle_id(content: &str) -> Option<String> {
     content
-        .split_once("task_id=\"")?
+        .split_once("handle=\"")?
         .1
         .split_once('"')
-        .map(|(task_id, _)| task_id.to_owned())
+        .map(|(handle, _)| handle.to_owned())
 }
 
 struct ScheduledTool {
@@ -160,7 +160,7 @@ fn runner(
         extra_events,
         options: RunnerOptions {
             foreground_tool_timeout_seconds: foreground_timeout_seconds,
-            task_wait_timeout_seconds: 5,
+            handle_wait_timeout_seconds: 5,
             ..RunnerOptions::default()
         },
     })
@@ -571,7 +571,7 @@ async fn text_only_image_read_returns_a_tool_error_without_an_attachment() {
 
 struct PartialPromotionProvider {
     calls: AtomicUsize,
-    promoted_task_id: Mutex<Option<String>>,
+    promoted_handle: Mutex<Option<String>>,
 }
 
 #[async_trait]
@@ -600,19 +600,15 @@ impl ModelProvider for PartialPromotionProvider {
                 );
                 ensure!(results[0].1 == "first" && results[2].1 == "last");
                 ensure!(!results[1].1.contains("status="));
-                ensure!(
-                    results[1]
-                        .1
-                        .contains("The task is now running in the background.")
-                );
-                let task_id = background_task_id(results[1].1)
-                    .expect("promotion acknowledgement omitted task_id");
-                *self.promoted_task_id.lock().unwrap() = Some(task_id);
+                ensure!(results[1].1.contains("The runtime handle is active."));
+                let handle = runtime_handle_id(results[1].1)
+                    .expect("promotion acknowledgement omitted handle");
+                *self.promoted_handle.lock().unwrap() = Some(handle);
                 Ok(text_response("waiting for automatic delivery"))
             }
             2 => {
                 let expected = self
-                    .promoted_task_id
+                    .promoted_handle
                     .lock()
                     .unwrap()
                     .clone()
@@ -622,9 +618,9 @@ impl ModelProvider for PartialPromotionProvider {
                     .iter()
                     .flat_map(|message| &message.content)
                     .filter_map(|content| match content {
-                        MessageContent::BackgroundTask {
-                            task_id, content, ..
-                        } => Some((task_id.as_str(), content.as_str())),
+                        MessageContent::RuntimeHandle {
+                            handle, content, ..
+                        } => Some((handle.as_str(), content.as_str())),
                         _ => None,
                     })
                     .collect::<Vec<_>>();
@@ -650,14 +646,14 @@ impl ModelProvider for PartialPromotionProvider {
 }
 
 #[tokio::test]
-async fn direct_batch_promotes_only_the_unfinished_future_and_delivers_it_by_task_id() {
+async fn direct_batch_promotes_only_the_unfinished_future_and_delivers_it_by_handle() {
     let workspace = TempDir::new().unwrap();
     let store = RunDirStore::new(workspace.path());
     let completions = Arc::new(Mutex::new(Vec::new()));
     let executions = Arc::new(AtomicUsize::new(0));
     let provider = Arc::new(PartialPromotionProvider {
         calls: AtomicUsize::new(0),
-        promoted_task_id: Mutex::new(None),
+        promoted_handle: Mutex::new(None),
     });
     let runner = runner(
         &workspace,
@@ -688,18 +684,15 @@ async fn direct_batch_promotes_only_the_unfinished_future_and_delivers_it_by_tas
         messages
             .iter()
             .flat_map(|message| &message.content)
-            .filter(|content| matches!(content, MessageContent::BackgroundTask { .. }))
+            .filter(|content| matches!(content, MessageContent::RuntimeHandle { .. }))
             .count(),
         1
     );
-    let mut task_files = tokio::fs::read_dir(store.paths(&result.run_id).directory.join("tasks"))
-        .await
-        .unwrap();
-    let task_path = task_files.next_entry().await.unwrap().unwrap().path();
-    assert!(task_files.next_entry().await.unwrap().is_none());
-    let task_record: Value =
-        serde_json::from_slice(&tokio::fs::read(task_path).await.unwrap()).unwrap();
-    assert_eq!(task_record["origin_call_id"], "call-background");
+    assert!(
+        !tokio::fs::try_exists(store.paths(&result.run_id).directory.join("tasks"))
+            .await
+            .unwrap()
+    );
 }
 
 struct BoundaryFailureProvider;
@@ -768,13 +761,5 @@ async fn batch_boundary_error_promotes_other_pending_futures_before_returning() 
         .unwrap()
         .unwrap()
         .path();
-    let task_path = std::fs::read_dir(run_dir.join("tasks"))
-        .expect("the other pending future was dropped instead of promoted")
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let task: Value = serde_json::from_slice(&tokio::fs::read(task_path).await.unwrap()).unwrap();
-    assert_eq!(task["name"], "scheduled");
-    assert_eq!(task["state"], "cancelled");
+    assert!(!run_dir.join("tasks").exists());
 }

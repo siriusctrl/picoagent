@@ -17,17 +17,10 @@ use crate::agent::types::RunProfile;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RunMode {
     New,
-    /// Reuse a completed child transcript for another explicitly requested
-    /// activity in the same process lifetime.
-    Continue,
-    /// Resume a durable run after its owning fiasco process stopped.
-    Restart,
-}
-
-impl RunMode {
-    pub(super) fn is_existing(self) -> bool {
-        self != Self::New
-    }
+    /// Run a new explicitly requested activity on an existing child thread.
+    ChildActivity,
+    /// Resume only the root transcript after its owning process stopped.
+    RootRestart,
 }
 
 pub(super) struct RunPlan {
@@ -54,13 +47,12 @@ impl AgentRunner {
             .await
     }
 
-    /// Persist a queued run before its owner advertises it. Delegation uses
-    /// this to guarantee that every committed child task already has a
-    /// self-contained run directory which can be resumed after a restart.
+    /// Persist a queued run before its owner advertises the new agent handle.
     pub(crate) async fn prepare_run(&self, request: &RunRequest, run_id: &str) -> Result<()> {
         let plan = self.plan(request);
-        let record = RunRecord::new(
+        let mut record = RunRecord::new(
             run_id,
+            &request.name,
             &request.prompt,
             self.provider.name(),
             &plan.model,
@@ -75,6 +67,9 @@ impl AgentRunner {
         )
         .with_model_modalities(plan.modalities.clone())
         .with_provider_resume_fingerprint(self.provider.resume_fingerprint());
+        if request.parent_run_id.is_some() {
+            record.state = RunState::Open;
+        }
         self.store.create_run(&record).await?;
         Ok(())
     }
@@ -103,7 +98,9 @@ impl AgentRunner {
             )
             .await;
         if let Err(error) = &outcome {
-            let _ = self.store.update_state(&run_id, RunState::Failed).await;
+            if !is_child {
+                let _ = self.store.update_state(&run_id, RunState::Failed).await;
+            }
             let kind = if is_child {
                 RuntimeEventKind::RunActivityFailed {
                     error: format!("{error:#}"),
@@ -153,12 +150,9 @@ impl AgentRunner {
         self.store.write_final(run_id, final_output).await?;
         let run = self.store.load_run(run_id).await?;
         let is_child = run.parent_run_id.is_some();
-        let state = if is_child {
-            RunState::Idle
-        } else {
-            RunState::Completed
-        };
-        self.store.update_state(run_id, state).await?;
+        if !is_child {
+            self.store.update_state(run_id, RunState::Completed).await?;
+        }
         if let Err(error) = self
             .hooks
             .run(

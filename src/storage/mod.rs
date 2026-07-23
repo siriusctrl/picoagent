@@ -18,20 +18,22 @@ use crate::{
 
 mod input;
 mod message_log;
+#[cfg(test)]
+mod tests;
 mod trajectory;
 
 pub use message_log::TranscriptTimeline;
 
 pub const MESSAGE_FORMAT: &str = "fiasco-message";
-const RUN_RECORD_VERSION: u32 = 10;
+const RUN_RECORD_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
     Queued,
     Running,
-    /// A reusable delegated agent is waiting for more input.
-    Idle,
+    /// A reusable delegated agent thread remains open for more activity.
+    Open,
     Completed,
     Failed,
     Cancelled,
@@ -43,6 +45,8 @@ pub enum RunState {
 pub struct RunRecord {
     pub version: u32,
     pub id: String,
+    /// Stable display metadata for this root or delegated agent thread.
+    pub name: String,
     pub parent_run_id: Option<String>,
     pub state: RunState,
     pub prompt: String,
@@ -65,9 +69,16 @@ pub struct RunRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Deserialize)]
+struct RunParentProjection {
+    id: String,
+    parent_run_id: Option<String>,
+}
+
 impl RunRecord {
     pub fn new(
         id: impl Into<String>,
+        name: impl Into<String>,
         prompt: impl Into<String>,
         provider: impl Into<String>,
         model: impl Into<String>,
@@ -78,6 +89,7 @@ impl RunRecord {
         Self {
             version: RUN_RECORD_VERSION,
             id: id.into(),
+            name: name.into(),
             parent_run_id,
             state: RunState::Queued,
             prompt: prompt.into(),
@@ -209,6 +221,7 @@ impl RunDirStore {
             run.model_modalities.contains(&ModelModality::Text),
             "run record model modalities must include text"
         );
+        ensure!(!run.name.trim().is_empty(), "run name must not be empty");
         validate_run_parentage(run)?;
         if paths.metadata.exists() {
             bail!("run `{}` already exists", run.id);
@@ -264,6 +277,44 @@ impl RunDirStore {
         Ok(run)
     }
 
+    pub(crate) async fn list_child_runs(&self, parent_run_id: &str) -> Result<Vec<RunRecord>> {
+        let directory = self.workspace.join(".fiasco").join("runs");
+        let mut entries = match tokio::fs::read_dir(&directory).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("read run directory {}", directory.display()));
+            }
+        };
+        let mut children = Vec::new();
+        while let Some(entry) = entries.next_entry().await? {
+            if !entry.file_type().await?.is_dir() {
+                continue;
+            }
+            let metadata = entry.path().join("run.json");
+            if !tokio::fs::try_exists(&metadata).await? {
+                continue;
+            }
+            let bytes = tokio::fs::read(&metadata)
+                .await
+                .with_context(|| format!("read {}", metadata.display()))?;
+            let projection = match serde_json::from_slice::<RunParentProjection>(&bytes) {
+                Ok(projection) => projection,
+                Err(_) => continue,
+            };
+            if projection.parent_run_id.as_deref() != Some(parent_run_id) {
+                continue;
+            }
+            let run: RunRecord = serde_json::from_slice(&bytes)
+                .with_context(|| format!("parse child run `{}`", projection.id))?;
+            validate_loaded_run(&run)?;
+            children.push(run);
+        }
+        children.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(children)
+    }
+
     /// Hold this lease for the full lifetime of a running or resumed loop.
     /// It prevents two processes from advancing the same transcript at once.
     pub async fn acquire_run_lease(&self, run_id: &str) -> Result<RunLease> {
@@ -315,6 +366,7 @@ pub(super) fn validate_loaded_run(run: &RunRecord) -> Result<()> {
         run.model_modalities.contains(&ModelModality::Text),
         "run record model modalities must include text"
     );
+    ensure!(!run.name.trim().is_empty(), "run name must not be empty");
     validate_run_parentage(run)
 }
 

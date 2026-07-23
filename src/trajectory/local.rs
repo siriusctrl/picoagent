@@ -164,7 +164,7 @@ fn project_readable_messages(
                 MessageContent::ToolResult { .. } => {
                     !hidden_result_messages.contains(&message_index)
                 }
-                MessageContent::BackgroundTask { .. } => true,
+                MessageContent::RuntimeHandle { .. } => true,
                 MessageContent::Image { .. } => true,
                 MessageContent::Text { .. } => true,
             });
@@ -231,7 +231,7 @@ fn artifact_refs(record: &TrajectoryMessage) -> Result<Vec<&ArtifactRef>> {
                 }
                 metadata.artifact.as_ref()
             }
-            MessageContent::BackgroundTask { metadata, .. } => metadata.artifact.as_ref(),
+            MessageContent::RuntimeHandle { metadata, .. } => metadata.artifact.as_ref(),
             _ => continue,
         };
         if let Some(artifact) = artifact {
@@ -250,18 +250,18 @@ fn match_message(record: &TrajectoryMessage, pattern: &Regex) -> Option<HistoryM
                 name, arguments, ..
             } => format!("{name} {}", arguments.as_raw()),
             MessageContent::ToolResult { content, .. } => content.clone(),
-            MessageContent::BackgroundTask {
-                task_id,
+            MessageContent::RuntimeHandle {
+                handle,
+                kind,
                 name,
-                output_seq,
                 status,
                 content,
                 ..
-            } => crate::model::runtime::render_background_task_block(
-                task_id,
+            } => crate::model::runtime::render_runtime_handle_block(
+                handle,
+                kind,
                 name,
-                *output_seq,
-                status.as_deref(),
+                Some(status),
                 content,
             ),
             MessageContent::RuntimeReminder { .. }

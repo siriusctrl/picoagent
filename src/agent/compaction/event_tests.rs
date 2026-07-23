@@ -267,6 +267,7 @@ async fn compaction_holds_the_model_slot_until_completed_is_emitted() {
     store
         .create_run(&RunRecord::new(
             "run",
+            "root",
             "initial",
             provider.name(),
             "test-model",

@@ -21,8 +21,8 @@ use super::{
         CompactionAttempt, build_active_context, estimate_message_tokens,
         estimate_request_input_tokens, maybe_compact,
     },
-    context::{append_active_task_reminder, build_runtime_reminder},
-    task::{PendingTaskBoundary, TaskManager, TaskManagerConfig},
+    context::{append_active_handle_reminder, build_runtime_reminder},
+    handle::{PendingHandleBoundary, RuntimeHandleManager, RuntimeHandleManagerConfig},
     tool_execution::DirectToolRuntime,
 };
 
@@ -33,7 +33,7 @@ mod model_request;
 mod recovery;
 
 use lifecycle::RunMode;
-use recovery::{append_background_results, append_restart_reminder, resumable_final_text};
+use recovery::{append_handle_results, append_restart_reminder};
 
 pub struct AgentRunner {
     provider: Arc<dyn ModelProvider>,
@@ -87,7 +87,9 @@ impl AgentRunner {
         let plan = self.plan(&request);
         let model = plan.model.clone();
         let max_output_tokens = plan.max_output_tokens;
-        self.store.update_state(&run_id, RunState::Running).await?;
+        if request.parent_run_id.is_none() {
+            self.store.update_state(&run_id, RunState::Running).await?;
+        }
         let (mut trajectory, needs_initial_message) = match mode {
             RunMode::New => {
                 events
@@ -107,7 +109,7 @@ impl AgentRunner {
                     .await?;
                 (Vec::new(), true)
             }
-            RunMode::Continue | RunMode::Restart => {
+            RunMode::ChildActivity | RunMode::RootRestart => {
                 let trajectory = self.store.load_trajectory(&run_id).await?;
                 let needs_initial_message = trajectory.is_empty();
                 events
@@ -158,7 +160,7 @@ impl AgentRunner {
             .is_some_and(|tokens| tokens > 0)
             && (tool_assembly.contains("read") || tool_assembly.contains("bash"));
 
-        let task_config = TaskManagerConfig {
+        let handle_config = RuntimeHandleManagerConfig {
             runner: self.clone(),
             artifacts: self.artifacts.clone(),
             store: self.store.clone(),
@@ -168,15 +170,10 @@ impl AgentRunner {
             remaining_delegation_depth: plan.remaining_delegation_depth,
             events: events.clone(),
             max_parallel_subagents: self.options.max_parallel_subagents,
-            wait_timeout_seconds: self.options.task_wait_timeout_seconds,
+            wait_timeout_seconds: self.options.handle_wait_timeout_seconds,
         };
-        let manager = if mode.is_existing() {
-            TaskManager::load_existing(task_config).await?
-        } else {
-            TaskManager::new(task_config)
-        };
-        let task_manager = manager;
-        let registry = tool_assembly.finish(task_manager.clone())?;
+        let handles = RuntimeHandleManager::new(handle_config);
+        let registry = tool_assembly.finish(handles.clone())?;
         // Freeze the model-facing schema set once per run. Tool execution keeps
         // using the registry, but every normal model request receives the exact
         // same sorted schema prefix.
@@ -185,10 +182,11 @@ impl AgentRunner {
         self.store
             .verify_tool_schema(&run_id, &tool_schema_sha256)
             .await?;
-        if mode.is_existing() {
-            task_manager.reconcile_stale_tasks().await?;
+        if mode == RunMode::RootRestart {
+            self.store.clear_pending_inputs(&run_id).await?;
+            append_restart_reminder(&self.store, &run_id, &mut trajectory).await?;
         }
-        let mut task_guard = task_manager.cancellation_guard(cancellation_lease, cleanup_done);
+        let mut handle_guard = handles.cancellation_guard(cancellation_lease, cleanup_done);
         let direct_tools = DirectToolRuntime {
             registry: &registry,
             hooks: &self.hooks,
@@ -196,7 +194,7 @@ impl AgentRunner {
             events: &events,
             workspace: &self.workspace,
             run_id: &run_id,
-            manager: task_manager.clone(),
+            handles: handles.clone(),
             foreground_timeout_seconds: self.options.foreground_tool_timeout_seconds,
         };
         let outcome: Result<RunResult> = async {
@@ -206,45 +204,10 @@ impl AgentRunner {
                     record.compaction.is_none() && record.message.role == Role::Assistant
                 })
                 .count();
-            if mode.is_existing() {
-                let resumable_final = resumable_final_text(&trajectory);
-                if mode == RunMode::Restart && resumable_final.is_none() {
-                    append_restart_reminder(&self.store, &run_id, &mut trajectory).await?;
-                }
-                let resumed_inputs = self
-                    .store
+            if mode == RunMode::ChildActivity {
+                self.store
                     .append_pending_inputs(&run_id, &mut trajectory)
                     .await?;
-                if resumed_inputs.is_empty()
-                    && let Some(final_text) = resumable_final
-                {
-                    let pending = task_manager.pending_before_finish().await?;
-                    if matches!(pending, PendingTaskBoundary::None) {
-                        let input_lock = self.store.pending_input_lock();
-                        let _input_guard = input_lock.lock().await;
-                        let steered = self
-                            .store
-                            .append_pending_inputs_locked(&run_id, &mut trajectory)
-                            .await?;
-                        if steered.is_empty() {
-                            self.finish_success(&run_id, &final_text, events.clone())
-                                .await?;
-                            return Ok(RunResult {
-                                run_id: run_id.clone(),
-                                final_output: final_text,
-                            });
-                        }
-                    } else if let PendingTaskBoundary::Ready(ready) = pending {
-                        append_background_results(
-                            &self.store,
-                            &run_id,
-                            &mut trajectory,
-                            &ready,
-                        )
-                        .await?;
-                        task_manager.mark_delivered(&ready).await?;
-                    }
-                }
             }
 
             let mut context_tokens = estimate_request_input_tokens(
@@ -255,16 +218,9 @@ impl AgentRunner {
 
             let mut step = completed_steps.saturating_add(1);
             loop {
-                let ready = task_manager.drain_ready_outputs().await?;
+                let ready = handles.drain_ready_outputs().await;
                 let added =
-                    append_background_results(
-                        &self.store,
-                        &run_id,
-                        &mut trajectory,
-                        &ready,
-                    )
-                    .await?;
-                task_manager.mark_delivered(&ready).await?;
+                    append_handle_results(&self.store, &run_id, &mut trajectory, &ready).await?;
                 context_tokens = context_tokens.saturating_add(added);
                 let steered = self
                     .store
@@ -296,21 +252,18 @@ impl AgentRunner {
                     trajectory.extend(completed.records);
                 }
                 // Compaction is a model call and can take long enough for
-                // background work to finish. Snapshot again afterwards so a
-                // newly terminal task is delivered instead of being reported
-                // as stale active work in the next normal request.
-                let (ready, active_tasks) = task_manager.snapshot_for_request().await;
-                let added = append_background_results(
+                // background work to finish. Snapshot again afterwards.
+                let (ready, active_handles) = handles.snapshot_for_request().await;
+                let added = append_handle_results(
                     &self.store,
                     &run_id,
                     &mut trajectory,
                     &ready,
                 )
                 .await?;
-                task_manager.mark_delivered(&ready).await?;
                 context_tokens = context_tokens.saturating_add(added);
                 let mut active_messages = build_active_context(&trajectory)?;
-                append_active_task_reminder(&mut active_messages, &active_tasks);
+                append_active_handle_reminder(&mut active_messages, &active_handles);
                 context_tokens = context_tokens.max(estimate_request_input_tokens(
                     &system,
                     &active_messages,
@@ -374,25 +327,24 @@ impl AgentRunner {
                         step = step.saturating_add(1);
                         continue;
                     }
-                    match task_manager.pending_before_finish().await? {
-                        PendingTaskBoundary::Ready(ready) => {
-                            let added = append_background_results(
+                    match handles.pending_before_finish().await? {
+                        PendingHandleBoundary::Ready(ready) => {
+                            let added = append_handle_results(
                                 &self.store,
                                 &run_id,
                                 &mut trajectory,
                                 &ready,
                             )
                             .await?;
-                            task_manager.mark_delivered(&ready).await?;
                             context_tokens = context_tokens.saturating_add(added);
                             step = step.saturating_add(1);
                             continue;
                         }
-                        PendingTaskBoundary::Active => {
+                        PendingHandleBoundary::Active => {
                             step = step.saturating_add(1);
                             continue;
                         }
-                        PendingTaskBoundary::None => {}
+                        PendingHandleBoundary::None => {}
                     }
                     let input_lock = self.store.pending_input_lock();
                     let _input_guard = input_lock.lock().await;
@@ -429,11 +381,9 @@ impl AgentRunner {
         }
         .await;
         if outcome.is_err() {
-            task_manager
-                .abort_and_settle("parent run ended before background task completion")
-                .await;
+            handles.abort_and_settle().await;
         }
-        task_guard.disarm();
+        handle_guard.disarm();
         outcome
     }
 }

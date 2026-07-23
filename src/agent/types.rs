@@ -26,7 +26,7 @@ pub struct RunnerOptions {
     pub model_request_deadline_seconds: u64,
     pub max_output_tokens: Option<u32>,
     pub foreground_tool_timeout_seconds: u64,
-    pub task_wait_timeout_seconds: u64,
+    pub handle_wait_timeout_seconds: u64,
     pub compaction: CompactionOptions,
     pub general_task: GeneralTaskProfile,
 }
@@ -63,7 +63,7 @@ impl Default for RunnerOptions {
             model_request_deadline_seconds: 3_600,
             max_output_tokens: None,
             foreground_tool_timeout_seconds: 30,
-            task_wait_timeout_seconds: 10,
+            handle_wait_timeout_seconds: 10,
             compaction: CompactionOptions::default(),
             general_task: GeneralTaskProfile {
                 model: None,
@@ -75,6 +75,7 @@ impl Default for RunnerOptions {
 
 #[derive(Debug, Clone)]
 pub struct RunRequest {
+    pub(crate) name: String,
     pub(crate) prompt: String,
     pub(crate) parent_run_id: Option<String>,
     pub(crate) depth: usize,
@@ -95,6 +96,7 @@ pub(crate) enum RunProfile {
 impl RunRequest {
     pub fn root(prompt: impl Into<String>) -> Self {
         Self {
+            name: "root".to_owned(),
             prompt: prompt.into(),
             parent_run_id: None,
             depth: 0,
@@ -105,6 +107,7 @@ impl RunRequest {
     }
 
     pub(crate) fn general_task(
+        name: impl Into<String>,
         prompt: impl Into<String>,
         parent_run_id: String,
         depth: usize,
@@ -112,6 +115,7 @@ impl RunRequest {
         remaining_delegation_depth: usize,
     ) -> Self {
         Self {
+            name: name.into(),
             prompt: prompt.into(),
             parent_run_id: Some(parent_run_id),
             depth,
@@ -147,6 +151,7 @@ impl RunRequest {
             ),
         }
         Ok(Self {
+            name: record.name.clone(),
             prompt: record.prompt.clone(),
             parent_run_id: record.parent_run_id.clone(),
             depth: record.depth,

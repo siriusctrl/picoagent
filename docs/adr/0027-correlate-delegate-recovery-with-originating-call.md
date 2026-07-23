@@ -1,6 +1,6 @@
 # ADR 0027: Correlate delegate recovery with its originating call
 
-- Status: Accepted
+- Status: Superseded by ADR 0034 and ADR 0038
 - Date: 2026-07-21
 - Refines: ADR 0006 (delegate crash-window recovery)
 

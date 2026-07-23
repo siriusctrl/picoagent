@@ -13,7 +13,7 @@ job/CLI
      -> ToolRegistry
         -> local Tool adapters grouped where related
         -> MCP Tool adapters
-        -> TaskManager
+        -> RuntimeHandleManager
            -> promoted direct Tool future
            -> delegated child AgentRunner
      -> ArtifactStore
@@ -69,7 +69,7 @@ silently replacing an existing capability.
 
 Every local model-facing adapter keeps its typed compile-time `tool.yaml` beside
 its Rust module. Standalone tools live directly under `src/tools/<tool>/`;
-cohesive task, history, and graph families live under
+cohesive handle, history, and graph families live under
 `src/tools/<family>/<member>/`. The manifest always contains the complete
 provider-visible name; paths never derive names. The common loader validates
 both prose fields and joins them with a `Returns:` semantic boundary into the
@@ -82,17 +82,18 @@ When the byte cap lands inside a multi-line range, it backs up to the newest
 complete line and returns an exact continuation offset. Supported images are
 artifacted and carried separately as canonical model attachments.
 The loader rejects unknown manifest fields, empty or padded prose, and
-non-object input schemas. Domain engines remain separate: task state is owned
-by `TaskManager`, skills by `SkillRegistry`, and trajectory retrieval by
+non-object input schemas. Domain engines remain separate: process-local
+execution coordination is owned by `RuntimeHandleManager`, skills by
+`SkillRegistry`, and trajectory retrieval by
 `TrajectoryReader`. MCP lifecycle and its server-provided dynamic adapter
 remain in `mcp.rs`.
 
 `build_app_tools` assembles process-wide local capabilities. `RunToolAssembly`
-is the single path that adds run-scoped history, task controls, and `delegate`
-for every Root and GeneralTask run. The `history` and `task` family modules
+is the single path that adds run-scoped history, handle controls, and `delegate`
+for every Root and GeneralTask run. The `history` and `handle` family modules
 explicitly register their complete member sets; assembly does not repeat each
 leaf constructor. Ordinary tools are called directly; only an unfinished direct
-call can enter task control through foreground promotion.
+call receives a runtime handle through foreground promotion.
 The model-visible schema set and resume hash therefore commit the same fixed
 capability contract without a dynamic spawn allowlist.
 
@@ -104,8 +105,8 @@ topology is invalid. `graph_list` parses each file independently,
 validates its DAG and terminal state, and derives ready nodes; one malformed
 file is reported as invalid rather than failing the entire listing. Full graph
 inspection and mutation stay with `read` and `write`. Execution stays with
-`delegate` and the existing task controls, so the graph family does not create
-a second scheduler or persist task ids. Ready nodes are projected only for a
+`delegate` and the existing handle controls, so the graph family does not create
+a second scheduler or persist runtime handles. Ready nodes are projected only for a
 `wip` graph, and an accepted resolution is invalid until its direct dependencies
 are resolved. Since one assistant tool-call batch is concurrent, dependent
 `write`, `graph_list`, and `delegate` stages execute in separate turns.
@@ -114,9 +115,9 @@ Root and the persisted delegating/leaf GeneralTask profiles have one identical
 built-in capability set. Both GeneralTask profiles appear to the model as the
 common GeneralTask role. Each normal run registers `history_search` and
 `history_read` before its first call regardless of whether automatic compaction
-is configured, plus `delegate` and all task controls. Remaining delegation
+is configured, plus `delegate` and all handle controls. Remaining delegation
 depth is persisted, shown in the runtime reminder, and checked by `delegate`
-before task creation; zero returns a local error. Optional `web_search` and MCP
+before child creation; zero returns a local error. Optional `web_search` and MCP
 tools depend on startup configuration. Memory paths do not add a tool schema.
 The selected schemas do not appear or disappear during one run.
 
@@ -132,7 +133,7 @@ Its static YAML schema and description do not change.
 
 Each run is a portable directory beneath `<workspace>/.fiasco/runs/<run-id>/`.
 It contains run metadata, append-only complete messages, structured events, the
-final answer, artifacts, and background task records. It may also contain
+final answer, and artifacts. It may also contain
 `graphs/g<N>.yaml` files whose nodes represent durable work-item topology and
 main-agent-accepted outcomes. This is what persistence means in the launch
 runtime:
@@ -141,7 +142,7 @@ a cloud worker can retain or inspect a job without a database.
 The durable message contract is `fiasco-message`. Every `messages.jsonl` line is
 self-contained: `ref`, `created_at`, `role`, and the exact typed
 provider-neutral `content` blocks used by the runner. Tool-error state,
-structured artifact refs, images, reasoning, background-task identity, and
+structured artifact refs, images, reasoning, runtime-handle results, and
 opaque provider continuation items therefore need no second representation or
 reconstruction layout. Optional pending-input idempotency and compaction state
 live under `_fiasco` on the same record. The one-based sequence is derived from
@@ -221,7 +222,7 @@ cancelled, and closed runs report a terminal boundary.
 Interactive snapshot and follow modes are TTY-only. Redirected stdout defaults
 to exact committed NDJSON, preserving every raw record byte and LF without
 reserialization; `--summary` retains the metadata/final-output view. Events,
-child-run trees, and task controls are outside this transcript source.
+child-run trees, and handle controls are outside this transcript source.
 
 The message file is created and directory-synced with the run. The writer's
 cached next sequence is invalidated before cancellable I/O and restored only
@@ -238,43 +239,30 @@ queued -> running -> completed
 failed/running -> running  # explicit resume, if not already owned
 ```
 
-The loop itself is a small state machine too: inject newly completed background
-results, optionally compact an old completed-message prefix, request model
-output, persist the complete assistant message, execute zero or more direct
-tool calls, persist their results, then either repeat or complete. This makes
-crash boundaries and event ordering explicit without introducing a workflow
-engine.
+The loop injects newly completed runtime-handle results, optionally compacts an
+old completed-message prefix, requests model output, persists the complete
+assistant message, executes zero or more direct tool calls, persists their
+results, then either repeats or completes.
 
-One-shot background tools have terminal persisted states, while reusable agent
-tasks return to idle after each activity:
+Handle state is process-local execution coordination. A promoted tool uses a
+`j_<ulid>` handle until that process ends. A delegated agent uses its child run
+id as the handle; only the child transcript, display name, parent id, and
+open/closed lifetime are durable. Current activities, followups, pending output,
+and tool handles are not reconstructed after a crash.
 
-```text
-tool:  queued -> running -> completed | failed | cancelled | interrupted
-agent: queued -> running -> idle -> running ... -> closed
-```
-
-Whether an output has entered the parent context is derived from the highest
-`output_seq` in committed `BackgroundTask` messages; task JSON does not carry a
-second authoritative delivered cursor. A `delegate` result is one normal tool
-result. For an automatically promoted direct call, the running acknowledgement
-fills the original provider `tool_call_id` slot with a status-less runtime
-notice. Later output is a new user/runtime message correlated by `task_id`,
-never a second tool result with the same provider call id. One message batches
-all outputs ready at that boundary. Each body follows the ordinary independent
+A status-less `<runtime_handle>` in a tool result acknowledges asynchronous
+execution in the original provider `tool_call_id` slot. Later output is one
+user/runtime content block correlated by handle, never a second tool result
+with the same provider call id. One message batches all outputs ready at that
+boundary. Each body follows the ordinary independent
 inline/preview/artifact policy; the XML status wrapper is added and escaped
-afterward. Internal task state, not model-facing XML, retains the originating
-call id and task kind.
+afterward.
 
-Before every normal provider request, the runner snapshots active tasks in
-stable task-id order and adds their id, name, and queued/running state to a
-synthetic runtime reminder. The reminder tells the model not to delegate work
-that is already represented there, exposes no child run id, and is never
-appended to the trajectory. The snapshot is refreshed after any compaction
-call: activities that finish during compaction first receive their ordinary
-result notice and are omitted from the active list unless a followup has already
-reactivated the same agent. At a compacted
-boundary, the active-task section shares the existing synthetic continuation
-reminder instead of adding another runtime-reminder message.
+Before every normal provider request, the runner snapshots current-process
+active handles in stable handle order. The synthetic reminder tells the model
+not to delegate work already represented there and is never persisted. It is
+refreshed after compaction so newly completed work is delivered before the next
+normal request.
 
 The full run holds a filesystem execution lease. Resume rebuilds the recorded
 profile, validates provider/model/workspace identity, loads the message log and
@@ -282,7 +270,9 @@ latest complete checkpoint, and continues from there. A normal tool-turn
 checkpoint contains the assistant message, every ordered tool result, and any
 attachment message. An incomplete tail checkpoint is discarded as a unit and
 replaced by a user/runtime warning about possible workspace or external side
-effects; the call is never automatically replayed.
+effects; the call is never automatically replayed. Root restart also clears
+pending input and unconditionally tells the model that the prior process and
+its asynchronous work stopped.
 
 ### Artifact storage
 
@@ -392,30 +382,25 @@ results and artifact references return to the parent.
 All direct calls returned in one assistant message start concurrently and share
 one foreground window. The runner returns as soon as all settle. At the
 configured deadline, the same in-flight futures for only unfinished calls move
-into this task lifecycle without stopping or restarting. The runner resumes and
+under process-local runtime handles without stopping or restarting. The runner resumes and
 tracks every unfinished future before awaiting promotion events, then commits
 tool-result messages in original call order with their original provider call
-ids; events may show actual completion order. A promoted result containing a
-task id is only a running acknowledgement, so dependent work waits for the
-separate background result message correlated by that id.
+ids; events may show actual completion order. A promoted handle is only a
+running acknowledgement, so dependent work waits for the separate result
+message correlated by that handle.
 
-`delegate` starts a reusable GeneralTask agent task in the background
-immediately. `task_status` observes all task kinds, while `task_list` lists all
-delegated agents owned by the current run. `task_wait` uses wait-any semantics:
-it returns when any selected task becomes inactive or its bounded interval
-expires. `task_inspect`, `task_send`, and `task_close` operate only on agents.
-Inspect projects a bounded page of the child's durable messages. Send queues a
-normal user message with an explicit mode: `steer` makes it available after the
-current complete tool batch, while `followup` keeps it in the parent task record
-until the current activity finishes and then resumes the same child. An agent
-activity output moves the task to `idle`; it does not finish the agent. Stop
-interrupts only the current activity and leaves the agent idle and paused until
-the next explicit send. Close is
-the explicit permanent transition from idle to `closed` and discards queued
-followups. Background work has no hard execution deadline.
-
-Short task ids are local to the run that allocated them. Task controls accept
-only ids returned by that run's `delegate`, `task_status`, or `task_list`.
+`delegate` starts a reusable GeneralTask agent immediately and returns its
+child run id as the handle. `list_handles` discovers durable direct children
+and overlays current-process tool jobs and activity state. `status` inspects
+selected handles, while `wait` uses wait-any semantics: it returns when any
+selected handle has a result or status change, or when its bounded interval
+expires. `inspect`, `send_message`, and `close` operate only on agents. Inspect
+projects a bounded page of the child's durable messages. Send queues a normal
+user message with an explicit mode: `steer` makes it available after the
+current complete tool batch, while `followup` waits for the current activity
+boundary. An activity result leaves the thread idle; `stop` ends only current
+work, and `close` permanently closes an idle thread. Asynchronous work has no
+hard execution deadline.
 
 Every delegated child is isolated. It starts from its own runtime reminder and
 the delegated prompt, which must contain the complete objective and any
@@ -423,31 +408,22 @@ task-specific context. The parent conversation, compaction state, and artifact
 references are not copied. A child uses the configured GeneralTask model and
 resumes solely from its own run messages through the same `AgentRunner` path.
 
-Each task record is durable coordination state only. Agent records hold ordered
-activity outputs and followup input waiting for the current activity boundary;
-child messages remain in the child's run directory. Recovery admits a task only
-when its originating call has a ToolResult in a complete parent checkpoint;
-other task files and child directories are orphans and stay hidden. It derives
-the highest delivered output sequence per task from the parent transcript,
-marks recognized in-flight ordinary tools `interrupted`, and reports each
-active agent activity as an `interrupted` output on an idle paused reusable
-thread. Resume validates the frozen tool-schema hash before task reconciliation
-can update any of those records.
-
-An idle-agent reactivation writes `task=running` and launches the existing idle
-child; it does not move the child back to queued. Send, stop, close, and
-automatic activation serialize on the task-record lock. Restart never launches
-an agent activity: it retains pending input, queues an interruption reminder in
-the child, and requires a later explicit `task_send`. Recovery also repairs a
-half-committed `child=closed, task=idle` close.
+There is no durable parent-side handle index or activity record. On root
+restart, tool jobs, followups, active work, pending parent input, and
+undelivered output from the previous process are discarded. The root receives
+an unconditional crash reminder and decides what to retry. `list_handles`
+finds child runs whose `parent_run_id` matches the current run without launching
+them. The first explicit `send_message` to an old open child clears stale child
+pending input, adds a child crash reminder, and starts a fresh activity from
+that child's complete transcript.
 
 This recovery path assumes the runtime supervisor, cgroup, or container killed
 the previous fiasco process and all locally managed descendants before
 resume. A stale busy lease fails immediately. Remote work and external side
 effects can survive and must be inspected after the restart reminder.
 
-The durable child guarantee belongs to `delegate` GeneralTask records, and the
-parent run is the only resume entrypoint. Memory consolidation
+The durable child guarantee belongs to `delegate` child runs, and the parent
+run is the only resume entrypoint. Memory consolidation
 uses this same path rather than a special direct-tool child.
 
 ## Prompt And Cache Shape
@@ -460,7 +436,7 @@ metadata, memory paths, and delegated instructions form a deterministic runtime
 reminder at the start of each run. That persisted reminder is frozen for the
 run. Optional startup schemas are selected before the run starts. Agent role
 and remaining delegation depth change only the initial runtime-reminder tail.
-Nonterminal background-task state is a non-durable synthetic reminder in
+Current-process active-handle state is a non-durable synthetic reminder in
 normal requests, while a compaction request changes only the message tail.
 
 The durable trajectory remains append-only; before a normal model call, an

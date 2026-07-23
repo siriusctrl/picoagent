@@ -75,14 +75,15 @@ before the next append. Resume injects one user/runtime warning about possible
 side effects instead of synthesizing tool errors or replaying the discarded
 turn.
 
-Parent task files become recoverable only when the complete parent checkpoint
-contains their originating ToolResult. Orphans are ignored; committed ordinary
-background tools become interrupted. A committed active child activity also
-becomes an interrupted output, while its reusable thread and complete
-transcript remain idle and paused for a later explicit `task_send`. This assumes
-a supervisor has killed the old local process tree before resume. See
+Restart does not reconstruct process-local handle state. Tool jobs, active child
+work, pending input, and undelivered output are discarded; the root receives an
+unconditional crash notice and decides what to retry. Direct child runs remain
+discoverable as durable open threads. Their first explicit `send_message`
+clears stale pending input, adds a child crash reminder, and starts a new
+activity from complete context. This assumes a supervisor has killed the old
+local process tree before resume. See
 [ADR 0034](adr/0034-atomic-turn-checkpoints.md) and
-[ADR 0036](adr/0036-interrupt-agent-activities-on-restart.md).
+[ADR 0038](adr/0038-runtime-handles-and-explicit-restart.md).
 
 ## Self-Contained Message Log
 
@@ -132,19 +133,19 @@ ordinary user tasks. See [ADR 0028](adr/0028-stable-cross-tool-workflow.md).
 ## Uniform Background Delivery
 
 Delegated children and promoted tools use one runtime notice shape. A
-status-less task block means work is running; a terminal block adds status
+status-less handle block means work is running; a terminal block adds status
 around the same independently bounded inline-or-artifact result used by
-foreground tools. Ready terminal tasks share one runtime message, and internal
+foreground tools. Ready handle results share one runtime message, and internal
 kind or provider call ids stay out of model-facing XML. Payload limiting happens
 before the runtime wrapper, whose structure and instructions are never clipped.
-Each normal request also receives a non-durable snapshot of active task ids,
+Each normal request also receives a non-durable snapshot of active handles,
 names, and states so compaction cannot make the model forget already delegated
 work. A post-compaction refresh delivers newly terminal artifacts first; when a
 compaction continuation reminder already exists, both dynamic sections share
 that one synthetic message.
 
 Rejected: separate start/result protocols, forcing every small result through a
-second artifact read, one runtime message per ready task, and persisting
+second artifact read, one runtime message per ready handle set, and persisting
 repeated active-state snapshots. See
 [ADR 0030](adr/0030-uniform-foreground-and-background-results.md).
 
@@ -183,27 +184,26 @@ automatic recording of every successful run, Rust-side semantic heuristics,
 and making raw transcripts or artifacts equivalent to curated memory. See
 [ADR 0009](adr/0009-memory-through-ordinary-tools.md).
 
-## One Background Task Lifecycle
+## Runtime Handles, Durable Agent Threads
 
 Direct calls from one assistant message start concurrently under one shared
 foreground window. Results remain in original call order; only unfinished exact
-futures move to the background. `delegate` starts a reusable GeneralTask agent
-task asynchronously. `task_status` covers every task, `task_wait` waits for any
-selected task, and agent-only `task_list`, `task_inspect`, `task_send`, and
-`task_close` expose the reusable child lifecycle. `task_send` distinguishes
-current-activity `steer` from queued `followup`; `task_stop` interrupts current
-work and pauses automatic followups without implicitly closing an agent. The
-next explicit send resumes the same child. Agent loops have no arbitrary
-model-step cap, and background work has no hard execution deadline. See
-[ADR 0035](adr/0035-reusable-agent-tasks.md).
+futures receive process-local `j_<ulid>` handles. `delegate` starts a reusable
+GeneralTask whose handle is its durable child run id. `list_handles`, `status`,
+wait-any `wait`, `inspect`, mode-required `send_message`, `stop`, and `close`
+form one small control surface. Only agent identity, name, transcript, and
+open/closed lifetime survive a process restart; activity coordination does not.
+Agent loops have no arbitrary model-step cap, and asynchronous work has no hard
+execution deadline. See
+[ADR 0038](adr/0038-runtime-handles-and-explicit-restart.md).
 
 ## File-backed Planning Topology
 
 Complex tasks may keep a run-local YAML DAG whose nodes are work items and whose
 resolutions are outcomes accepted by the main agent. Two fixed tools initialize
 and summarize/validate these files; ordinary `read`/`write` maintain them, while
-`delegate` and task controls execute and supervise work independently. The
-graph never stores task ids, automatically launches successors, or treats an
+`delegate` and handle controls execute and supervise work independently. The
+graph never stores runtime handles, automatically launches successors, or treats an
 agent completion as an accepted node resolution.
 
 Rejected: equating every node with an agent, a graph-specific mutation DSL, and
@@ -292,7 +292,7 @@ module. Standalone tools stay directly under `src/tools`; cohesive task,
 history, and graph adapters are grouped by family without deriving model-visible
 names from paths. Domain engines remain in their focused subsystems. Process and
 run capabilities are assembled through one explicit path; ordinary tools are called
-directly, while `delegate` and the task controls are complete static adapters.
+directly, while `delegate` and the handle controls are complete static adapters.
 
 See [ADR 0019](adr/0019-group-related-tool-adapters.md),
 [ADR 0016](adr/0016-separate-tool-purpose-and-return-guidance.md),

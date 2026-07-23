@@ -107,7 +107,7 @@ fn responses_input(messages: &[Message]) -> Value {
                         MessageContent::ProviderItem { provider, item } if provider == "openai" => {
                             input.push(item.clone())
                         }
-                        MessageContent::BackgroundTask { .. } => {}
+                        MessageContent::RuntimeHandle { .. } => {}
                         _ => {}
                     }
                 }
@@ -284,18 +284,18 @@ mod tests {
     }
 
     #[test]
-    fn background_results_are_new_user_text_for_both_openai_protocols() {
+    fn handle_results_are_new_user_text_for_both_openai_protocols() {
         let request = ModelRequest {
             run_id: "run".into(),
             model: "model".into(),
             system: String::new(),
             messages: vec![Message {
                 role: Role::User,
-                content: vec![MessageContent::BackgroundTask {
-                    task_id: "task-1".into(),
+                content: vec![MessageContent::RuntimeHandle {
+                    handle: "j_1".into(),
+                    kind: "tool".into(),
                     name: "bash".into(),
-                    output_seq: Some(1),
-                    status: Some("completed".into()),
+                    status: "completed".into(),
                     content: "done".into(),
                     metadata: crate::artifact::ResultMetadata::empty(),
                 }],
@@ -312,7 +312,7 @@ mod tests {
             responses["input"][0]["content"][0]["text"]
                 .as_str()
                 .unwrap()
-                .contains("task-1")
+                .contains("j_1")
         );
         assert_eq!(chat["messages"][0]["role"], "user");
         assert!(

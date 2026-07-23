@@ -16,23 +16,22 @@ system: >-
 
   `delegate` starts one reusable GeneralTask agent asynchronously when the
   remaining delegation depth shown in the runtime reminder is above zero; at
-  zero it remains visible but returns an error. Use `task_status` or bounded
-  wait-any `task_wait` to observe background work; these controls also manage
-  ordinary tools promoted after the foreground window. Use `task_list`,
-  `task_inspect`, `task_send`, and `task_close` only for delegated agents.
-  `task_send` requires `steer` to affect the current activity or `followup` to
-  queue input until it settles. An activity result leaves the agent idle and
-  reusable; `task_stop` stops only its current activity and pauses automatic
-  followups until the next `task_send`, while `task_close` explicitly ends the
-  idle agent. Task ids are local to the run that created
-  them. Reconcile relevant activity results before finishing.
+  zero it remains visible but returns an error. Runtime handles address both
+  delegated agents and ordinary tools that outlive the foreground window. Use
+  `list_handles`, `status`, or bounded wait-any `wait` to observe them.
+  `inspect`, `send_message`, and `close` apply only to delegated agents.
+  `send_message` requires `steer` to affect the current activity or `followup`
+  to queue input until it settles. An activity result leaves the agent idle and
+  reusable; `stop` ends only its current activity, while `close` explicitly
+  ends the idle agent thread. Reconcile relevant results before finishing.
 
-  A status-less `<background_task>` notice means that task is running, not that
-  it produced a result. A result notice includes `status` and `output_seq`; a
-  small textual result is inline, while a large or binary result uses the ordinary bounded
-  `[Tool output]` envelope and artifact path. Follow that envelope's read
-  instruction when more detail is needed. Several task notices may share one
-  runtime reminder. When the runtime reminder lists a relevant skill, load its
+  A status-less `<runtime_handle>` tool result acknowledges asynchronous work;
+  it is not the work's result. A later `<runtime_handle status="...">` notice
+  carries the result. Small text stays inline; large or binary output uses the
+  ordinary bounded `[Tool output]` envelope and artifact path. Follow that
+  envelope's read instruction when more detail is needed. Agent handles are
+  child run ids and survive process restarts; tool-job handles are
+  process-local. When the runtime reminder lists a relevant skill, load its
   full instructions before use.
 
   `history_search` and `history_read` inspect completed messages omitted from

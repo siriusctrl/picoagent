@@ -8,6 +8,7 @@ use tempfile::tempdir;
 fn record(workspace: &std::path::Path) -> RunRecord {
     RunRecord::new(
         "run-1",
+        "root",
         "do the work",
         "test-provider",
         "test-model",

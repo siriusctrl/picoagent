@@ -89,59 +89,51 @@ pub enum RuntimeEventKind {
         call_id: String,
         name: String,
     },
-    BackgroundTaskStarted {
-        task_id: String,
+    RuntimeHandleStarted {
+        handle: String,
+        kind: String,
         name: String,
     },
-    BackgroundTaskCompleted {
-        task_id: String,
+    RuntimeHandleCompleted {
+        handle: String,
+        kind: String,
         name: String,
     },
-    BackgroundTaskFailed {
-        task_id: String,
+    RuntimeHandleFailed {
+        handle: String,
+        kind: String,
         name: String,
-        error: String,
     },
-    BackgroundTaskSentToBackground {
-        task_id: String,
+    ToolSentToBackground {
+        handle: String,
         name: String,
         call_id: String,
     },
-    BackgroundTaskCancelled {
-        task_id: String,
-        name: String,
-    },
-    BackgroundTaskDelivered {
-        task_id: String,
-        output_seq: u64,
+    RuntimeHandleStopped {
+        handle: String,
+        kind: String,
     },
     ArtifactCreated {
         call_id: String,
         path: String,
         bytes: u64,
     },
-    SubagentActivityStarted {
-        child_run_id: String,
-        task: String,
+    AgentActivityStarted {
+        handle: String,
     },
-    SubagentMessageQueued {
-        task_id: String,
-        child_run_id: String,
+    AgentMessageQueued {
+        handle: String,
         input_id: String,
         mode: String,
     },
-    SubagentActivityCompleted {
-        child_run_id: String,
+    AgentActivityCompleted {
+        handle: String,
     },
-    SubagentActivityFailed {
-        child_run_id: String,
-        error: String,
+    AgentActivityFailed {
+        handle: String,
     },
-    SubagentActivityStopped {
-        child_run_id: String,
-    },
-    SubagentClosed {
-        child_run_id: String,
+    AgentClosed {
+        handle: String,
     },
     RunActivityCompleted {
         final_output: String,

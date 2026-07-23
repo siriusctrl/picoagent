@@ -11,14 +11,14 @@ execution contracts remain in Rust. Project `AGENTS.md`, model modalities,
 runtime role, remaining delegation depth, skill metadata, memory paths, and
 delegated instructions are dynamic inputs and are not copied into this
 registry. The stable system prompt defines universal cross-tool behavior,
-including task lifecycle, compacted-history recovery, and file-backed graph
+including runtime-handle lifecycle, compacted-history recovery, and file-backed graph
 workflow. The initial runtime reminder carries only concrete run state and
 concise GeneralTask role guidance. Its child guidance points to the paired,
 self-contained delegated task. Keeping those rules in the shared system prefix
 preserves byte-identical Root and GeneralTask prefixes.
 
 Every local model-facing tool adapter keeps a typed `tool.yaml` beside its Rust
-module. Standalone adapters live at `src/tools/<tool>/`; cohesive task, history,
+module. Standalone adapters live at `src/tools/<tool>/`; cohesive handle, history,
 and graph families live at `src/tools/<family>/<member>/`. Every manifest still
 declares the complete provider-visible name rather than deriving it from its
 path. `description` states purpose, usage, side effects, and constraints;
@@ -26,8 +26,8 @@ path. `description` states purpose, usage, side effects, and constraints;
 follow-up. The loader joins them as
 `<description>\n\nReturns: <returns>` for the standard provider description. The
 Rust module owns arguments, semantic validation, and execution. Domain state
-stays in its subsystem: for example, the task adapters
-call `TaskManager`, and `load_skill` calls `SkillRegistry`. Other stable model
+stays in its subsystem: for example, handle adapters call
+`RuntimeHandleManager`, and `load_skill` calls `SkillRegistry`. Other stable model
 instructions live with the behavior that assembles them, such as
 `src/artifact/model-instruction.md`.
 
@@ -48,7 +48,7 @@ being copied into every manifest. This authoring split does not add a private
 provider field or claim a formal output schema.
 
 Tool descriptions are sent through the provider's sorted tool-schema field.
-Core history, delegation, and task-control schemas are present in every Root
+Core history, delegation, and handle-control schemas are present in every Root
 and GeneralTask run. Optional web or MCP capabilities are selected during the
 single run-assembly path. Memory uses ordinary file tools and therefore adds no
 schema. Remaining delegation depth is runtime state, not schema membership.

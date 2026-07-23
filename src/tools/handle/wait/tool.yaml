@@ -1,0 +1,19 @@
+name: wait
+description: >-
+  Wait for a result or status change from any selected runtime handle, or
+  return after one bounded interval. Omit handles to observe all visible
+  handles. Waiting never stops unfinished work.
+returns: >-
+  JSON `{handles:[{handle,kind,name,status}]}` for every selected handle. Some
+  may still be active when another changes or the interval expires. Results
+  arrive separately in `<runtime_handle>` notices with the ordinary bounded
+  inline-or-artifact policy.
+input_schema:
+  type: object
+  properties:
+    handles:
+      type: array
+      items:
+        type: string
+      description: Runtime handles to wait on; omit to observe all
+  additionalProperties: false

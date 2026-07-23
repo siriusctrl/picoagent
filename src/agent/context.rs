@@ -3,9 +3,9 @@ use std::{collections::BTreeSet, fs, path::Path};
 use anyhow::{Context, Result};
 
 use crate::{
-    agent::{task::BackgroundTaskRecord, types::RunProfile},
+    agent::{handle::HandleSnapshot, types::RunProfile},
     memory::MemoryPaths,
-    model::{Message, MessageContent, ModelModality, Role, active_background_tasks_section},
+    model::{Message, MessageContent, ModelModality, Role, active_runtime_handles_section},
     prompts::agent_prompts,
 };
 
@@ -69,15 +69,18 @@ pub(crate) fn build_runtime_reminder(
     ))
 }
 
-pub(crate) fn append_active_task_reminder(
+pub(crate) fn append_active_handle_reminder(
     messages: &mut Vec<Message>,
-    active_tasks: &[BackgroundTaskRecord],
+    active_handles: &[HandleSnapshot],
 ) {
-    let Some(section) = active_background_tasks_section(
-        active_tasks
-            .iter()
-            .map(|task| (task.id.as_str(), task.name.as_str(), task.status())),
-    ) else {
+    let Some(section) = active_runtime_handles_section(active_handles.iter().map(|handle| {
+        (
+            handle.handle.as_str(),
+            handle.kind.as_str(),
+            handle.name.as_str(),
+            handle.status.as_str(),
+        )
+    })) else {
         return;
     };
 
@@ -146,7 +149,7 @@ mod tests {
         assert!(!system.contains("<runtime-reminder>"));
         assert!(system.contains("`history_search` and `history_read`"));
         assert!(system.contains("exact omitted fact"));
-        assert!(system.contains("Task ids are local to the run"));
+        assert!(system.contains("Agent handles are child run ids"));
         assert!(system.contains("planning graph records work topology"));
         assert!(system.contains("required work has been verified"));
         assert!(!system.contains("load_skill"));
@@ -161,7 +164,7 @@ mod tests {
         assert!(reminder.contains("<agent-profile>\nprofile: general_task"));
         assert!(reminder.contains("remaining delegation depth: 0"));
         assert!(!reminder.contains("<tool-guidance>"));
-        assert!(!reminder.contains("Task ids are local"));
+        assert!(!reminder.contains("Agent handles are child run ids"));
         assert!(!reminder.contains("<context-management>"));
         assert!(!reminder.contains("history_search"));
         assert!(!reminder.contains("<compacted-history>"));
@@ -183,12 +186,12 @@ mod tests {
         assert!(!system.contains("remaining delegation depth:"));
         for tool_name in [
             "`delegate`",
-            "`task_wait`",
-            "`task_list`",
-            "`task_inspect`",
-            "`task_send`",
-            "`task_stop`",
-            "`task_close`",
+            "`wait`",
+            "`list_handles`",
+            "`inspect`",
+            "`send_message`",
+            "`stop`",
+            "`close`",
             "`history_search`",
             "`history_read`",
             "`write`",

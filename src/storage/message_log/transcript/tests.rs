@@ -24,6 +24,7 @@ async fn test_store(state: RunState) -> (TempDir, RunDirStore) {
     let store = RunDirStore::new(workspace.path());
     let run = RunRecord::new(
         "run-1",
+        "root",
         "inspect",
         "test-provider",
         "test-model",

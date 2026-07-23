@@ -1,7 +1,7 @@
 mod compaction;
 pub mod context;
+pub mod handle;
 pub mod runner;
-pub mod task;
 mod tool_execution;
 mod types;
 

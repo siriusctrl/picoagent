@@ -2,7 +2,7 @@ name: graph_init
 description: |-
   Initialize and validate one complete planning topology for the current run.
   A graph records work items and accepted outcomes; it does not execute work or
-  track tasks. Supply every initial node in this call. For example:
+  track runtime execution. Supply every initial node in this call. For example:
 
     {"goal":"Ship the API","nodes":{"inspect":{"objective":"Determine the API contract","depends_on":[]},"implement":{"objective":"Implement the accepted contract","depends_on":["inspect"]},"verify":{"objective":"Run the required tests","depends_on":["implement"]}}}
 
@@ -10,7 +10,8 @@ description: |-
   must name nodes in this same call, may not repeat, and must form a DAG. The
   created version-1 YAML is `wip`, with every resolution set to null. Revise it
   later with `write`; use `graph_list` to validate and derive ready nodes,
-  `delegate` to execute independent work, and task controls to supervise it.
+  `delegate` to execute independent work, and runtime handle controls to
+  supervise it.
   Because one assistant tool-call batch is concurrent, graph writes,
   validation, and dependent delegations belong in separate turns.
 returns: >-

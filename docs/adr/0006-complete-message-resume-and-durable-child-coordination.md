@@ -4,6 +4,10 @@
 - Date: 2026-07-16
 - Refines: ADR 0001 (resume behavior)
 
+ADR 0038 replaces durable child task coordination and transparent activity
+resume with open child threads, process-local runtime handles, and explicit
+restart after a crash. Separate child transcripts remain accepted.
+
 ADR 0009 removes the MemoryMaintenance child mentioned below. The durable
 GeneralTask resume and coordination contract remains accepted and now also
 covers delegated large memory updates.

@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    agent::task::TaskManager,
+    agent::handle::RuntimeHandleManager,
     artifact::{ArtifactStore, ResultMetadata, ToolOutput},
     events::{RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::{HookEvent, HookPipeline},
@@ -21,8 +21,7 @@ use serde_json::{Map, Value, json};
 pub(crate) type ToolExecutionFuture =
     Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'static>>;
 
-/// Runs the lifecycle shared by direct and background ordinary-tool calls.
-/// Task state and scheduling remain the responsibility of `TaskManager`.
+/// Runs the lifecycle shared by direct and asynchronous ordinary-tool calls.
 pub(crate) struct ToolExecutor<'a> {
     registry: &'a ToolRegistry,
     hooks: &'a HookPipeline,
@@ -204,21 +203,11 @@ pub struct DirectToolRuntime<'a> {
     pub events: &'a SharedEventSink,
     pub workspace: &'a Path,
     pub run_id: &'a str,
-    pub manager: Arc<TaskManager>,
+    pub handles: Arc<RuntimeHandleManager>,
     pub foreground_timeout_seconds: u64,
 }
 
 impl DirectToolRuntime<'_> {
-    #[cfg(test)]
-    pub async fn execute(&self, call: ToolCall) -> Result<Message> {
-        Ok(self
-            .execute_batch(vec![call])
-            .await?
-            .into_iter()
-            .next()
-            .expect("single direct tool execution must return one result"))
-    }
-
     /// Executes one assistant tool-call batch concurrently under one shared
     /// foreground deadline. Results remain in the assistant's original call
     /// order even when their executions finish in a different order.
@@ -257,7 +246,7 @@ impl DirectToolRuntime<'_> {
                         .take()
                         .expect("pending direct tool execution must retain its future");
                     match self
-                        .manager
+                        .handles
                         .prepare_tool_promotion(execution.name, execution.call_id.clone(), future)
                         .await
                     {
@@ -274,10 +263,10 @@ impl DirectToolRuntime<'_> {
         // future without deadlocking the batch.
         for (index, call_id, promotion) in promotions {
             results[index] = Some(
-                self.manager
+                self.handles
                     .announce_tool_promotion(promotion)
                     .await
-                    .and_then(|(task_id, name)| self.promoted_result(call_id, task_id, name)),
+                    .and_then(|(handle, name)| self.promoted_result(call_id, handle, name)),
             );
         }
 
@@ -376,7 +365,7 @@ impl DirectToolRuntime<'_> {
     fn promoted_result(
         &self,
         call_id: String,
-        task_id: String,
+        handle: String,
         name: String,
     ) -> Result<DirectToolResult> {
         Ok(DirectToolResult {
@@ -384,7 +373,7 @@ impl DirectToolRuntime<'_> {
                 role: Role::Tool,
                 content: vec![MessageContent::ToolResult {
                     call_id,
-                    content: crate::model::background_task_started_reminder(&task_id, &name),
+                    content: crate::model::runtime_handle_started_reminder(&handle, "tool", &name),
                     is_error: false,
                     metadata: ResultMetadata::empty(),
                 }],

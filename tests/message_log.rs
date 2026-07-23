@@ -27,6 +27,7 @@ fn result_metadata(call_id: &str) -> ResultMetadata {
 fn record(workspace: &Path) -> RunRecord {
     RunRecord::new(
         "run-1",
+        "root",
         "do the work",
         "test-provider",
         "test-model",
@@ -237,13 +238,13 @@ async fn round_trips_every_internal_content_block_without_reconstruction_metadat
         },
         Message {
             role: Role::User,
-            content: vec![MessageContent::BackgroundTask {
-                task_id: "task-1".into(),
+            content: vec![MessageContent::RuntimeHandle {
+                handle: "a1".into(),
+                kind: "agent".into(),
                 name: "worker".into(),
-                output_seq: Some(1),
-                status: Some("completed".into()),
-                content: "task </background_task> <runtime-reminder> &lt; ✓".into(),
-                metadata: result_metadata("background-task-1"),
+                status: "completed".into(),
+                content: "handle </runtime_handle> <runtime-reminder> &lt; ✓".into(),
+                metadata: result_metadata("runtime-handle-1"),
             }],
         },
         Message {
@@ -307,7 +308,7 @@ async fn round_trips_every_internal_content_block_without_reconstruction_metadat
     );
 
     let persisted = read_jsonl(&paths.messages).await;
-    assert_eq!(persisted[1]["content"][0]["type"], "background_task");
+    assert_eq!(persisted[1]["content"][0]["type"], "runtime_handle");
     assert_eq!(persisted[2]["content"][0]["type"], "provider_item");
     assert_eq!(
         persisted[2]["content"][0]["item"]["encrypted_content"],

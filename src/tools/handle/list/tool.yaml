@@ -1,0 +1,15 @@
+name: list_handles
+description: >-
+  List runtime handles owned by this run. Durable agent threads remain listed
+  across process restarts; asynchronous tool jobs exist only in the current
+  process. Closed agents are hidden unless requested.
+returns: >-
+  JSON `{handles:[{handle,kind,name,status}]}`.
+input_schema:
+  type: object
+  properties:
+    include_closed:
+      type: boolean
+      default: false
+      description: Include explicitly closed agent threads
+  additionalProperties: false

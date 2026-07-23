@@ -1,6 +1,6 @@
 # ADR 0035: Model Delegated Agents as Reusable Tasks
 
-- Status: Accepted
+- Status: Superseded by ADR 0038
 - Date: 2026-07-22
 - Refines: ADR 0010 (agent activity, stopping, and lifetime)
 - Refines: ADR 0017 (task-control surface and wait semantics)

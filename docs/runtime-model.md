@@ -124,66 +124,48 @@ loading the file, creating an artifact, or attaching content.
 
 ## Delegated Agents
 
-`delegate` starts a reusable general-task agent asynchronously. Each agent is a
-task backed by one normal child run with a parent id. Children share the
-workspace, provider, and base tools. The persisted delegating/leaf profile and
-exact remaining delegation depth protect resume semantics; both profiles expose
-the same built-in schemas. The default maximum depth of one gives the initial
-child zero remaining depth. `task_wait` is bounded wait-any: it returns when any
-selected task becomes inactive or the interval expires, without cancelling
-unfinished work.
+`delegate` starts a reusable general-task agent asynchronously. Its runtime
+handle is the child run id. Children share the workspace, provider, and base
+tools. The persisted delegating/leaf profile and exact remaining delegation
+depth protect resume semantics; both profiles expose the same built-in schemas.
+The default maximum depth of one gives the initial child zero remaining depth.
 
-`delegate` accepts a short name and a self-contained prompt. Every child is
+`delegate` accepts a non-empty display name and a self-contained prompt. Every child is
 isolated: it starts with its own runtime reminder and delegated task, without
 copying the parent conversation, compaction state, or artifact references.
 The prompt must therefore include the complete objective and task-specific
 context. The child uses the configured GeneralTask model and records a normal,
 independent trajectory.
 
-Child recovery uses that same local trajectory and the same `AgentRunner` as a
-root run. It does not consult parent messages; only parent-child coordination
-and eventual result delivery remain in the parent task record.
-
-`task_inspect` returns a child's latest durable Chat-compatible messages and
-can page backward by sequence. `task_send` always requires `mode`. `steer`
+`inspect` returns a child's latest durable messages and can page backward by
+sequence. `send_message` always requires `mode`. `steer`
 queues a normal user message after the current complete assistant/tool batch;
-`followup` waits for the current activity output before automatically resuming
-the same child. Neither mode interrupts a tool batch, and an idle agent starts
-immediately in either mode. Activity completion produces an ordered output and
-leaves the agent `idle`. `task_stop` interrupts only a current activity;
-the resulting idle agent is paused until its next explicit `task_send`.
-`task_close` permanently closes an idle agent and discards queued followups.
-`task_status` reports all task state, including `paused`, while `task_list`
-lists all agents owned by the current run. Task ids are
-run-local: controls use ids returned by this run's `delegate`, `task_status`, or
-`task_list`.
+`followup` waits for the current activity boundary. Neither mode interrupts a
+tool batch, and an idle agent starts immediately in either mode. Activity
+completion leaves the agent `idle`. `stop` interrupts only current activity;
+`close` permanently closes an idle agent. `list_handles`, `status`, and
+wait-any `wait` expose both delegated agents and current-process tool jobs.
 
-Task JSON is coordination state, not a second transcript. A record belongs to
-the recoverable parent state only when its originating call has a ToolResult in
-a complete parent checkpoint. Pre-checkpoint records and child directories are
-ignored as orphans. Delivery is derived from each task's highest `output_seq` in
-`BackgroundTask` entries already committed to the parent log. After restart,
-recognized running ordinary tools become terminal `interrupted` tasks and are
-never replayed. A recognized queued/running child activity produces an
-`interrupted` output; its agent thread and child transcript become idle and
-paused without launching a model call. Pending followups and steering remain
-durable but wait for an explicit `task_send`, which reuses the same child
-through `AgentRunner`. Normal in-process completion or failure can still
-autoactivate queued followups. A closed child stays closed.
+There is no durable parent-side handle record. On root restart, active child
+work, tool jobs, queued followups, pending input, and undelivered output from
+the prior process are discarded. The root receives an unconditional crash
+reminder. `list_handles` discovers direct child runs by parent id without
+launching them. The first explicit `send_message` to an old open child clears
+stale pending input, adds a child crash reminder, and starts a new activity from
+the child's complete transcript. A closed child stays closed.
 
-A status-less `<background_task>` tool result means only that work is running.
+A status-less `<runtime_handle>` tool result means only that work is running.
 At a later model boundary, ready activity outputs are grouped in one
-`<runtime-reminder>` user message. Each result block includes its task id, name,
-status, and output sequence. Its payload follows the ordinary per-result policy: small
+`<runtime-reminder>` user message. Each result block includes its handle, kind,
+name, and status. Its payload follows the ordinary per-result policy: small
 UTF-8 text stays inline, while large or binary output uses the bounded
 `[Tool output]` artifact envelope. The runtime block is added after payload
 limiting and its text is XML-escaped, so status, artifact metadata, read
-instructions, and closing tags cannot be clipped or forged by task output.
+instructions, and closing tags cannot be clipped or forged by activity output.
 
-The CLI resumes the parent, not a child id. Parent recovery owns durable
-GeneralTask interruption and never advances a child automatically, which avoids
-two processes racing to execute the same activity. Large memory updates use
-this same child path and need no separate recovery case.
+The CLI resumes the parent, not a child id. Parent recovery never advances a
+child automatically. Large memory updates use this same child path and need no
+separate recovery case.
 
 Resume has a process-domain precondition: the supervisor, cgroup, or container
 has terminated the old fiasco process and all locally managed descendants.
@@ -241,7 +223,7 @@ the embedded typed YAML registry, and invariant across its calls. Sorted tool
 schemas form the other stable request prefix and are frozen before the first
 call. Core history schemas are included regardless of `compact_at_tokens`. Root
 and GeneralTask receive identical built-in schemas, including delegation and
-task controls. Remaining delegation depth is runtime state; it appears in the
+handle controls. Remaining delegation depth is runtime state; it appears in the
 initial reminder and a zero-depth `delegate` call fails before task creation.
 Optional web and MCP schemas depend on startup configuration. Memory adds
 reminder paths, not a schema. A compaction call reuses the same stable prefix.

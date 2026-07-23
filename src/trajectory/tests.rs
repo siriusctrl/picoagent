@@ -216,14 +216,14 @@ async fn search_supports_inline_regex_flags_and_hides_internal_content() {
 }
 
 #[tokio::test]
-async fn background_search_snippet_matches_the_chat_projection_read_returns() {
+async fn handle_search_snippet_matches_the_chat_projection_read_returns() {
     let message = Message {
         role: Role::User,
-        content: vec![MessageContent::BackgroundTask {
-            task_id: "t1".to_owned(),
+        content: vec![MessageContent::RuntimeHandle {
+            handle: "a1".to_owned(),
+            kind: "agent".to_owned(),
             name: "review".to_owned(),
-            output_seq: Some(1),
-            status: Some("completed".to_owned()),
+            status: "completed".to_owned(),
             content: "result contains <needle> & evidence".to_owned(),
             metadata: ResultMetadata::empty(),
         }],
@@ -693,11 +693,11 @@ async fn background_result_searches_its_linked_full_artifact() {
     let source = StaticSource(vec![record(
         1,
         Role::User,
-        vec![MessageContent::BackgroundTask {
-            task_id: "task-1".to_owned(),
+        vec![MessageContent::RuntimeHandle {
+            handle: "j_1".to_owned(),
+            kind: "tool".to_owned(),
             name: "bash".to_owned(),
-            output_seq: Some(1),
-            status: Some("completed".to_owned()),
+            status: "completed".to_owned(),
             content: "bounded preview".to_owned(),
             metadata: artifact_metadata(&artifact),
         }],

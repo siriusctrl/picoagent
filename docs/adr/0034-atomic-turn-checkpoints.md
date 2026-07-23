@@ -7,9 +7,10 @@
 - Refines: ADR 0017 (concurrent tool-batch persistence)
 - Refines: ADR 0032 (message-log commit grouping)
 
-ADR 0036 refines delegated-child recovery: the child transcript remains
-durable, but an activity that was active during process restart is interrupted
-rather than automatically resumed.
+ADR 0038 replaces durable task recovery with process-local runtime handles.
+Atomic checkpoints remain the resume boundary, but restart now reports the
+crash and leaves open child threads inert until an explicit message starts a
+new activity.
 
 ## Context
 

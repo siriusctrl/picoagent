@@ -17,7 +17,7 @@ pub struct AppConfig {
     pub provider: ProviderConfig,
     pub runtime: RuntimeConfig,
     pub compaction: CompactionConfig,
-    pub tasks: TaskConfig,
+    pub handles: HandleConfig,
     pub agents: AgentProfilesConfig,
     pub artifacts: ArtifactConfig,
     pub memory: MemoryConfig,
@@ -189,12 +189,12 @@ pub struct RuntimeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct TaskConfig {
+pub struct HandleConfig {
     pub foreground_tool_timeout_seconds: u64,
     pub wait_timeout_seconds: u64,
 }
 
-impl Default for TaskConfig {
+impl Default for HandleConfig {
     fn default() -> Self {
         Self {
             foreground_tool_timeout_seconds: 30,
@@ -347,21 +347,21 @@ impl AppConfig {
         }
         for (name, value) in [
             (
-                "tasks.foreground_tool_timeout_seconds",
-                self.tasks.foreground_tool_timeout_seconds,
+                "handles.foreground_tool_timeout_seconds",
+                self.handles.foreground_tool_timeout_seconds,
             ),
             (
-                "tasks.wait_timeout_seconds",
-                self.tasks.wait_timeout_seconds,
+                "handles.wait_timeout_seconds",
+                self.handles.wait_timeout_seconds,
             ),
         ] {
             if value == 0 {
                 bail!("`{name}` must be greater than zero")
             }
         }
-        if self.tasks.wait_timeout_seconds >= self.tasks.foreground_tool_timeout_seconds {
+        if self.handles.wait_timeout_seconds >= self.handles.foreground_tool_timeout_seconds {
             bail!(
-                "`tasks.wait_timeout_seconds` must be strictly less than `tasks.foreground_tool_timeout_seconds`"
+                "`handles.wait_timeout_seconds` must be strictly less than `handles.foreground_tool_timeout_seconds`"
             )
         }
         if self.compaction.compact_at_tokens == Some(0) {
@@ -667,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_zero_runtime_and_task_limits() {
+    fn rejects_zero_runtime_and_handle_limits() {
         for source in [
             "[runtime]\nmax_parallel_subagents = 0",
             "[runtime]\nmax_parallel_model_calls = 0",
@@ -675,9 +675,9 @@ mod tests {
             "[runtime]\nmodel_request_deadline_seconds = 0",
             "[runtime]\nmax_output_tokens = 0",
             "[agents.general_task]\nmax_output_tokens = 0",
-            "[tasks]\nforeground_tool_timeout_seconds = 0",
-            "[tasks]\nwait_timeout_seconds = 0",
-            "[tasks]\nforeground_tool_timeout_seconds = 30\nwait_timeout_seconds = 30",
+            "[handles]\nforeground_tool_timeout_seconds = 0",
+            "[handles]\nwait_timeout_seconds = 0",
+            "[handles]\nforeground_tool_timeout_seconds = 30\nwait_timeout_seconds = 30",
         ] {
             let config: AppConfig = toml::from_str(source).unwrap();
             assert!(config.validate().is_err(), "accepted {source}");
@@ -685,11 +685,11 @@ mod tests {
     }
 
     #[test]
-    fn task_defaults_use_a_short_shared_foreground_window() {
+    fn handle_defaults_use_a_short_shared_foreground_window() {
         let config = AppConfig::default();
 
-        assert_eq!(config.tasks.foreground_tool_timeout_seconds, 30);
-        assert_eq!(config.tasks.wait_timeout_seconds, 10);
+        assert_eq!(config.handles.foreground_tool_timeout_seconds, 30);
+        assert_eq!(config.handles.wait_timeout_seconds, 10);
     }
 
     #[test]

@@ -109,3 +109,5 @@ Use these sections:
   restart](0036-interrupt-agent-activities-on-restart.md)
 - [ADR 0037: Embed fmtview over a checkpoint
   timeline](0037-embed-fmtview-over-checkpoint-timeline.md)
+- [ADR 0038: Use runtime handles and explicit
+  restart](0038-runtime-handles-and-explicit-restart.md)

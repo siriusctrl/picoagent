@@ -215,7 +215,7 @@ fn anthropic_message(message: &Message) -> Value {
                     | MessageContent::ToolResult { .. }
                     | MessageContent::Reasoning { .. }
                     | MessageContent::ProviderItem { .. }
-                    | MessageContent::BackgroundTask { .. } => Value::Null,
+                    | MessageContent::RuntimeHandle { .. } => Value::Null,
                 })
                 .filter(|value| !value.is_null())
                 .collect();
@@ -540,18 +540,18 @@ mod tests {
     }
 
     #[test]
-    fn background_results_are_serialized_as_anthropic_user_text() {
+    fn handle_results_are_serialized_as_anthropic_user_text() {
         let request = ModelRequest {
             run_id: "run".into(),
             model: "model".into(),
             system: String::new(),
             messages: vec![Message {
                 role: Role::User,
-                content: vec![MessageContent::BackgroundTask {
-                    task_id: "task-1".into(),
+                content: vec![MessageContent::RuntimeHandle {
+                    handle: "a1".into(),
+                    kind: "agent".into(),
                     name: "general-task".into(),
-                    output_seq: Some(1),
-                    status: Some("completed".into()),
+                    status: "completed".into(),
                     content: "done".into(),
                     metadata: crate::artifact::ResultMetadata::empty(),
                 }],
@@ -564,7 +564,7 @@ mod tests {
         let body = anthropic_body(&request);
         assert_eq!(body["messages"][0]["role"], "user");
         let text = body["messages"][0]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("task-1"));
+        assert!(text.contains("a1"));
         assert!(text.contains("done"));
     }
 

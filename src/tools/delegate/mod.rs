@@ -6,18 +6,18 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
-    agent::task::TaskManager,
+    agent::handle::RuntimeHandleManager,
     model::ToolSpec,
     tools::{RawToolOutput, Tool, ToolContext},
 };
 
 pub struct DelegateTool {
-    manager: Arc<TaskManager>,
+    handles: Arc<RuntimeHandleManager>,
 }
 
 impl DelegateTool {
-    pub fn new(manager: Arc<TaskManager>) -> Self {
-        Self { manager }
+    pub fn new(handles: Arc<RuntimeHandleManager>) -> Self {
+        Self { handles }
     }
 }
 
@@ -34,15 +34,16 @@ impl Tool for DelegateTool {
         crate::tools::embedded_tool_spec(include_str!("tool.yaml"), module_path!())
     }
 
-    async fn execute(&self, context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
+    async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
         let args: DelegateArgs =
             serde_json::from_value(arguments).context("invalid delegate arguments")?;
-        let record = self
-            .manager
-            .delegate(args.name, args.prompt, &context.call_id)
-            .await?;
+        let snapshot = self.handles.delegate(args.name, args.prompt).await?;
         Ok(RawToolOutput::text(
-            crate::model::background_task_started_reminder(&record.id, &record.name),
+            crate::model::runtime_handle_started_reminder(
+                &snapshot.handle,
+                snapshot.kind.as_str(),
+                &snapshot.name,
+            ),
         ))
     }
 }

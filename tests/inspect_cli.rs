@@ -11,6 +11,7 @@ async fn workspace_with_run() -> (TempDir, RunDirStore) {
     let store = RunDirStore::new(workspace.path());
     let run = RunRecord::new(
         "run-1",
+        "root",
         "inspect me",
         "test-provider",
         "test-model",

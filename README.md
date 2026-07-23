@@ -28,8 +28,8 @@ itself remains headless.
 - Agent Skills discovery with progressive `SKILL.md` loading
 - MCP stdio servers adapted into the same tool registry
 - command hooks for run and tool lifecycle events
-- concurrent direct-tool batches whose unfinished calls continue through
-  generic background task control
+- concurrent direct-tool batches whose unfinished calls continue under
+  process-local runtime handles
 - asynchronously delegated general-task subagents that reuse the same runner
 - run-local YAML planning graphs maintained with ordinary file tools
 - ordinary Markdown user/project memory maintained with normal file tools
@@ -78,7 +78,6 @@ Runtime output is stored beneath the current project:
   final.md
   artifacts/
   graphs/
-  tasks/
 ```
 
 On an interactive terminal, inspect opens the current committed tail and loads
@@ -111,14 +110,14 @@ fiasco resume <run-id>
 
 An assistant tool turn is one checkpoint containing the assistant message, all
 ordered tool results, and any attachment message. Resume discards an incomplete
-checkpoint and appends a user/runtime reminder that its workspace or external
-side effects may already have occurred. It never replays that discarded tool
-turn automatically. Committed background ordinary tools are marked
-`interrupted`. Committed GeneralTask children keep their own transcripts, but
-an activity that was active when the process stopped is reported
-`interrupted`; its agent becomes idle and paused until an explicit `task_send`.
-Resume the parent run rather than invoking `fiasco resume` on a child id
-directly.
+checkpoint and appends a user/runtime reminder that the process stopped and
+workspace or external side effects may already have occurred. It does not
+restore ordinary asynchronous tool jobs, active child work, pending input, or
+undelivered results. Existing child threads keep their complete transcripts and
+remain discoverable through `list_handles`; an explicit `send_message` clears
+that child's stale pending input, adds a crash reminder, and starts a new
+activity. Resume the parent run rather than invoking `fiasco resume` on a child
+id directly.
 
 Before resume, the process supervisor, cgroup, or container must have killed
 the previous fiasco process and all locally managed descendants. Remote
@@ -169,7 +168,7 @@ decoder from the last committed byte boundary.
 Stable agent instructions are folded scalar values in the typed, compile-time
 `prompts/agents.yaml` registry. Every local model-facing tool adapter has a
 typed `tool.yaml` beside it; standalone tools live under `src/tools/<tool>/`,
-while task, history, and graph families use
+while handle, history, and graph families use
 `src/tools/<family>/<member>/`. The manifest
 always owns the complete model-facing name, purpose description, return
 guidance, and input schema. Rust composes the two prose fields into the standard
@@ -185,7 +184,7 @@ dependencies are accepted-outcome dependencies, and a node is resolved only
 when the main agent writes a resolution. Use ordinary `read` and `write` for
 later revisions, then call `graph_list` to validate them and derive ready nodes.
 Execute independent ready work with concurrent `delegate` calls and supervise
-those runs with the existing task controls; task ids are not stored in the
+those runs with the runtime-handle controls; handles are not stored in the
 graph.
 
 ```json
@@ -451,19 +450,19 @@ The launch tool surface is intentionally small:
 - `history_read`: a bounded message window around a returned history ref
 - `load_skill`: progressive loading of a catalogued skill's full instructions
 - `delegate`: asynchronously start a reusable GeneralTask agent
-- `task_status`: inspect current task state
-- `task_wait`: wait until any selected task settles or one interval expires
-- `task_list`: list all delegated agents owned by the current run
-- `task_inspect`: read a bounded window of a child agent's messages
-- `task_send`: send `steer` input now or queue `followup` input for later
-- `task_stop`: stop a task or pause a reusable agent after stopping its activity
-- `task_close`: explicitly close an idle delegated agent
+- `list_handles`: list current-process tool jobs and durable child agents
+- `status`: inspect selected runtime handles
+- `wait`: wait until any selected handle changes or one interval expires
+- `inspect`: read a bounded window of a child agent's messages
+- `send_message`: send `steer` input now or queue `followup` input for later
+- `stop`: stop a tool job or the current activity of a reusable agent
+- `close`: explicitly close an idle delegated agent
 - `web_search`: optional Brave-backed public web search
 
 Root and GeneralTask receive the same built-in schemas, including `delegate`
-and every task control. Remaining delegation depth is frozen in run state and
+and every runtime-handle control. Remaining delegation depth is frozen in run state and
 shown in the runtime reminder. At zero, `delegate` returns a local tool error
-without creating a task; its schema does not disappear. Memory adds paths to
+without creating a child; its schema does not disappear. Memory adds paths to
 the reminder, not a tool schema. `web_search` and MCP tools depend on startup
 configuration. The resulting schemas are sorted and frozen before the run's
 first normal provider call.
@@ -476,47 +475,44 @@ silently modify the wrong code.
 All direct tool calls in one assistant message start concurrently and share one
 foreground window. If all finish early, fiasco returns immediately. At the
 configured deadline, it preserves each unfinished exact future, moves only
-those calls into the background task lifecycle, and returns their task ids; no
-tool is stopped or restarted. The assistant message, tool-result messages in
+those calls under process-local `j_<ulid>` handles, and returns those handles;
+no tool is stopped or restarted. The assistant message, tool-result messages in
 original call order, and any attachment message commit as one checkpoint.
 Results retain their original `tool_call_id`, even though completion events can
 arrive in another order. The model should put only independent calls in one
 batch and issue dependent work after seeing results.
-The tool result is a status-less `<background_task>` notice containing the task
-id and name; it only acknowledges that work is running.
+The tool result is a status-less `<runtime_handle>` notice containing the
+handle, kind, and name; it only acknowledges that work is running.
 
-`delegate` requires a short model-supplied name and starts one isolated,
-reusable `general-task` agent asynchronously. Agent and task are one runtime
-concept: the delegated agent is a task with a child transcript and repeated
-activity outputs. The seven `task_*` tools observe and control delegated agents
-and automatically promoted direct tools where applicable. Each output is
-preserved under the ordinary artifact policy. At the next model boundary, one
-user/runtime message batches every ready
-`<background_task status="..." output_seq="...">` notice. Internal task records
-retain promoted calls' original provider ids, so the provider sees exactly one
-result for each original one-shot tool call.
+`delegate` requires a non-empty model-supplied display name and starts one
+isolated, reusable `general-task` agent asynchronously. Its handle is the child
+run id, so the handle addresses the same durable transcript across activities
+and process restarts. Promoted ordinary-tool handles exist only in the current
+process. Each output uses the ordinary artifact policy. At the next model
+boundary, one user/runtime message batches every ready
+`<runtime_handle status="...">` notice.
 
-The task-control calls are intentionally small:
+The handle-control calls are intentionally small:
 
 ```text
 delegate({"name":"inspect_tests","prompt":"inspect the failing tests and report the cause"})
-task_status({"task_ids":[]})
-task_wait({"task_ids":["t1"]})
-task_list({"include_closed":false})
-task_inspect({"task_id":"t1","limit":6,"before_seq":42})
-task_send({"task_id":"t1","message":"check the failing test first","mode":"steer"})
-task_send({"task_id":"t1","message":"then compare the alternatives","mode":"followup"})
-task_stop({"task_id":"t1"})
-task_close({"task_id":"t1"})
+status({"handles":[]})
+wait({"handles":["01J..."]})
+list_handles({"include_closed":false})
+inspect({"handle":"01J...","limit":6,"before_seq":42})
+send_message({"handle":"01J...","message":"check the failing test first","mode":"steer"})
+send_message({"handle":"01J...","message":"then compare the alternatives","mode":"followup"})
+stop({"handle":"01J..."})
+close({"handle":"01J..."})
 ```
 
-`task_wait` returns as soon as any selected task becomes inactive, while its
-snapshot may still show other selected tasks running. An empty `task_ids` means
-all tasks owned by that run. `task_list` returns all agents managed by the
-current run, including idle reusable agents and optionally closed ones.
+`wait` returns as soon as any selected handle has a result or status change,
+while its snapshot may still show other selected handles running. An empty
+`handles` list means all visible handles. `list_handles` returns all child
+agents owned by the current run plus current-process tool jobs, including idle
+reusable agents and optionally closed ones.
 `before_seq` is exclusive and optional; inspect returns `next_before_seq` when
-older messages exist. Task ids are short references local to their parent run
-(`t1`, `t2`, ...); child run ids remain internal durable-storage identities.
+older messages exist.
 
 ## Skills
 
@@ -537,7 +533,7 @@ fiasco skills list
 ## Multi-Agent Orchestration
 
 `delegate` asynchronously starts the sole model-facing `general-task` role as
-a reusable agent task;
+a reusable child agent;
 there is no model-facing profile choice. The runtime reminder states the exact
 remaining delegation depth. With the default `max_subagent_depth = 1`, the
 first child has
@@ -558,10 +554,10 @@ capacity remains independently controlled by `runtime.max_parallel_subagents`.
 Every `delegate` call starts an isolated child with only its runtime reminder
 and delegated prompt. The prompt must include the complete objective and any
 task-specific context; the child does not inherit the parent conversation. A
-completed activity leaves that child idle. `task_send` resumes the same child
+completed activity leaves that child idle. `send_message` resumes the same child
 with an ordinary user message, `followup` queues that message without blocking
-the parent, and a stopped agent stays paused until its next `task_send`.
-`task_close` is the explicit end of the agent's lifetime and
+the parent, and a stopped agent stays paused until its next `send_message`.
+`close` is the explicit end of the agent's lifetime and
 discards any still-queued followups. Its
 trajectory is stored in the child run, so reuse, resume, and history retrieval
 do not depend on a live parent process.
@@ -572,19 +568,15 @@ that produces no valid SSE event for that interval, while
 API call even when the stream keeps making progress. Neither limit includes
 tool execution or time spent waiting for the shared model slot.
 
-Only sequenced child activity results return to the parent context; full child transcripts remain
-in their own run directories. The parent stores coordination state under
-`tasks/`, but recovery recognizes a task only when its originating call has a
-tool result in a complete parent checkpoint. Pre-checkpoint task files and child
-runs are ignored as orphans. Reactivation moves the parent task to `running`
-and launches the existing idle child; it does not use `child=queued` as a
-recovery marker. After process restart, a recognized queued/running activity is
-reported `interrupted`, the same child becomes idle and paused, and pending
-input is retained without automatic execution. The next explicit `task_send`
-reuses its complete transcript. Closed children stay closed. Activity-result
-delivery cursors are derived from the parent transcript. This guarantee applies
-to every committed GeneralTask task record, including one used for a large
-memory update.
+Only child activity results return to the parent context; full child
+transcripts remain in their own run directories. There is no parent-side
+persistent coordination record or recovery state machine. On restart,
+`list_handles` discovers direct child runs by parent id and presents every open
+thread as idle without launching it. The first explicit `send_message` reuses
+the child's complete transcript after discarding stale pending input and adding
+a crash reminder. Closed children stay closed. Tool jobs and undelivered
+activity outputs from the previous process are gone; the parent crash reminder
+leaves any retry decision to the model.
 
 The parent can inspect a child's latest messages (six by default), page
 backward by sequence, and queue steering while it runs. Steering is stored as
@@ -627,7 +619,7 @@ CLI/job
      -> ToolRegistry
         -> local Tool adapters grouped where related
         -> MCP Tool adapters
-        -> TaskManager
+        -> RuntimeHandleManager
            -> promoted direct Tool future
            -> delegated child AgentRunner
      -> ArtifactStore

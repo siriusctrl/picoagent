@@ -2,14 +2,16 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::{agent::task::TaskManager, skills::SkillRegistry, trajectory::TrajectoryReader};
+use crate::{
+    agent::handle::RuntimeHandleManager, skills::SkillRegistry, trajectory::TrajectoryReader,
+};
 
 use super::{
     BashTool, DelegateTool, LoadSkillTool, ReadTool, ToolRegistry, WebSearchTool, WriteTool, graph,
-    history, task,
+    handle, history,
 };
 
-/// Assemble the process-wide tools. Run-scoped history and task controls are
+/// Assemble the process-wide tools. Run-scoped history and handle controls are
 /// added later by `RunToolAssembly`.
 pub fn build_app_tools(
     skills: Arc<SkillRegistry>,
@@ -47,10 +49,10 @@ impl RunToolAssembly {
         self.registry.contains(name)
     }
 
-    pub fn finish(mut self, manager: Arc<TaskManager>) -> Result<ToolRegistry> {
+    pub fn finish(mut self, handles: Arc<RuntimeHandleManager>) -> Result<ToolRegistry> {
         self.registry
-            .register(Arc::new(DelegateTool::new(manager.clone())))?;
-        task::register_controls(&mut self.registry, manager)?;
+            .register(Arc::new(DelegateTool::new(handles.clone())))?;
+        handle::register_controls(&mut self.registry, handles)?;
         Ok(self.registry)
     }
 }

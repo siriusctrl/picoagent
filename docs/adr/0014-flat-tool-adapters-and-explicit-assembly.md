@@ -20,6 +20,10 @@ ADR 0019 later refines only the source layout: cohesive task and history
 families are grouped beneath `src/tools/<family>/`, while each leaf adapter
 still owns its complete manifest and registration remains explicit.
 
+ADR 0038 later removes the durable `TaskManager` and replaces the task-control
+family with runtime-handle adapters under `src/tools/handle/`. Explicit
+assembly, leaf-owned manifests, and domain-engine separation remain accepted.
+
 ## Context
 
 Model-facing tools had two ownership patterns. Base and history adapters lived

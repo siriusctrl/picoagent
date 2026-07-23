@@ -2,8 +2,8 @@ name: graph_list
 description: >-
   List and validate every durable planning graph in the current run. Graphs are
   topology and accepted outcomes only: modify their YAML with `write`, execute
-  ready work with ordinary `delegate`, and supervise executions with task
-  controls. A node is resolved only when its `resolution` object has a non-empty
+  ready work with ordinary `delegate`, and supervise executions with runtime
+  handle controls. A node is resolved only when its `resolution` object has a non-empty
   `summary`; an unresolved node is ready when every `depends_on` node is
   resolved. A resolved node whose direct dependency is unresolved is invalid.
   Only `wip` graphs expose ready nodes; terminal graphs always expose `ready: []`.

@@ -31,8 +31,7 @@ pub use openai_oauth::{
     OpenAiOAuthProvider,
 };
 pub(crate) use runtime::{
-    active_background_tasks_section, background_task_started_reminder,
-    render_background_task_content,
+    active_runtime_handles_section, render_runtime_handle_content, runtime_handle_started_reminder,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -103,15 +102,11 @@ pub enum MessageContent {
         provider: String,
         item: Value,
     },
-    BackgroundTask {
-        task_id: String,
+    RuntimeHandle {
+        handle: String,
+        kind: String,
         name: String,
-        /// Monotonic per-task output sequence. Absent only on a running
-        /// acknowledgement which carries no result.
-        output_seq: Option<u64>,
-        /// Activity outcome when this notice carries a result. A status-less
-        /// notice only reports that the task remains active.
-        status: Option<String>,
+        status: String,
         content: String,
         metadata: ResultMetadata,
     },
@@ -191,16 +186,16 @@ impl Message {
     pub(crate) fn validate(&self) -> Result<()> {
         match self.role {
             Role::User => {
-                let has_background_task = self
+                let has_runtime_handle = self
                     .content
                     .iter()
-                    .any(|block| matches!(block, MessageContent::BackgroundTask { .. }));
-                if has_background_task {
+                    .any(|block| matches!(block, MessageContent::RuntimeHandle { .. }));
+                if has_runtime_handle {
                     ensure!(
                         self.content
                             .iter()
-                            .all(|block| matches!(block, MessageContent::BackgroundTask { .. })),
-                        "background task notices cannot be mixed with other user content"
+                            .all(|block| matches!(block, MessageContent::RuntimeHandle { .. })),
+                        "runtime handle notices cannot be mixed with other user content"
                     );
                 } else {
                     ensure!(
@@ -210,7 +205,7 @@ impl Message {
                                 | MessageContent::Text { .. }
                                 | MessageContent::Image { .. }
                         )),
-                        "user messages contain only runtime reminders, text, images, or background tasks"
+                        "user messages contain only runtime reminders, text, images, or runtime handles"
                     );
                 }
             }

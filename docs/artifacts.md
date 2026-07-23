@@ -79,9 +79,9 @@ appropriate to the model. Successful and failed foreground results share this
 per-result policy; a large error is an artifact-backed bounded result rather
 than an unbounded exception string in the next model request.
 
-### Background delivery
+### Asynchronous delivery
 
-One-shot terminal background results and reusable-agent activity results use
+Promoted-tool results and reusable-agent activity results use
 the same independent result policy as foreground tools. Small UTF-8 output
 stays inline. Large, binary, and non-UTF-8 output is preserved as an artifact
 and the delivered body contains the ordinary
@@ -89,19 +89,19 @@ bounded `[Tool output]` envelope with its path, digest, byte counts, read
 instruction, and any safe head/tail preview. The parent receives one batched
 runtime message per ready set.
 
-Payload limiting happens before fiasco adds the `<background_task>` status
+Payload limiting happens before fiasco adds the `<runtime_handle>` status
 wrapper. The wrapper, artifact metadata, and inspection instruction are never
 part of the preview budget. The typed message keeps the exact inline payload;
-provider projections XML-escape it, so runtime-like tags cannot escape its task
+provider projections XML-escape it, so runtime-like tags cannot escape its
 block.
 
-If an image read exceeds the foreground window and becomes a background task,
+If an image read exceeds the foreground window and receives a runtime handle,
 its binary result remains artifact-backed. Reading that artifact again attaches
 the image on demand.
 
-A status-less background notice is only a running acknowledgement and has no
-result artifact. An activity-result notice includes `status` and `output_seq`
-and keeps its result metadata in the same background-task content block. Artifact-backed results
+A status-less runtime-handle notice is only a running acknowledgement and has
+no result artifact. An activity-result notice includes `status` and keeps its
+result metadata in the same runtime-handle content block. Artifact-backed results
 carry their exact path and `ArtifactRef`; small inline results have no artifact.
 
 ### History-query boundaries
@@ -114,15 +114,15 @@ regex,” while an artifact preview means “use bounded `read` on the reference
 complete bounded result.” Neither history tool uses a cursor.
 
 Full-text history search reads the exact `ArtifactRef` stored with each
-foreground or background result in `messages.jsonl`. History retrieval does not
+foreground or asynchronous result in `messages.jsonl`. History retrieval does not
 parse the model-facing preview envelope. A foreground `ToolResult` is correlated by
 its provider `tool_call_id`. After promotion, the running acknowledgement still
-occupies that provider tool-result slot, while a later background output is
-correlated by `task_id` and `output_seq`. The local reader follows the exact
+occupies that provider tool-result slot, while a later asynchronous output is
+correlated by runtime handle. The local reader follows the exact
 `ArtifactRef` paired with that message, streams the referenced candidate
 through SHA-256 verification, then performs its bounded `rg` search. Artifact
 matches return the exact path as well as the owning message ref, so a batched
-message with several task results is not ambiguous. Reused call ids do not
+message with several handle results is not ambiguous. Reused call ids do not
 create ambiguity, and same-length content mutation is rejected.
 
 ## Lifecycle

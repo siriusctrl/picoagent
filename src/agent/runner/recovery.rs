@@ -9,26 +9,26 @@ use crate::{
 };
 
 use super::{AgentRunner, RunRequest, RunResult, lifecycle::RunMode};
-use crate::agent::{compaction::estimate_message_tokens, task::TaskOutputNotice};
+use crate::agent::{compaction::estimate_message_tokens, handle::HandleOutputNotice};
 
-const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous fiasco process stopped after the last complete checkpoint. Any uncommitted model/tool turn was discarded, but its workspace or external side effects may already have occurred. Inspect the current state before retrying any operation.\n</runtime-reminder>";
+const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous fiasco process stopped after the last complete checkpoint. All activities and asynchronous tool jobs from that process stopped and were not resumed; pending input and undelivered results were discarded. Existing agent threads keep their complete history and remain available through list_handles, inspect, and an explicit send_message. Workspace or external side effects may already have occurred, so inspect current state before retrying operations.\n</runtime-reminder>";
 
 impl AgentRunner {
     pub async fn resume(self: &Arc<Self>, run_id: impl Into<String>) -> Result<RunResult> {
-        self.resume_with_parent(run_id.into(), None, None).await
+        self.start_existing_run(run_id.into(), None, None).await
     }
 
-    pub(crate) async fn resume_child(
+    pub(crate) async fn run_child_activity(
         self: &Arc<Self>,
         run_id: String,
         expected_parent_run_id: &str,
         cleanup_done: tokio::sync::oneshot::Sender<()>,
     ) -> Result<RunResult> {
-        self.resume_with_parent(run_id, Some(expected_parent_run_id), Some(cleanup_done))
+        self.start_existing_run(run_id, Some(expected_parent_run_id), Some(cleanup_done))
             .await
     }
 
-    async fn resume_with_parent(
+    async fn start_existing_run(
         self: &Arc<Self>,
         run_id: String,
         expected_parent_run_id: Option<&str>,
@@ -82,34 +82,34 @@ impl AgentRunner {
             record.model_modalities,
             plan.modalities
         );
-        let mode = match (record.state, expected_parent_run_id) {
-            (RunState::Queued, _) => RunMode::New,
-            (_, Some(_)) => RunMode::Continue,
-            (_, None) => RunMode::Restart,
+        let mode = match expected_parent_run_id {
+            Some(_) if self.store.load_trajectory(&run_id).await?.is_empty() => RunMode::New,
+            Some(_) => RunMode::ChildActivity,
+            None => RunMode::RootRestart,
         };
         self.run_with_mode(request, run_id, mode, lease.clone(), cleanup_done)
             .await
     }
 }
 
-pub(super) async fn append_background_results(
+pub(super) async fn append_handle_results(
     store: &RunDirStore,
     run_id: &str,
     trajectory: &mut Vec<TrajectoryMessage>,
-    notices: &[TaskOutputNotice],
+    notices: &[HandleOutputNotice],
 ) -> Result<u64> {
     if notices.is_empty() {
         return Ok(0);
     }
     let content = notices
         .iter()
-        .map(|notice| MessageContent::BackgroundTask {
-            task_id: notice.task_id.clone(),
+        .map(|notice| MessageContent::RuntimeHandle {
+            handle: notice.handle.clone(),
+            kind: notice.kind.as_str().to_owned(),
             name: notice.name.clone(),
-            output_seq: Some(notice.output.seq),
-            status: Some(notice.output.status.as_str().to_owned()),
-            content: notice.output.model_content(),
-            metadata: notice.output.result_metadata(),
+            status: notice.output.status.as_str().to_owned(),
+            content: notice.output.content.clone(),
+            metadata: notice.output.metadata.clone(),
         })
         .collect::<Vec<_>>();
     let message = Message {
@@ -135,14 +135,4 @@ pub(super) async fn append_restart_reminder(
     };
     trajectory.push(store.append_message(run_id, &message).await?);
     Ok(())
-}
-
-pub(super) fn resumable_final_text(trajectory: &[TrajectoryMessage]) -> Option<String> {
-    let record = trajectory.last()?;
-    if record.compaction.is_some() {
-        return None;
-    }
-    let message = &record.message;
-    (message.role == Role::Assistant && message.tool_calls().is_empty())
-        .then(|| message.visible_text())
 }

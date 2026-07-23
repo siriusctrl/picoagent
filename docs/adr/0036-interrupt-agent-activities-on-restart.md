@@ -1,6 +1,6 @@
 # ADR 0036: Interrupt Agent Activities on Process Restart
 
-- Status: Accepted
+- Status: Superseded by ADR 0038
 - Date: 2026-07-22
 - Supersedes: ADR 0006 (automatic child-activity resume)
 - Refines: ADR 0034 (background recovery policy)

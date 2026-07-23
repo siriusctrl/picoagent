@@ -5,6 +5,9 @@
 - Refines: ADR 0010 (background entry and control surface)
 - Refines: ADR 0014 (tool assembly and capability policy)
 
+ADR 0038 replaces the durable task-control surface with runtime handles.
+Concurrent foreground batches and exact-future promotion remain accepted.
+
 ADR 0020 later refines the model-facing lifecycle protocol: starts and terminal
 delivery now use one background-task runtime tag, `delegate` accepts a display
 name, and terminal bodies contain only complete artifact paths. The concurrent

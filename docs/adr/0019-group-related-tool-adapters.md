@@ -4,6 +4,10 @@
 - Date: 2026-07-20
 - Refines: ADR 0014 (local adapter source layout)
 
+ADR 0038 later replaces the task family and `TaskManager` with the
+runtime-handle family and `RuntimeHandleManager`. The grouping and explicit-name
+decisions in this record remain accepted.
+
 ## Context
 
 Putting every model-facing adapter directly under `src/tools/<tool>/` made

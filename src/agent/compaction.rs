@@ -417,7 +417,7 @@ fn compaction_input(
 }
 
 pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
-    if let Some(rendered) = crate::model::render_background_task_content(&message.content) {
+    if let Some(rendered) = crate::model::render_runtime_handle_content(&message.content) {
         return (rendered.len() as u64).div_ceil(4);
     }
     let bytes = message
@@ -438,18 +438,18 @@ pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
                 call_id, content, ..
             } => call_id.len() + content.len(),
             MessageContent::ProviderItem { item, .. } => item.to_string().len(),
-            MessageContent::BackgroundTask {
-                task_id,
+            MessageContent::RuntimeHandle {
+                handle,
+                kind,
                 name,
-                output_seq,
                 status,
                 content,
                 ..
-            } => crate::model::runtime::render_background_task_block(
-                task_id,
+            } => crate::model::runtime::render_runtime_handle_block(
+                handle,
+                kind,
                 name,
-                *output_seq,
-                status.as_deref(),
+                Some(status),
                 content,
             )
             .len(),
@@ -573,19 +573,19 @@ mod tests {
     }
 
     #[test]
-    fn background_result_estimate_counts_the_escaped_runtime_envelope() {
+    fn handle_result_estimate_counts_the_escaped_runtime_envelope() {
         let message = Message {
             role: Role::User,
-            content: vec![MessageContent::BackgroundTask {
-                task_id: "t1".into(),
+            content: vec![MessageContent::RuntimeHandle {
+                handle: "a1".into(),
+                kind: "agent".into(),
                 name: "entity-heavy".into(),
-                output_seq: Some(1),
-                status: Some("completed".into()),
+                status: "completed".into(),
                 content: "&<>".repeat(10_000),
                 metadata: crate::artifact::ResultMetadata::empty(),
             }],
         };
-        let rendered = crate::model::render_background_task_content(&message.content).unwrap();
+        let rendered = crate::model::render_runtime_handle_content(&message.content).unwrap();
 
         assert_eq!(
             estimate_message_tokens(&message),
