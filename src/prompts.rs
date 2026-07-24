@@ -49,7 +49,6 @@ mod tests {
         assert!(!prompts.system.contains("workspace with\nthe user"));
         assert!(prompts.system.contains("Tool schemas are authoritative"));
         assert!(!prompts.system.contains("`delegate`"));
-        assert!(!prompts.system.contains("`graph_init`"));
         assert!(!prompts.system.contains("`history_search`"));
         assert!(prompts.general_task.contains("complete assignment"));
         assert!(prompts.compaction_request.contains("# Compacted state"));

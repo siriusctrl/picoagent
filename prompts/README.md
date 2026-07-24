@@ -37,10 +37,8 @@ instructions live with the behavior that assembles them, such as
 
 When one call needs a structured aggregate rather than incremental mutation,
 the manifest may include a concise representative example in both its prose and
-JSON Schema. For example, `graph_init` accepts a complete graph document,
-including any already accepted resolutions, in one call so Rust can validate
-the exact persisted shape before creating the graph file. Examples explain
-shape only; Rust remains authoritative for semantic validation.
+JSON Schema. Examples explain shape only; Rust remains authoritative for
+semantic validation.
 
 These are compile-time assets, not runtime overrides or dynamically discovered
 plugins. External executable tools integrate through MCP and keep their

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate with Graphs"
+  short_description: "Externalize complex coordination in lightweight graphs"
+  default_prompt: "Use $orchestrate-with-graphs to coordinate this complex task with a lightweight dependency graph."

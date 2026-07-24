@@ -48,14 +48,7 @@ fn app_registry_uses_the_embedded_tool_manifests() {
 
     assert_eq!(
         registry.names().collect::<Vec<_>>(),
-        [
-            "bash",
-            "graph_init",
-            "graph_list",
-            "load_skill",
-            "read",
-            "write"
-        ]
+        ["bash", "load_skill", "read", "write"]
     );
     let specs = registry
         .specs()
@@ -64,14 +57,6 @@ fn app_registry_uses_the_embedded_tool_manifests() {
         .collect::<std::collections::BTreeMap<_, _>>();
     for (name, source) in [
         ("bash", include_str!("../src/tools/bash/tool.yaml")),
-        (
-            "graph_init",
-            include_str!("../src/tools/graph/init/tool.yaml"),
-        ),
-        (
-            "graph_list",
-            include_str!("../src/tools/graph/list/tool.yaml"),
-        ),
         (
             "load_skill",
             include_str!("../src/tools/load_skill/tool.yaml"),
@@ -83,133 +68,6 @@ fn app_registry_uses_the_embedded_tool_manifests() {
         assert_eq!(specs[name].description, model_description(&definition));
         assert_eq!(specs[name].input_schema, definition["input_schema"]);
     }
-}
-
-#[tokio::test]
-async fn graph_tools_initialize_validate_and_reuse_file_tools_for_mutation() {
-    let workspace = tempdir().unwrap();
-    let registry = build_app_tools(Arc::new(Default::default()), None, false).unwrap();
-    let init = registry.get("graph_init").unwrap();
-    let list = registry.get("graph_list").unwrap();
-    let write = registry.get("write").unwrap();
-    let read = registry.get("read").unwrap();
-
-    let initialized = init
-        .execute(
-            context(workspace.path(), "graph-init"),
-            json!({
-                "graph": {
-                    "version": 1,
-                    "status": "wip",
-                    "goal": "Inspect and implement graph support",
-                    "nodes": {
-                        "inspect": {
-                            "objective": "Inspect existing behavior",
-                            "depends_on": [],
-                            "resolution": {
-                                "summary": "Inspection complete",
-                                "evidence": ["docs/architecture.md"]
-                            }
-                        },
-                        "implement": {
-                            "objective": "Implement the design",
-                            "depends_on": ["inspect"],
-                            "resolution": null
-                        }
-                    }
-                }
-            }),
-        )
-        .await
-        .unwrap();
-    let initialized: serde_json::Value = serde_json::from_slice(&initialized.content).unwrap();
-    let path = initialized["path"].as_str().unwrap();
-    assert_eq!(path, ".fiasco/runs/run-1/graphs/g1.yaml");
-
-    let initial_graph = read
-        .execute(
-            context(workspace.path(), "graph-read"),
-            json!({"path": path}),
-        )
-        .await
-        .unwrap();
-    let initial_graph = String::from_utf8(initial_graph.content).unwrap();
-    assert!(initial_graph.contains("inspect:"));
-    assert!(initial_graph.contains("depends_on:") && initial_graph.contains("- inspect"));
-    assert!(initial_graph.contains("summary: Inspection complete"));
-    let initial_listing = list
-        .execute(context(workspace.path(), "graph-list-initial"), json!({}))
-        .await
-        .unwrap();
-    let initial_listing: serde_json::Value =
-        serde_json::from_slice(&initial_listing.content).unwrap();
-    assert_eq!(initial_listing["wip"][0]["ready"], json!(["implement"]));
-    assert_eq!(initial_listing["wip"][0]["resolved"], 1);
-
-    write
-        .execute(
-            context(workspace.path(), "graph-write"),
-            json!({
-                "path": path,
-                "content": "version: 1\nstatus: completed\ngoal: Inspect and implement graph support\nsummary: Graph support implemented\nnodes:\n  inspect:\n    objective: Inspect existing behavior\n    depends_on: []\n    resolution:\n      summary: Inspection complete\n      evidence: [docs/architecture.md]\n  implement:\n    objective: Implement the design\n    depends_on: [inspect]\n    resolution:\n      summary: Implementation complete\n      evidence: [src/tools/graph/init/mod.rs]\n"
-            }),
-        )
-        .await
-        .unwrap();
-    let listing = list
-        .execute(context(workspace.path(), "graph-list"), json!({}))
-        .await
-        .unwrap();
-    let listing: serde_json::Value = serde_json::from_slice(&listing.content).unwrap();
-    assert_eq!(listing["completed"][0]["ready"], json!([]));
-    assert_eq!(listing["completed"][0]["resolved"], 2);
-    assert_eq!(listing["completed"][0]["unresolved"], 0);
-}
-
-#[tokio::test]
-async fn large_graph_listing_uses_the_normal_artifact_contract() {
-    let workspace = tempdir().unwrap();
-    let graph_directory = workspace.path().join(".fiasco/runs/run-1/graphs");
-    tokio::fs::create_dir_all(&graph_directory).await.unwrap();
-    for number in 1..=400 {
-        tokio::fs::write(
-            graph_directory.join(format!("g{number}.yaml")),
-            format!(
-                "version: 1\nstatus: wip\ngoal: Inspect graph {number} {}\nnodes: {{}}\n",
-                "with a deliberately descriptive planning goal ".repeat(3)
-            ),
-        )
-        .await
-        .unwrap();
-    }
-
-    let registry = build_app_tools(Arc::new(Default::default()), None, false).unwrap();
-    let tool_context = context(workspace.path(), "graph-list-large");
-    let raw = registry
-        .get("graph_list")
-        .unwrap()
-        .execute(tool_context.clone(), json!({}))
-        .await
-        .unwrap();
-    assert!(raw.content.len() > 32 * 1024);
-    let output = ArtifactStore::default()
-        .persist_output(&tool_context, raw)
-        .await
-        .unwrap();
-
-    assert!(output.truncated);
-    let artifact = output.artifact.unwrap();
-    assert_eq!(artifact.media_type, "text/plain; charset=utf-8");
-    let artifact_path = std::path::PathBuf::from(&artifact.path);
-    let stored = tokio::fs::read_to_string(workspace.path().join(&artifact_path))
-        .await
-        .unwrap();
-    let listing: serde_json::Value = serde_json::from_str(&stored).unwrap();
-    assert_eq!(listing["wip"].as_array().unwrap().len(), 400);
-    let entries = std::fs::read_dir(workspace.path().join(".fiasco/runs/run-1/artifacts"))
-        .unwrap()
-        .count();
-    assert_eq!(entries, 1);
 }
 
 #[tokio::test]

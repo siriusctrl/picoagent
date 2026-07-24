@@ -1,8 +1,11 @@
 # ADR 0031: Validate the complete initial graph topology before creation
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-07-21
 - Refines: ADR 0026 (planning graph initialization)
+
+Superseded by ADR 0048, which removes graph-specific initialization and
+validation from the runtime.
 
 ADR 0040 refines the accepted input from a goal plus node map to the exact
 complete graph document, including already accepted resolutions.

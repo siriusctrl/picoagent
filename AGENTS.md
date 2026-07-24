@@ -12,8 +12,10 @@ cross-cutting invariants, verification, and handoff.
 - `src/model/`: provider-neutral contracts and provider adapters. Wire formats
   and authentication stay here, outside the agent loop.
 - `src/tools/`: the deterministic built-in tool registry. Each leaf owns a typed
-  compile-time `tool.yaml`; related handle, history, and graph tools are grouped
-  by family.
+  compile-time `tool.yaml`; related handle and history tools are grouped by
+  family.
+- `skills/`: installable Agent Skills whose optional procedural guidance stays
+  outside the built-in tool surface.
 - `src/storage/`, `src/artifact.rs`, and `src/trajectory/`: self-contained run
   storage, newline-visible transcripts, artifact preservation, and history
   access.
@@ -69,9 +71,10 @@ See `docs/source-map.md` for the detailed ownership map.
   reuses the normal system prompt and never executes tool calls. Stable prose
   belongs in `prompts/agents.yaml`, static tool descriptions in leaf
   `tool.yaml`, and execution logic in Rust.
-- Planning graphs are run-local files, not runtime state or a scheduler. Memory
-  is user/project Markdown outside the live transcript, not a special execution
-  subsystem. Both are manipulated through ordinary tools.
+- Orchestration graphs are optional workspace files governed by an installable
+  skill, not runtime state or a scheduler. Memory is user/project Markdown
+  outside the live transcript, not a special execution subsystem. Both are
+  manipulated through ordinary tools.
 - Fiasco owns run routing and inspect command selection; fmtview-core owns the
   physical growing-file timeline, and fmtview owns rendering, navigation,
   search, and event handling.
@@ -103,8 +106,8 @@ See `docs/source-map.md` for the detailed ownership map.
   ADR 0037, and ADR 0044.
 - Artifact storage and result envelopes: `docs/artifacts.md`.
 - Prompt and tool assets: `prompts/README.md` and `docs/architecture.md`.
-- Configuration, memory, and planning graphs: `docs/configuration.md`,
-  `docs/memory.md`, ADR 0026, and ADR 0031.
+- Configuration, memory, and orchestration graphs: `docs/configuration.md`,
+  `docs/memory.md`, `skills/orchestrate-with-graphs/`, and ADR 0048.
 - The ADR index in `docs/adr/README.md` is the authority for superseded and
   refined decisions.
 

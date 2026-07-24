@@ -31,7 +31,7 @@ itself remains headless.
 - concurrent direct-tool batches whose unfinished calls continue under
   process-local runtime handles
 - asynchronously delegated general-task subagents that reuse the same runner
-- run-local YAML planning graphs maintained with ordinary file tools
+- an installable skill for graph-based orchestration with ordinary file tools
 - ordinary Markdown user/project memory maintained with normal file tools
 - self-contained run directories and optional NDJSON events
 - tail-first transcript inspection for completed and running runs
@@ -172,82 +172,34 @@ always owns the complete model-facing name, purpose description, return
 guidance, and input schema. Rust composes the two prose fields into the standard
 provider description and owns validation, assembly, and execution.
 
-## File-backed Planning Graphs
+## Graph-based Orchestration Skill
 
-For a complex task, `graph_init` accepts one complete version-1 `wip` graph
-document, validates its topology and any accepted resolutions, and creates a
-short run-local path such as
-`.fiasco/runs/<run-id>/graphs/g1.yaml`. Invalid initialization creates no file.
-The graph is durable coordination state, not a scheduler: nodes are work items,
-dependencies are accepted-outcome dependencies, and a node is resolved only
-when the main agent accepts a resolution. Initial resolutions let the first
-document record knowledge already established before the graph was created.
-Use ordinary `read` and `write` for later revisions, then call `graph_list` to
-validate them and derive ready nodes. Execute independent ready work with
-concurrent `delegate` calls and supervise those runs with the runtime-handle
-controls; handles are not stored in the graph.
+Fiasco keeps graph planning as optional model guidance rather than a built-in
+runtime subsystem. Install the repository's `orchestrate-with-graphs` Agent
+Skill into a project with:
 
-```json
-{
-  "graph": {
-    "version": 1,
-    "status": "wip",
-    "goal": "Implement and verify image input support",
-    "nodes": {
-      "inspect_api": {
-        "objective": "Determine the provider request contract",
-        "depends_on": [],
-        "resolution": {
-          "summary": "The provider accepts native image content blocks",
-          "evidence": ["docs/provider-contract.md"]
-        }
-      },
-      "implement": {
-        "objective": "Implement the accepted contract",
-        "depends_on": ["inspect_api"],
-        "resolution": null
-      }
-    }
-  }
-}
+```bash
+npx skills add siriusctrl/fiasco \
+  --skill orchestrate-with-graphs \
+  --agent universal
 ```
 
-Tool calls within one assistant response run concurrently. Therefore later
-graph updates are a three-turn dependency chain: complete `write`, call
-`graph_list` only after receiving that result, and issue dependent `delegate`
-calls only after receiving the validated listing. Do not batch dependent stages
-together.
+The skill teaches an orchestrator when a dependency graph is useful, how to
+store it under `.agents/graphs/`, how to distinguish accepted knowledge from
+live execution, and how to coordinate independent work. It uses ordinary file
+capabilities and explicit agent controls. Fiasco does not register
+`graph_init`, `graph_list`, a graph scheduler, or a graph state machine.
 
-```yaml
-version: 1
-status: wip
-goal: >-
-  Implement and verify image input support.
-nodes:
-  inspect_api:
-    objective: >-
-      Determine the provider request contract.
-    depends_on: []
-    resolution:
-      summary: >-
-        The request contract is documented.
-      evidence:
-        - .fiasco/runs/<run-id>/artifacts/api-contract.txt
-  implement:
-    objective: >-
-      Implement the accepted contract.
-    depends_on: [inspect_api]
-    resolution: null
-```
+Each graph is a lightweight YAML mental model with `open` or `resolved`
+lifecycle. Nodes represent outcomes, questions, or decisions rather than agent
+threads. A graph may be resolved with unfinished nodes when its summary explains
+that the remaining work was abandoned, superseded, or deliberately narrowed.
+The complete workflow and file convention live in
+[`skills/orchestrate-with-graphs/`](skills/orchestrate-with-graphs/).
 
-`graph_list` groups valid files as `wip`, `completed`, or `aborted`, reports
-resolved/unresolved counts, and derives ready node ids. Malformed YAML, unknown
-or repeated dependencies, dependency cycles, unsafe evidence paths, and
-inconsistent terminal state appear under `invalid` without hiding other valid
-graphs. A completed graph requires every node to be resolved and a non-empty
-top-level `summary`; an aborted graph requires a non-empty `abort_reason` and
-always reports `ready: []`. A resolution is invalid while any of that node's
-direct dependencies remains unresolved.
+If graphs later require shared remote storage, that service can expose a
+dedicated access capability without moving scheduling or execution state into
+the graph model.
 
 ## Provider Setup
 

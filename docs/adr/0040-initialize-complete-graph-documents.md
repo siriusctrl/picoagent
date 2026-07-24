@@ -1,8 +1,11 @@
 # ADR 0040: Initialize Complete Graph Documents
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-07-23
 - Refines: ADR 0031 (complete initial graph topology)
+
+Superseded by ADR 0048, which removes `graph_init` and keeps the graph format as
+skill guidance maintained through ordinary file tools.
 
 ## Context
 

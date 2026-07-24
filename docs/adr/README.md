@@ -89,7 +89,7 @@ Use these sections:
   roles](0024-freeze-built-in-schemas-across-agent-roles.md)
 - [ADR 0025: Fork or isolate delegated context](0025-fork-or-isolate-delegated-context.md)
 - [ADR 0026: Keep planning graphs file-backed and separate from task
-  execution](0026-file-backed-planning-graphs.md)
+  execution](0026-file-backed-planning-graphs.md) (superseded by ADR 0048)
 - [ADR 0027: Correlate delegate recovery with its originating
   call](0027-correlate-delegate-recovery-with-originating-call.md)
 - [ADR 0028: Keep cross-tool workflow in the stable system
@@ -99,7 +99,7 @@ Use these sections:
 - [ADR 0030: Use one result policy for foreground and background
   work](0030-uniform-foreground-and-background-results.md)
 - [ADR 0031: Validate the complete initial graph topology before
-  creation](0031-validate-complete-initial-graph-topology.md)
+  creation](0031-validate-complete-initial-graph-topology.md) (superseded by ADR 0048)
 - [ADR 0032: Store each message as one self-contained
   record](0032-self-contained-message-log.md)
 - [ADR 0033: Isolate delegated context](0033-isolate-delegated-context.md)
@@ -114,7 +114,7 @@ Use these sections:
 - [ADR 0039: Keep feature guidance with
   capabilities](0039-keep-feature-guidance-with-capabilities.md)
 - [ADR 0040: Initialize complete graph
-  documents](0040-initialize-complete-graph-documents.md)
+  documents](0040-initialize-complete-graph-documents.md) (superseded by ADR 0048)
 - [ADR 0041: Close active agent
   threads](0041-close-active-agent-threads.md)
 - [ADR 0042: Store compatible Chat reasoning beside assistant
@@ -129,3 +129,5 @@ Use these sections:
   attachments](0046-run-local-mutable-artifacts.md)
 - [ADR 0047: Collapse durable run lifetime and handle
   discovery](0047-collapse-run-lifetime-and-handle-discovery.md)
+- [ADR 0048: Move orchestration graphs to an Agent
+  Skill](0048-move-orchestration-graphs-to-a-skill.md)

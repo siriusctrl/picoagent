@@ -19,7 +19,6 @@ job/CLI
      -> ArtifactStore
      -> RunDirStore
         -> compacted-state metadata / compacted-history reader
-        -> run-local planning graph files
      -> EventSink
 ```
 
@@ -69,7 +68,7 @@ silently replacing an existing capability.
 
 Every local model-facing adapter keeps its typed compile-time `tool.yaml` beside
 its Rust module. Standalone tools live directly under `src/tools/<tool>/`;
-cohesive handle, history, and graph families live under
+cohesive handle and history families live under
 `src/tools/<family>/<member>/`. The manifest always contains the complete
 provider-visible name; paths never derive names. The common loader validates
 both prose fields and joins them with a `Returns:` semantic boundary into the
@@ -96,21 +95,6 @@ leaf constructor. Ordinary tools are called directly; only an unfinished direct
 call receives a runtime handle through foreground promotion.
 The model-visible schema set and resume hash therefore commit the same fixed
 capability contract without a dynamic spawn allowlist.
-
-The fixed built-ins also include `graph_init` and `graph_list`. Their shared
-run-local store allocates short `g<N>` YAML files without overwriting a graph
-during concurrent initialization. `graph_init` accepts the complete version-1
-`wip` graph document, including any already accepted resolutions, validates the
-same shape that will be persisted, and creates no file when it is invalid.
-`graph_list` parses each file independently, validates its DAG and terminal
-state, and derives ready nodes; one malformed file is reported as invalid
-rather than failing the entire listing. Full graph inspection and mutation stay
-with `read` and `write`. Execution stays with `delegate` and the existing handle
-controls, so the graph family does not create a second scheduler or persist
-runtime handles. Ready nodes are projected only for a `wip` graph, and an
-accepted resolution is invalid until its direct dependencies are resolved.
-Since one assistant tool-call batch is concurrent, dependent `write`,
-`graph_list`, and `delegate` stages execute in separate turns.
 
 The persisted Root and GeneralTask profiles have one identical built-in
 capability set. Each normal run registers `history_search` and
@@ -362,6 +346,13 @@ conversation only after the model calls `load_skill`. That result omits the
 already-catalogued name and description, and includes the absolute skill
 directory so relative references remain resolvable. The `SKILL.md` entry path
 is implied by that directory and is not repeated.
+
+The repository ships `skills/orchestrate-with-graphs/` as optional procedural
+guidance. It uses ordinary file tools to maintain workspace YAML under
+`.agents/graphs/`; no graph parser, validator, scheduler, or storage subsystem
+exists in the runtime. This keeps the mental model independently installable
+and ablatable. A future remote graph service may add an access capability
+without coupling graph semantics to agent execution.
 
 ### Memory
 

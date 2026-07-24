@@ -1,8 +1,11 @@
 # ADR 0026: Keep planning graphs file-backed and separate from task execution
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-07-21
 - Refines: ADR 0017 (complex-task planning remains separate from task execution)
+
+Superseded by ADR 0048, which removes the built-in graph tools and moves graph
+semantics into an installable Agent Skill.
 
 ADR 0031 later refined initialization to receive the complete topology, and ADR
 0040 further refined it to receive and validate the exact complete graph

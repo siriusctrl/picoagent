@@ -220,8 +220,6 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
         "`delegate`",
         "history_search",
         "history_read",
-        "graph_init",
-        "graph_list",
         "list_handles",
         "send_message",
     ] {

@@ -208,23 +208,20 @@ hard execution deadline. See
 [ADR 0038](adr/0038-runtime-handles-and-explicit-restart.md) and
 [ADR 0047](adr/0047-collapse-run-lifetime-and-handle-discovery.md).
 
-## File-backed Planning Topology
+## Graphs as an Installable Mental Model
 
-Complex tasks may keep a run-local YAML DAG whose nodes are work items and whose
-resolutions are outcomes accepted by the main agent. Two fixed tools initialize
-and summarize/validate these files; ordinary `read`/`write` maintain them, while
-`delegate` and handle controls execute and supervise work independently. The
-initializer accepts the complete versioned WIP document, including knowledge
-already accepted as node resolutions, and validates it before creation. The
-graph never stores runtime handles, automatically launches successors, or
-treats an agent completion as an accepted node resolution.
+Complex tasks may use the `orchestrate-with-graphs` Agent Skill to maintain a
+workspace YAML graph with ordinary file tools. Nodes express outcomes,
+questions, and accepted knowledge; the orchestrator decides what to execute and
+when. Graph lifecycle is only `open` or `resolved`, and resolution of the whole
+graph does not require every exploratory branch to finish.
 
-Rejected: equating every node with an agent, a graph-specific mutation DSL, and
-a second graph scheduler with its own dispatch/wait/stop lifecycle. These would
-couple durable planning state to transient execution and duplicate existing
-tools. See [ADR 0026](adr/0026-file-backed-planning-graphs.md).
-The complete initialization contract is recorded in
-[ADR 0040](adr/0040-initialize-complete-graph-documents.md).
+The runtime has no graph-specific initialization, listing, validation,
+scheduling, or recovery path. This keeps optional planning policy independently
+installable and makes tool ablation honest. A remote graph service remains a
+future access concern rather than a reason to emulate distributed state in
+local files. See
+[ADR 0048](adr/0048-move-orchestration-graphs-to-a-skill.md).
 
 ## Isolated Delegation
 

@@ -32,8 +32,6 @@
   adapters with a typed compile-time `tool.yaml` beside their Rust code.
 - `src/tools/history/{read,search}/`: compacted-history adapters;
   `src/tools/history/mod.rs` registers the complete family.
-- `src/tools/graph/{init,list}/`: run-local YAML planning-graph initialization
-  and validation; `src/tools/graph/model.rs` owns the file contract.
 - `src/tools/handle/{close,inspect,list,send,stop,wait}/`: runtime-handle controls;
   `src/tools/handle/mod.rs` registers the complete family and owns their shared
   result projection.
@@ -59,6 +57,8 @@
   compacted-history loading.
 - `src/skills/mod.rs`: Agent Skills metadata discovery and body/path loading;
   the model-facing adapter is in `src/tools/load_skill/`.
+- `skills/orchestrate-with-graphs/`: installable guidance for maintaining
+  workspace YAML graphs as an orchestrator mental model with ordinary tools.
 - `src/mcp.rs`: rmcp stdio client and tool adapters.
 - `src/hooks.rs`: deterministic command-hook pipeline.
 - `src/memory.rs`: user/project Markdown memory paths and reminder text.

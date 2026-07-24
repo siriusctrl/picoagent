@@ -179,8 +179,6 @@ mod tests {
             "send_message",
             "history_search",
             "history_read",
-            "graph_init",
-            "graph_list",
             "load_skill",
         ] {
             assert!(
