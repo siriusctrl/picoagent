@@ -128,9 +128,10 @@ tool-agnostic, and unchanged across normal agent calls. Each typed `tool.yaml`
 owns its capability's workflow guidance as well as its schema, so removing a
 tool removes its model-facing instructions too. At the start of each run, the
 first user message contains a synthetic `<runtime-reminder>` block before the
-original request. The reminder snapshots the workspace path, `AGENTS.md`,
-discovered skill metadata, memory locations, and any delegated-task
-instructions that apply to the role. It also records the role and remaining
+original request. The reminder snapshots the workspace path, `AGENTS.md` (or
+lowercase `agents.md` when the canonical name is absent), discovered skill
+metadata, memory locations, and any delegated-task instructions that apply to
+the role. It also records the role and remaining
 delegation depth; GeneralTask guidance lives here rather than in a second
 system prompt. Built-in tool schemas are identical for Root and GeneralTask,
 sorted, and frozen for the run; configuration or file changes take effect on

@@ -239,9 +239,10 @@ Optional web and MCP schemas depend on startup configuration. Memory adds
 reminder paths, not a schema. A compaction call reuses the same stable prefix.
 
 The first user message begins with a `<runtime-reminder>` text block containing
-the workspace snapshot: path, `AGENTS.md`, sorted skill metadata, memory paths,
-and stable GeneralTask guidance for a child. The original user request follows
-after a blank line in the same ordinary Chat `content` string. YAML folds
+the workspace snapshot: path, `AGENTS.md` (falling back to lowercase
+`agents.md`), sorted skill metadata, memory paths, and stable GeneralTask
+guidance for a child. The original user request follows after a blank line in
+the same ordinary Chat `content` string. YAML folds
 source-only wrapping in built-in agent prompts; dynamic reminder inputs remain
 exact.
 

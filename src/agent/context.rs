@@ -31,12 +31,15 @@ pub(crate) fn build_runtime_reminder(
         profile.runtime_role(),
         remaining_delegation_depth
     ));
-    let agents_path = workspace.join("AGENTS.md");
-    if agents_path.is_file() {
+    let project_instructions = ["AGENTS.md", "agents.md"]
+        .into_iter()
+        .map(|name| (name, workspace.join(name)))
+        .find(|(_, path)| path.is_file());
+    if let Some((name, agents_path)) = project_instructions {
         let agents = fs::read_to_string(&agents_path)
             .with_context(|| format!("failed to read {}", agents_path.display()))?;
         sections.push(format!(
-            "<project-instructions source=\"AGENTS.md\">\n{}\n</project-instructions>",
+            "<project-instructions source=\"{name}\">\n{}\n</project-instructions>",
             agents.trim()
         ));
     }
@@ -186,5 +189,41 @@ mod tests {
                 "stable system prompt names tool `{tool_name}`"
             );
         }
+    }
+
+    #[test]
+    fn loads_lowercase_project_instructions_as_a_fallback() {
+        let directory = tempdir().unwrap();
+        fs::write(directory.path().join("agents.md"), "Use lowercase rules.").unwrap();
+
+        let reminder = build_runtime_reminder(
+            directory.path(),
+            &BTreeSet::from([ModelModality::Text]),
+            "",
+            None,
+            RunProfile::Root,
+            1,
+        )
+        .unwrap();
+
+        assert!(reminder.contains(
+            "<project-instructions source=\"agents.md\">\nUse lowercase rules.\n</project-instructions>"
+        ));
+
+        fs::write(directory.path().join("AGENTS.md"), "Use canonical rules.").unwrap();
+        let reminder = build_runtime_reminder(
+            directory.path(),
+            &BTreeSet::from([ModelModality::Text]),
+            "",
+            None,
+            RunProfile::Root,
+            1,
+        )
+        .unwrap();
+
+        assert!(reminder.contains(
+            "<project-instructions source=\"AGENTS.md\">\nUse canonical rules.\n</project-instructions>"
+        ));
+        assert!(!reminder.contains("Use lowercase rules."));
     }
 }

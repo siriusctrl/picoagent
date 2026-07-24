@@ -340,8 +340,8 @@ also removes its instructions. Concrete run state and feature availability may
 still appear in dynamic reminders and results. The first user message's
 ordinary text `content` carries a
 `<runtime-reminder>` block with model/workspace state, the workspace
-`AGENTS.md`, sorted skill metadata, memory paths, and optional delegated
-instructions, followed by the original request. A skill body enters the
+`AGENTS.md` or lowercase fallback, sorted skill metadata, memory paths, and
+optional delegated instructions, followed by the original request. A skill body enters the
 conversation only after the model calls `load_skill`. That result omits the
 already-catalogued name and description, and includes the absolute skill
 directory so relative references remain resolvable. The `SKILL.md` entry path

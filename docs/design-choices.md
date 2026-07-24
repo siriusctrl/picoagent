@@ -268,8 +268,9 @@ interleaving under concurrent completion. See
 The built-in system prompt contains only product identity and tool-agnostic
 operating rules. Workspace `AGENTS.md`, skill metadata, memory paths, and
 stable GeneralTask guidance are snapshotted into a synthetic runtime reminder
-at the start of each run. The delegated task text follows in the same initial
-user message as ordinary content. Tool descriptions and feature workflows
+at the start of each run; lowercase `agents.md` is used only when `AGENTS.md`
+is absent. The delegated task text follows in the same initial user message as
+ordinary content. Tool descriptions and feature workflows
 remain in sorted tool schemas rather than being duplicated in the system
 prompt. Core history schemas are present from the first normal call.
 Root and GeneralTask use the same built-in schema set and freeze it for the run;
