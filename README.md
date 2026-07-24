@@ -76,7 +76,6 @@ Runtime output is stored beneath the current project:
   events.jsonl
   final.md
   artifacts/
-  graphs/
 ```
 
 On an interactive terminal, inspect opens the current newline-complete tail and
@@ -187,8 +186,7 @@ npx skills add siriusctrl/fiasco \
 The skill teaches an orchestrator when a dependency graph is useful, how to
 store it under `.agents/graphs/`, how to distinguish accepted knowledge from
 live execution, and how to coordinate independent work. It uses ordinary file
-capabilities and explicit agent controls. Fiasco does not register
-`graph_init`, `graph_list`, a graph scheduler, or a graph state machine.
+capabilities and explicit agent controls.
 
 Each graph is a lightweight YAML mental model with `open` or `resolved`
 lifecycle. Nodes represent outcomes, questions, or decisions rather than agent
