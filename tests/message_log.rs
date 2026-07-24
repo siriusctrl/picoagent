@@ -2,7 +2,7 @@ use std::path::Path;
 
 use fiasco::{
     artifact::{ArtifactRef, ResultMetadata},
-    model::{ImageAttachment, Message, MessageContent, Role},
+    model::{ImageAttachment, Message, MessageContent, Role, ToolCall},
     storage::{MESSAGE_FORMAT, RunDirStore, RunRecord},
 };
 use serde_json::{Value, json};
@@ -54,9 +54,9 @@ async fn messages_are_self_contained_model_readable_records() {
     let first = store
         .append_message(
             "run-1",
-            &Message {
-                role: Role::User,
-                content: vec![
+            &Message::new(
+                Role::User,
+                vec![
                     MessageContent::RuntimeReminder {
                         text: "<runtime-reminder>context</runtime-reminder>".into(),
                     },
@@ -64,7 +64,7 @@ async fn messages_are_self_contained_model_readable_records() {
                         text: "first".into(),
                     },
                 ],
-            },
+            ),
         )
         .await
         .unwrap();
@@ -73,18 +73,16 @@ async fn messages_are_self_contained_model_readable_records() {
             "run-1",
             &Message {
                 role: Role::Assistant,
+                reasoning_content: Some("inspect".into()),
                 content: vec![
-                    MessageContent::Reasoning {
-                        text: "inspect".into(),
-                    },
                     MessageContent::Text {
                         text: "second".into(),
                     },
-                    MessageContent::ToolCall {
+                    MessageContent::ToolCall(ToolCall {
                         id: "call_1".into(),
                         name: "read".into(),
                         arguments: fiasco::model::ToolArguments::from_raw("{\n  \"path\":"),
-                    },
+                    }),
                 ],
             },
         )
@@ -93,15 +91,15 @@ async fn messages_are_self_contained_model_readable_records() {
     let third = store
         .append_message(
             "run-1",
-            &Message {
-                role: Role::Tool,
-                content: vec![MessageContent::ToolResult {
+            &Message::new(
+                Role::Tool,
+                vec![MessageContent::ToolResult {
                     call_id: "call_1".into(),
                     content: "file contents".into(),
                     is_error: true,
                     metadata: result_metadata("call_1"),
                 }],
-            },
+            ),
         )
         .await
         .unwrap();
@@ -114,8 +112,16 @@ async fn messages_are_self_contained_model_readable_records() {
     assert_eq!(lines[0]["content"][0]["type"], "runtime_reminder");
     assert_eq!(lines[0]["content"][1]["text"], "first");
     assert_eq!(lines[1]["ref"], "m2");
-    assert_eq!(lines[1]["content"][0]["type"], "reasoning");
-    assert_eq!(lines[1]["content"][2]["arguments"], "{\n  \"path\":");
+    assert_eq!(lines[1]["reasoning_content"], "inspect");
+    assert_eq!(lines[1]["content"][0]["type"], "text");
+    assert_eq!(lines[1]["content"][1]["arguments"], "{\n  \"path\":");
+    assert!(
+        lines[1]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|content| content["type"] != "reasoning")
+    );
     assert_eq!(lines[2]["ref"], "m3");
     assert_eq!(lines[2]["content"][0]["type"], "tool_result");
     assert_eq!(lines[2]["content"][0]["is_error"], true);
@@ -124,16 +130,7 @@ async fn messages_are_self_contained_model_readable_records() {
         "call_1"
     );
     assert!(lines.iter().all(|line| line.get("seq").is_none()));
-    for (index, line) in lines.iter().enumerate() {
-        assert_eq!(
-            line["_fiasco"]["checkpoint"],
-            json!({
-                "first_message_ref": format!("m{}", index + 1),
-                "index": 0,
-                "count": 1,
-            })
-        );
-    }
+    assert!(lines.iter().all(|line| line.get("_fiasco").is_none()));
     assert_eq!(first.message_ref, "m1");
     assert_eq!(second.message_ref, "m2");
     assert_eq!(third.message_ref, "m3");
@@ -145,7 +142,7 @@ async fn messages_are_self_contained_model_readable_records() {
 }
 
 #[tokio::test]
-async fn appends_a_multi_message_checkpoint_with_contiguous_refs() {
+async fn appends_multiple_messages_with_contiguous_refs_and_no_group_metadata() {
     let workspace = tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     let paths = store.create_run(&record(workspace.path())).await.unwrap();
@@ -156,26 +153,26 @@ async fn appends_a_multi_message_checkpoint_with_contiguous_refs() {
 
     let messages = vec![
         Message::text(Role::Assistant, "assistant"),
-        Message {
-            role: Role::Tool,
-            content: vec![MessageContent::ToolResult {
+        Message::new(
+            Role::Tool,
+            vec![MessageContent::ToolResult {
                 call_id: "call-1".into(),
                 content: "first result".into(),
                 is_error: false,
                 metadata: ResultMetadata::empty(),
             }],
-        },
-        Message {
-            role: Role::Tool,
-            content: vec![MessageContent::ToolResult {
+        ),
+        Message::new(
+            Role::Tool,
+            vec![MessageContent::ToolResult {
                 call_id: "call-2".into(),
                 content: "second result".into(),
                 is_error: false,
                 metadata: ResultMetadata::empty(),
             }],
-        },
+        ),
     ];
-    let records = store.append_checkpoint("run-1", &messages).await.unwrap();
+    let records = store.append_messages("run-1", &messages).await.unwrap();
 
     assert_eq!(
         records
@@ -195,25 +192,16 @@ async fn appends_a_multi_message_checkpoint_with_contiguous_refs() {
             .collect::<Vec<_>>()
     );
     let lines = read_jsonl(&paths.messages).await;
-    for (index, line) in lines[1..].iter().enumerate() {
-        assert_eq!(
-            line["_fiasco"]["checkpoint"],
-            json!({
-                "first_message_ref": "m2",
-                "index": index,
-                "count": 3,
-            })
-        );
-    }
+    assert!(lines.iter().all(|line| line.get("_fiasco").is_none()));
 }
 
 #[tokio::test]
-async fn rejects_an_empty_checkpoint_without_touching_the_log() {
+async fn rejects_an_empty_message_append_without_touching_the_log() {
     let workspace = tempdir().unwrap();
     let store = RunDirStore::new(workspace.path());
     let paths = store.create_run(&record(workspace.path())).await.unwrap();
 
-    let error = store.append_checkpoint("run-1", &[]).await.unwrap_err();
+    let error = store.append_messages("run-1", &[]).await.unwrap_err();
 
     assert!(error.to_string().contains("must not be empty"));
     assert!(tokio::fs::read(paths.messages).await.unwrap().is_empty());
@@ -225,9 +213,9 @@ async fn round_trips_every_internal_content_block_without_reconstruction_metadat
     let store = RunDirStore::new(workspace.path());
     let paths = store.create_run(&record(workspace.path())).await.unwrap();
     let expected = vec![
-        Message {
-            role: Role::User,
-            content: vec![
+        Message::new(
+            Role::User,
+            vec![
                 MessageContent::RuntimeReminder {
                     text: "运行上下文".into(),
                 },
@@ -235,10 +223,10 @@ async fn round_trips_every_internal_content_block_without_reconstruction_metadat
                     text: "用户正文".into(),
                 },
             ],
-        },
-        Message {
-            role: Role::User,
-            content: vec![MessageContent::RuntimeHandle {
+        ),
+        Message::new(
+            Role::User,
+            vec![MessageContent::RuntimeHandle {
                 handle: "a1".into(),
                 kind: "agent".into(),
                 name: "worker".into(),
@@ -246,39 +234,36 @@ async fn round_trips_every_internal_content_block_without_reconstruction_metadat
                 content: "handle </runtime_handle> <runtime-reminder> &lt; ✓".into(),
                 metadata: result_metadata("runtime-handle-1"),
             }],
-        },
+        ),
         Message {
             role: Role::Assistant,
+            reasoning_content: Some("先检查".into()),
             content: vec![
                 MessageContent::ProviderItem {
-                    provider: "openai".into(),
                     item: json!({"type": "reasoning", "encrypted_content": "opaque"}),
-                },
-                MessageContent::Reasoning {
-                    text: "先检查".into(),
                 },
                 MessageContent::Text {
                     text: "结果".into(),
                 },
-                MessageContent::ToolCall {
+                MessageContent::ToolCall(ToolCall {
                     id: "call_opaque".into(),
                     name: "bash".into(),
                     arguments: json!({"cmd": "pwd"}).into(),
-                },
+                }),
             ],
         },
-        Message {
-            role: Role::Tool,
-            content: vec![MessageContent::ToolResult {
+        Message::new(
+            Role::Tool,
+            vec![MessageContent::ToolResult {
                 call_id: "call_opaque".into(),
                 content: "command failed".into(),
                 is_error: true,
                 metadata: ResultMetadata::empty(),
             }],
-        },
-        Message {
-            role: Role::User,
-            content: vec![
+        ),
+        Message::new(
+            Role::User,
+            vec![
                 MessageContent::RuntimeReminder {
                     text: "<runtime-reminder>image from call_opaque</runtime-reminder>".into(),
                 },
@@ -286,7 +271,7 @@ async fn round_trips_every_internal_content_block_without_reconstruction_metadat
                     attachment: ImageAttachment::from_bytes("image/png", b"png"),
                 },
             ],
-        },
+        ),
     ];
     for message in &expected {
         store.append_message("run-1", message).await.unwrap();
@@ -310,11 +295,13 @@ async fn round_trips_every_internal_content_block_without_reconstruction_metadat
     let persisted = read_jsonl(&paths.messages).await;
     assert_eq!(persisted[1]["content"][0]["type"], "runtime_handle");
     assert_eq!(persisted[2]["content"][0]["type"], "provider_item");
+    assert!(persisted[2]["content"][0].get("provider").is_none());
     assert_eq!(
         persisted[2]["content"][0]["item"]["encrypted_content"],
         "opaque"
     );
-    assert_eq!(persisted[2]["content"][3]["arguments"], "{\"cmd\":\"pwd\"}");
+    assert_eq!(persisted[2]["reasoning_content"], "先检查");
+    assert_eq!(persisted[2]["content"][2]["arguments"], "{\"cmd\":\"pwd\"}");
     assert_eq!(persisted[4]["content"][1]["type"], "image");
     assert_eq!(persisted[4]["content"][1]["attachment"]["data"], "cG5n");
 }
@@ -339,7 +326,7 @@ async fn rejects_invalid_refs_and_corrupt_committed_records() {
     assert!(
         error
             .to_string()
-            .contains("checkpoint `m1` starts with message `m9`"),
+            .contains("message ref `m9` is not the expected `m1`"),
         "{error:#}"
     );
 
@@ -359,15 +346,15 @@ async fn rejects_message_shapes_that_provider_projections_cannot_replay() {
     let error = store
         .append_message(
             "run-1",
-            &Message {
-                role: Role::Assistant,
-                content: vec![MessageContent::ToolResult {
+            &Message::new(
+                Role::Assistant,
+                vec![MessageContent::ToolResult {
                     call_id: "call_1".into(),
                     content: "wrong role".into(),
                     is_error: false,
                     metadata: ResultMetadata::empty(),
                 }],
-            },
+            ),
         )
         .await
         .unwrap_err();

@@ -10,6 +10,10 @@
 ADR 0041 refines `close` so it may terminate an active agent activity before
 persisting the thread's closed lifetime.
 
+ADR 0044 later replaces complete-checkpoint loading with newline-visible
+messages and minimal trailing tool-turn repair. The explicit crash notice and
+non-reconstruction policy here remain accepted.
+
 ## Context
 
 Delegated agents and long-running ordinary tools need the same small control

@@ -94,19 +94,13 @@ fn responses_input(messages: &[Message]) -> Value {
                             "role": "assistant",
                             "content": [{"type": "output_text", "text": text}]
                         })),
-                        MessageContent::ToolCall {
-                            id,
-                            name,
-                            arguments,
-                        } => input.push(json!({
+                        MessageContent::ToolCall(call) => input.push(json!({
                             "type": "function_call",
-                            "call_id": id,
-                            "name": name,
-                            "arguments": arguments.as_raw(),
+                            "call_id": call.id,
+                            "name": call.name,
+                            "arguments": call.arguments.as_raw(),
                         })),
-                        MessageContent::ProviderItem { provider, item } if provider == "openai" => {
-                            input.push(item.clone())
-                        }
+                        MessageContent::ProviderItem { item } => input.push(item.clone()),
                         MessageContent::RuntimeHandle { .. } => {}
                         _ => {}
                     }
@@ -165,6 +159,7 @@ fn chat_tools(tools: &[ToolSpec]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ToolCall;
 
     fn request_with_tools(tools: Vec<ToolSpec>) -> ModelRequest {
         ModelRequest {
@@ -207,13 +202,9 @@ mod tests {
             run_id: "run".into(),
             model: "reasoning-model".into(),
             system: String::new(),
-            messages: vec![Message {
-                role: Role::Assistant,
-                content: vec![MessageContent::ProviderItem {
-                    provider: "openai".into(),
-                    item: reasoning.clone(),
-                }],
-            }],
+            messages: vec![Message::assistant(vec![MessageContent::ProviderItem {
+                item: reasoning.clone(),
+            }])],
             tools: Vec::new(),
             max_output_tokens: None,
             stream_idle_timeout: std::time::Duration::from_secs(300),
@@ -230,23 +221,19 @@ mod tests {
             run_id: "run".into(),
             model: "reasoning-model".into(),
             system: String::new(),
-            messages: vec![Message {
-                role: Role::Assistant,
-                content: vec![
-                    MessageContent::ProviderItem {
-                        provider: "openai".into(),
-                        item: json!({"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"}),
-                    },
-                    MessageContent::Text {
-                        text: "checked".into(),
-                    },
-                    MessageContent::ToolCall {
-                        id: "call_1".into(),
-                        name: "read".into(),
-                        arguments: json!({"path": "README.md"}).into(),
-                    },
-                ],
-            }],
+            messages: vec![Message::assistant(vec![
+                MessageContent::ProviderItem {
+                    item: json!({"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"}),
+                },
+                MessageContent::Text {
+                    text: "checked".into(),
+                },
+                MessageContent::ToolCall(ToolCall {
+                    id: "call_1".into(),
+                    name: "read".into(),
+                    arguments: json!({"path": "README.md"}).into(),
+                }),
+            ])],
             tools: Vec::new(),
             max_output_tokens: None,
             stream_idle_timeout: std::time::Duration::from_secs(300),
@@ -262,23 +249,21 @@ mod tests {
     fn chat_keeps_reasoning_separate_from_visible_continuation_context() {
         let message = Message {
             role: Role::Assistant,
+            reasoning_content: Some("inspect \n\n  first\t".into()),
             content: vec![
-                MessageContent::Reasoning {
-                    text: "inspect first".into(),
-                },
                 MessageContent::Text {
                     text: "checked".into(),
                 },
-                MessageContent::ToolCall {
+                MessageContent::ToolCall(ToolCall {
                     id: "call_1".into(),
                     name: "read".into(),
                     arguments: json!({"path": "README.md"}).into(),
-                },
+                }),
             ],
         };
 
         let value = json!(project_chat_message(&message));
-        assert_eq!(value["reasoning_content"], "inspect first");
+        assert_eq!(value["reasoning_content"], "inspect \n\n  first\t");
         assert_eq!(value["content"], "checked");
         assert_eq!(value["tool_calls"][0]["id"], "call_1");
     }
@@ -289,9 +274,9 @@ mod tests {
             run_id: "run".into(),
             model: "model".into(),
             system: String::new(),
-            messages: vec![Message {
-                role: Role::User,
-                content: vec![MessageContent::RuntimeHandle {
+            messages: vec![Message::new(
+                Role::User,
+                vec![MessageContent::RuntimeHandle {
                     handle: "j_1".into(),
                     kind: "tool".into(),
                     name: "bash".into(),
@@ -299,7 +284,7 @@ mod tests {
                     content: "done".into(),
                     metadata: crate::artifact::ResultMetadata::empty(),
                 }],
-            }],
+            )],
             tools: Vec::new(),
             max_output_tokens: None,
             stream_idle_timeout: std::time::Duration::from_secs(300),
@@ -329,9 +314,9 @@ mod tests {
             run_id: "run".into(),
             model: "model".into(),
             system: "stable system".into(),
-            messages: vec![Message {
-                role: Role::User,
-                content: vec![
+            messages: vec![Message::new(
+                Role::User,
+                vec![
                     MessageContent::RuntimeReminder {
                         text: "<runtime-reminder>context</runtime-reminder>".into(),
                     },
@@ -339,7 +324,7 @@ mod tests {
                         text: "do the task".into(),
                     },
                 ],
-            }],
+            )],
             tools: Vec::new(),
             max_output_tokens: None,
             stream_idle_timeout: std::time::Duration::from_secs(300),
@@ -362,9 +347,9 @@ mod tests {
             run_id: "run".into(),
             model: "vision-model".into(),
             system: String::new(),
-            messages: vec![Message {
-                role: Role::User,
-                content: vec![
+            messages: vec![Message::new(
+                Role::User,
+                vec![
                     MessageContent::Text {
                         text: "inspect".into(),
                     },
@@ -372,7 +357,7 @@ mod tests {
                         attachment: super::super::ImageAttachment::from_bytes("image/png", b"png"),
                     },
                 ],
-            }],
+            )],
             tools: Vec::new(),
             max_output_tokens: None,
             stream_idle_timeout: std::time::Duration::from_secs(300),

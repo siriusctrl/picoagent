@@ -9,7 +9,7 @@ use tokio::{
 };
 
 use crate::{
-    model::Message,
+    model::{Message, MessageContent, Role},
     trajectory::{CompactionMessage, TrajectoryMessage, message_ref, message_ref_seq},
 };
 
@@ -18,7 +18,7 @@ mod transcript;
 
 pub use transcript::TranscriptTimeline;
 
-use decoder::{CommittedCheckpointReader, CommittedRecord, DecodeResult};
+use decoder::CompleteLineReader;
 
 /// One durable transcript line. The provider-neutral content blocks are kept
 /// directly in the record so readers do not need a second file to reconstruct
@@ -43,8 +43,6 @@ struct StoredMessage {
 #[serde(deny_unknown_fields)]
 struct LocalState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    checkpoint: Option<MessageCheckpoint>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_input_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     compaction: Option<CompactionMessage>,
@@ -52,26 +50,15 @@ struct LocalState {
 
 impl LocalState {
     fn is_empty(&self) -> bool {
-        self.checkpoint.is_none() && self.pending_input_id.is_none() && self.compaction.is_none()
+        self.pending_input_id.is_none() && self.compaction.is_none()
     }
-}
-
-/// Identifies one logical checkpoint while preserving one JSON line per
-/// message. A reader publishes none of the lines until it has observed the
-/// complete, contiguous group.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct MessageCheckpoint {
-    first_message_ref: String,
-    index: u64,
-    count: u64,
 }
 
 struct JsonlFile {
     records: Vec<TrajectoryMessage>,
     record_count: u64,
     original_len: u64,
-    committed_end: u64,
+    append_end: u64,
 }
 
 pub(super) async fn initialize(run_directory: &Path, messages_path: &Path) -> Result<()> {
@@ -87,10 +74,8 @@ pub(super) async fn initialize(run_directory: &Path, messages_path: &Path) -> Re
     sync_directory(run_directory).await
 }
 
-pub(super) async fn append_checkpoint(path: &Path, records: &[TrajectoryMessage]) -> Result<()> {
-    ensure!(!records.is_empty(), "message checkpoint must not be empty");
-    let first_message_ref = records[0].message_ref.clone();
-    let count = records.len() as u64;
+pub(super) async fn append_messages(path: &Path, records: &[TrajectoryMessage]) -> Result<()> {
+    ensure!(!records.is_empty(), "message append must not be empty");
     let mut bytes = Vec::new();
     for (index, record) in records.iter().enumerate() {
         record
@@ -100,7 +85,7 @@ pub(super) async fn append_checkpoint(path: &Path, records: &[TrajectoryMessage]
         let expected_seq = records[0].seq.saturating_add(index as u64);
         ensure!(
             record.seq == expected_seq && record.message_ref == message_ref(expected_seq),
-            "checkpoint message ref `{}` is not the expected `{}`",
+            "appended message ref `{}` is not the expected `{}`",
             record.message_ref,
             message_ref(expected_seq)
         );
@@ -109,11 +94,6 @@ pub(super) async fn append_checkpoint(path: &Path, records: &[TrajectoryMessage]
             created_at: record.created_at,
             message: record.message.clone(),
             local: LocalState {
-                checkpoint: Some(MessageCheckpoint {
-                    first_message_ref: first_message_ref.clone(),
-                    index: index as u64,
-                    count,
-                }),
                 pending_input_id: record.pending_input_id.clone(),
                 compaction: record.compaction.clone(),
             },
@@ -135,25 +115,24 @@ pub(super) async fn append_checkpoint(path: &Path, records: &[TrajectoryMessage]
         .with_context(|| format!("sync {}", path.display()))
 }
 
-/// Load the committed prefix. A checkpoint is visible only after all of its
-/// newline-terminated message lines are present, so viewers can ignore both a
-/// crash-torn line and complete lines from an incomplete final checkpoint.
+/// Load every complete newline-terminated message. A live viewer may observe a
+/// prefix of the final tool turn while its batch is being written.
 pub(super) async fn load(path: &Path) -> Result<Vec<TrajectoryMessage>> {
     Ok(read_jsonl(path, true).await?.records)
 }
 
-/// Validate the committed prefix and remove an uncommitted tail before the
-/// sole writer resumes appending.
+/// Repair the physical tail and discard a semantically incomplete final tool
+/// turn before the sole writer resumes appending.
 pub(super) async fn prepare_append(path: &Path) -> Result<u64> {
     let log = read_jsonl(path, false).await?;
-    if log.original_len != log.committed_end {
+    if log.original_len != log.append_end {
         let mut file = OpenOptions::new()
             .write(true)
             .truncate(false)
             .open(path)
             .await
             .with_context(|| format!("open {} for trajectory recovery", path.display()))?;
-        file.set_len(log.committed_end)
+        file.set_len(log.append_end)
             .await
             .with_context(|| format!("truncate {} for trajectory recovery", path.display()))?;
         file.seek(SeekFrom::End(0)).await?;
@@ -169,36 +148,86 @@ async fn read_jsonl(path: &Path, collect_records: bool) -> Result<JsonlFile> {
     let file = tokio::fs::File::open(path)
         .await
         .with_context(|| format!("read initialized message log {}", path.display()))?;
-    let mut reader = CommittedCheckpointReader::new(BufReader::new(file), path.to_owned());
+    let mut reader = CompleteLineReader::new(BufReader::new(file), path.to_owned());
     let mut records = Vec::new();
     let mut record_count = 0_u64;
-    let mut committed_end = 0;
-    while let DecodeResult::Checkpoint(checkpoint) = reader.next_checkpoint().await? {
-        committed_end = checkpoint.committed_end;
+    let mut append_end = 0;
+    let mut pending_tool_turn = None;
+    while let Some(record) = reader.next_record().await? {
         record_count = record_count
-            .checked_add(checkpoint.records.len() as u64)
+            .checked_add(1)
             .context("committed message count overflow")?;
-        for record in checkpoint.records {
-            let CommittedRecord {
-                trajectory,
-                raw,
-                source_offset,
-            } = record;
-            drop(raw);
-            let _ = source_offset;
-            if collect_records {
-                records.push(trajectory);
-            }
+        update_pending_tool_turn(&mut pending_tool_turn, &record)?;
+        append_end = record.end_offset;
+        if collect_records {
+            records.push(record.trajectory);
         }
     }
-    debug_assert_eq!(committed_end, reader.committed_end());
+    debug_assert!(append_end <= reader.visible_end());
+    if let Some(pending) = pending_tool_turn {
+        append_end = pending.source_offset;
+        record_count = pending.first_seq.saturating_sub(1);
+    }
 
     Ok(JsonlFile {
         records,
         record_count,
         original_len: reader.bytes_read(),
-        committed_end,
+        append_end,
     })
+}
+
+struct PendingToolTurn {
+    source_offset: u64,
+    first_seq: u64,
+    call_ids: Vec<String>,
+    next_result: usize,
+}
+
+fn update_pending_tool_turn(
+    pending: &mut Option<PendingToolTurn>,
+    record: &decoder::DecodedRecord,
+) -> Result<()> {
+    if let Some(turn) = pending.as_mut() {
+        let [MessageContent::ToolResult { call_id, .. }] =
+            record.trajectory.message.content.as_slice()
+        else {
+            anyhow::bail!(
+                "message `{}` interrupts tool results for `{}`",
+                record.trajectory.message_ref,
+                turn.call_ids[turn.next_result]
+            );
+        };
+        ensure!(
+            record.trajectory.message.role == Role::Tool
+                && *call_id == turn.call_ids[turn.next_result],
+            "message `{}` returns tool call `{call_id}`, expected `{}`",
+            record.trajectory.message_ref,
+            turn.call_ids[turn.next_result]
+        );
+        turn.next_result += 1;
+        if turn.next_result == turn.call_ids.len() {
+            *pending = None;
+        }
+        return Ok(());
+    }
+
+    let call_ids = record
+        .trajectory
+        .message
+        .tool_calls()
+        .into_iter()
+        .map(|call| call.id)
+        .collect::<Vec<_>>();
+    if !call_ids.is_empty() {
+        *pending = Some(PendingToolTurn {
+            source_offset: record.source_offset,
+            first_seq: record.trajectory.seq,
+            call_ids,
+            next_result: 0,
+        });
+    }
+    Ok(())
 }
 
 fn parse_stored_line(path: &Path, line_with_newline: &[u8]) -> Result<StoredMessage> {

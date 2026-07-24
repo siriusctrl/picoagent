@@ -107,14 +107,10 @@ mod tests {
                     message_ref: request.message_ref,
                     message: Message {
                         role: Role::Assistant,
-                        content: vec![
-                            MessageContent::Reasoning {
-                                text: "inspect the compacted evidence".to_owned(),
-                            },
-                            MessageContent::Text {
-                                text: "remembered".to_owned(),
-                            },
-                        ],
+                        reasoning_content: Some("inspect the compacted evidence".to_owned()),
+                        content: vec![MessageContent::Text {
+                            text: "remembered".to_owned(),
+                        }],
                     },
                 }],
             })

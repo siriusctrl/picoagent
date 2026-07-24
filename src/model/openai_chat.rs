@@ -76,21 +76,17 @@ pub(crate) fn project_chat_message(message: &Message) -> ChatMessage {
         },
         Role::Assistant => ChatMessage::Assistant {
             content: content_text(&message.content),
-            reasoning_content: reasoning_text(&message.content),
+            reasoning_content: message.reasoning_content.clone(),
             tool_calls: message
                 .content
                 .iter()
                 .filter_map(|block| match block {
-                    MessageContent::ToolCall {
-                        id,
-                        name,
-                        arguments,
-                    } => Some(ChatToolCall {
-                        id: id.clone(),
+                    MessageContent::ToolCall(call) => Some(ChatToolCall {
+                        id: call.id.clone(),
                         kind: ChatToolCallKind::Function,
                         function: ChatFunctionCall {
-                            name: name.clone(),
-                            arguments: arguments.as_raw().to_owned(),
+                            name: call.name.clone(),
+                            arguments: call.arguments.as_raw().to_owned(),
                         },
                     }),
                     _ => None,
@@ -144,28 +140,18 @@ fn project_user_content(content: &[MessageContent]) -> ChatUserContent {
     ChatUserContent::Parts(parts)
 }
 
-fn reasoning_text(content: &[MessageContent]) -> Option<String> {
-    let reasoning: Vec<_> = content
-        .iter()
-        .filter_map(|block| match block {
-            MessageContent::Reasoning { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    (!reasoning.is_empty()).then(|| reasoning.join("\n"))
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::model::ToolCall;
 
     #[test]
     fn user_message_serializes_as_native_role_and_content() {
-        let projected = project_chat_message(&Message {
-            role: Role::User,
-            content: vec![
+        let projected = project_chat_message(&Message::new(
+            Role::User,
+            vec![
                 MessageContent::RuntimeReminder {
                     text: "<runtime-reminder>context</runtime-reminder>".into(),
                 },
@@ -173,7 +159,7 @@ mod tests {
                     text: "do the task".into(),
                 },
             ],
-        });
+        ));
 
         assert_eq!(
             serde_json::to_value(projected).unwrap(),
@@ -186,9 +172,9 @@ mod tests {
 
     #[test]
     fn user_images_use_native_chat_content_parts() {
-        let projected = project_chat_message(&Message {
-            role: Role::User,
-            content: vec![
+        let projected = project_chat_message(&Message::new(
+            Role::User,
+            vec![
                 MessageContent::Text {
                     text: "inspect the attachment".into(),
                 },
@@ -196,7 +182,7 @@ mod tests {
                     attachment: super::super::ImageAttachment::from_bytes("image/png", b"png"),
                 },
             ],
-        });
+        ));
 
         assert_eq!(
             serde_json::to_value(projected).unwrap(),
@@ -217,28 +203,23 @@ mod tests {
     fn assistant_message_keeps_reasoning_and_stringifies_tool_arguments() {
         let projected = project_chat_message(&Message {
             role: Role::Assistant,
+            reasoning_content: Some("inspect\n\n  confirm ".into()),
             content: vec![
-                MessageContent::Reasoning {
-                    text: "inspect".into(),
-                },
-                MessageContent::Reasoning {
-                    text: "confirm".into(),
-                },
                 MessageContent::Text {
                     text: "checked".into(),
                 },
-                MessageContent::ToolCall {
+                MessageContent::ToolCall(ToolCall {
                     id: "call_1".into(),
                     name: "read".into(),
                     arguments: json!({"path": "README.md"}).into(),
-                },
+                }),
             ],
         });
 
         let value = serde_json::to_value(&projected).unwrap();
         assert_eq!(value["role"], "assistant");
         assert_eq!(value["content"], "checked");
-        assert_eq!(value["reasoning_content"], "inspect\nconfirm");
+        assert_eq!(value["reasoning_content"], "inspect\n\n  confirm ");
         assert_eq!(value["tool_calls"][0]["type"], "function");
         assert_eq!(
             value["tool_calls"][0]["function"]["arguments"],

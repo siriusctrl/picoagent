@@ -9,7 +9,7 @@ use anyhow::{Context, Result, ensure};
 use fmtview::view::{RecordTimeline, TimelineRefresh, TimelineResetReason};
 
 use super::{TranscriptInstrumentation, TranscriptTimeline, read_run, scan::read_range};
-use crate::storage::message_log::decoder::CheckpointDecoder;
+use crate::storage::message_log::decoder::LineDecoder;
 
 const SAMPLE_BYTES: usize = 64;
 const REFRESH_SHORT_READ_ATTEMPTS: usize = 3;
@@ -103,7 +103,7 @@ impl TranscriptTimeline {
             self.suffix_tracker = SuffixTracker::new(self.committed_end, self.committed_next_seq);
             return Err(error);
         }
-        let committed_end = suffix_tracker.committed_end();
+        let committed_end = suffix_tracker.visible_end();
         let committed_next_seq = suffix_tracker.next_seq();
         let prefix_sample = if committed_end != old_committed_end {
             Some(PrefixSample::read(
@@ -198,7 +198,7 @@ fn is_unexpected_eof(error: &anyhow::Error) -> bool {
 }
 
 pub(super) struct SuffixTracker {
-    decoder: CheckpointDecoder,
+    decoder: LineDecoder,
     scan_cursor: u64,
     partial_line: Vec<u8>,
     sample: RangeSample,
@@ -207,15 +207,15 @@ pub(super) struct SuffixTracker {
 impl SuffixTracker {
     pub(super) fn new(committed_end: u64, next_seq: u64) -> Self {
         Self {
-            decoder: CheckpointDecoder::new(next_seq, committed_end),
+            decoder: LineDecoder::new(next_seq, committed_end),
             scan_cursor: committed_end,
             partial_line: Vec::new(),
             sample: RangeSample::empty(committed_end),
         }
     }
 
-    pub(super) fn committed_end(&self) -> u64 {
-        self.decoder.committed_end()
+    pub(super) fn visible_end(&self) -> u64 {
+        self.decoder.visible_end()
     }
 
     pub(super) fn next_seq(&self) -> u64 {
@@ -282,14 +282,13 @@ impl SuffixTracker {
                     break;
                 }
                 let line = std::mem::take(&mut self.partial_line);
-                let _ = self
-                    .decoder
+                self.decoder
                     .push_complete_line(path, line, self.scan_cursor)?;
             }
         }
         self.sample = RangeSample::read(
             file,
-            self.decoder.committed_end(),
+            self.decoder.visible_end(),
             self.scan_cursor,
             instrumentation,
             label,

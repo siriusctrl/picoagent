@@ -30,16 +30,7 @@ fn text_response(text: &str) -> ModelResponse {
 
 fn tool_response(calls: Vec<ToolCall>) -> ModelResponse {
     ModelResponse::new(
-        Message::assistant(
-            calls
-                .into_iter()
-                .map(|call| MessageContent::ToolCall {
-                    id: call.id,
-                    name: call.name,
-                    arguments: call.arguments,
-                })
-                .collect(),
-        ),
+        Message::assistant(calls.into_iter().map(MessageContent::ToolCall).collect()),
         ModelUsage::default(),
     )
 }
@@ -330,8 +321,8 @@ async fn malformed_arguments_fail_only_their_own_call_and_preserve_raw_text() {
         .iter()
         .flat_map(|message| &message.content)
         .find_map(|content| match content {
-            MessageContent::ToolCall { id, arguments, .. } if id == "malformed" => {
-                Some(arguments.as_raw())
+            MessageContent::ToolCall(call) if call.id == "malformed" => {
+                Some(call.arguments.as_raw())
             }
             _ => None,
         })

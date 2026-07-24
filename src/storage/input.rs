@@ -56,10 +56,10 @@ impl RunDirStore {
         self.enqueue_input_with_id(
             run_id,
             input_id,
-            Message {
-                role: Role::User,
-                content: vec![crate::model::MessageContent::RuntimeReminder { text }],
-            },
+            Message::new(
+                Role::User,
+                vec![crate::model::MessageContent::RuntimeReminder { text }],
+            ),
         )
         .await
     }

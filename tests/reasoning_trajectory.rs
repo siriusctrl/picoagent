@@ -86,12 +86,12 @@ async fn chat_reasoning_is_persisted_as_a_separate_trajectory_channel() {
         &messages[0].content[1],
         MessageContent::Text { text } if text == "test reasoning"
     ));
+    assert_eq!(
+        messages[1].reasoning_content.as_deref(),
+        Some("inspect first")
+    );
     assert!(matches!(
         &messages[1].content[0],
-        MessageContent::Reasoning { text } if text == "inspect first"
-    ));
-    assert!(matches!(
-        &messages[1].content[1],
         MessageContent::Text { text } if text == "FIASCO_REASONING_OK"
     ));
 
@@ -116,9 +116,16 @@ async fn chat_reasoning_is_persisted_as_a_separate_trajectory_channel() {
     assert_eq!(persisted[0]["content"][1]["text"], "test reasoning");
     assert_eq!(persisted[1]["ref"], "m2");
     assert_eq!(persisted[1]["role"], "assistant");
-    assert_eq!(persisted[1]["content"][0]["type"], "reasoning");
-    assert_eq!(persisted[1]["content"][0]["text"], "inspect first");
-    assert_eq!(persisted[1]["content"][1]["text"], "FIASCO_REASONING_OK");
+    assert_eq!(persisted[1]["reasoning_content"], "inspect first");
+    assert_eq!(persisted[1]["content"][0]["type"], "text");
+    assert_eq!(persisted[1]["content"][0]["text"], "FIASCO_REASONING_OK");
+    assert!(
+        persisted[1]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|content| content["type"] != "reasoning")
+    );
     assert!(!paths.directory.join("message_metadata.jsonl").exists());
 
     let events = tokio::fs::read_to_string(paths.events).await.unwrap();

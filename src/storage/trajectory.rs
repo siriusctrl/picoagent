@@ -9,16 +9,15 @@ use crate::{
 use super::{MESSAGE_FORMAT, RunDirStore, ensure_run_exists, message_log};
 
 impl RunDirStore {
-    /// Atomically append one logical checkpoint while preserving one JSON line
-    /// and one `m<N>` ref per message. Readers expose either all records in this
-    /// group or none of them.
-    pub async fn append_checkpoint(
+    /// Append one ordered batch while preserving one JSON line and one `m<N>`
+    /// ref per message. Complete lines become visible independently.
+    pub async fn append_messages(
         &self,
         run_id: &str,
         messages: &[Message],
     ) -> Result<Vec<TrajectoryMessage>> {
         let created_at = Utc::now();
-        self.append_classified_checkpoint(
+        self.append_classified_messages(
             run_id,
             messages
                 .iter()
@@ -40,11 +39,9 @@ impl RunDirStore {
         message: &Message,
     ) -> Result<TrajectoryMessage> {
         let mut records = self
-            .append_checkpoint(run_id, std::slice::from_ref(message))
+            .append_messages(run_id, std::slice::from_ref(message))
             .await?;
-        Ok(records
-            .pop()
-            .expect("singleton checkpoint returned no message"))
+        Ok(records.pop().expect("singleton append returned no message"))
     }
 
     pub(crate) async fn append_pending_input_message(
@@ -65,7 +62,7 @@ impl RunDirStore {
         compaction: Option<CompactionMessage>,
     ) -> Result<TrajectoryMessage> {
         let mut records = self
-            .append_classified_checkpoint(
+            .append_classified_messages(
                 run_id,
                 vec![ClassifiedMessage {
                     message: message.clone(),
@@ -75,17 +72,15 @@ impl RunDirStore {
                 }],
             )
             .await?;
-        Ok(records
-            .pop()
-            .expect("singleton checkpoint returned no message"))
+        Ok(records.pop().expect("singleton append returned no message"))
     }
 
-    async fn append_classified_checkpoint(
+    async fn append_classified_messages(
         &self,
         run_id: &str,
         messages: Vec<ClassifiedMessage>,
     ) -> Result<Vec<TrajectoryMessage>> {
-        ensure!(!messages.is_empty(), "message checkpoint must not be empty");
+        ensure!(!messages.is_empty(), "message append must not be empty");
         let mut sequences = self.write_lock.lock().await;
         // Invalidate the fast path before cancellable I/O. A dropped append may
         // leave a non-newline-terminated tail that the next append must trim.
@@ -121,13 +116,13 @@ impl RunDirStore {
                 }
             })
             .collect::<Vec<_>>();
-        message_log::append_checkpoint(&paths.messages, &records).await?;
+        message_log::append_messages(&paths.messages, &records).await?;
         let next_seq = next.saturating_add(records.len() as u64);
         sequences.insert(run_id.to_owned(), super::MessageCursor { next_seq });
         Ok(records)
     }
 
-    pub(crate) async fn append_compaction_checkpoint(
+    pub(crate) async fn append_compaction_messages(
         &self,
         run_id: &str,
         request: &Message,
@@ -136,7 +131,7 @@ impl RunDirStore {
     ) -> Result<[TrajectoryMessage; 2]> {
         let created_at = Utc::now();
         let records = self
-            .append_classified_checkpoint(
+            .append_classified_messages(
                 run_id,
                 vec![
                     ClassifiedMessage {
@@ -156,7 +151,24 @@ impl RunDirStore {
             .await?;
         records
             .try_into()
-            .map_err(|_| anyhow::anyhow!("compaction checkpoint did not contain two messages"))
+            .map_err(|_| anyhow::anyhow!("compaction append did not contain two messages"))
+    }
+
+    /// Repair a crash-torn record or incomplete trailing tool turn before an
+    /// existing run is loaded for a new activity.
+    pub(crate) async fn prepare_resume(&self, run_id: &str) -> Result<()> {
+        let mut sequences = self.write_lock.lock().await;
+        sequences.remove(run_id);
+        let paths = self.paths(run_id);
+        ensure_run_exists(&paths).await?;
+        let record_count = message_log::prepare_append(&paths.messages).await?;
+        sequences.insert(
+            run_id.to_owned(),
+            super::MessageCursor {
+                next_seq: record_count.saturating_add(1),
+            },
+        );
+        Ok(())
     }
 
     pub async fn load_messages(&self, run_id: &str) -> Result<Vec<Message>> {

@@ -307,10 +307,7 @@ impl DirectToolRuntime<'_> {
                     .into_iter()
                     .map(|(_, attachment)| MessageContent::Image { attachment }),
             );
-            messages.push(Message {
-                role: Role::User,
-                content,
-            });
+            messages.push(Message::new(Role::User, content));
         }
         Ok(messages)
     }
@@ -349,15 +346,15 @@ impl DirectToolRuntime<'_> {
             .map(|attachment| (call_id.clone(), attachment));
         let metadata = output.result_metadata();
         Ok(DirectToolResult {
-            message: Message {
-                role: Role::Tool,
-                content: vec![MessageContent::ToolResult {
+            message: Message::new(
+                Role::Tool,
+                vec![MessageContent::ToolResult {
                     call_id,
                     content: output.model_content(),
                     is_error: output.is_error,
                     metadata,
                 }],
-            },
+            ),
             attachment,
         })
     }
@@ -369,15 +366,15 @@ impl DirectToolRuntime<'_> {
         name: String,
     ) -> Result<DirectToolResult> {
         Ok(DirectToolResult {
-            message: Message {
-                role: Role::Tool,
-                content: vec![MessageContent::ToolResult {
+            message: Message::new(
+                Role::Tool,
+                vec![MessageContent::ToolResult {
                     call_id,
                     content: crate::model::runtime_handle_started_reminder(&handle, "tool", &name),
                     is_error: false,
                     metadata: ResultMetadata::empty(),
                 }],
-            },
+            ),
             attachment: None,
         })
     }

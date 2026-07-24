@@ -295,14 +295,14 @@ impl RuntimeHandleManager {
             .enqueue_runtime_input_with_id(
                 handle,
                 format!("stopped-{}", ulid::Ulid::new()),
-                "The parent stopped the previous agent activity after its last complete checkpoint. Any uncommitted tool side effects may still have occurred. Inspect state before continuing."
+                "The parent stopped the previous agent activity. Its incomplete trailing tool turn was discarded, but tool side effects may still have occurred. Inspect state before continuing."
                     .to_owned(),
             )
             .await?;
         record.state = HandleState::Idle;
         record.outputs.push_back(HandleOutput {
             status: HandleState::Cancelled,
-            content: "agent activity was stopped by the parent after its last complete checkpoint"
+            content: "agent activity was stopped by the parent; any incomplete trailing tool turn was discarded"
                 .to_owned(),
             metadata: crate::artifact::ResultMetadata::empty(),
         });

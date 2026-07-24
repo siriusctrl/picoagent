@@ -10,7 +10,7 @@ reusable library.
   on a TTY; redirected stdout writes exact committed NDJSON.
 - `fiasco inspect --follow`: refresh a running transcript in the interactive
   viewer. It requires a TTY.
-- `fiasco inspect --output ndjson`: explicitly select checkpoint-safe NDJSON.
+- `fiasco inspect --output ndjson`: explicitly select newline-complete NDJSON.
 - `fiasco inspect --summary`: print run metadata and final output.
 - `fiasco auth login`: OpenAI OAuth device login.
 - `fiasco memory consolidate`: run model-driven user/project memory maintenance.

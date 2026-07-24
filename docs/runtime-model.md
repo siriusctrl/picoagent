@@ -5,7 +5,7 @@
 A run is one task executed by `AgentRunner`. Root runs use queued, running,
 completed, or failed. Reusable child runs additionally use idle between
 activities and closed after explicit lifetime termination. `fiasco resume
-<run-id>` continues a non-completed root run from its last complete checkpoint.
+<run-id>` continues a non-completed root run after repairing its message tail.
 The implementation does not resume inside a provider stream or shell command.
 One per-run execution lease prevents two processes from advancing the same
 trajectory concurrently. Resume also requires the same non-secret provider
@@ -19,11 +19,12 @@ modalities and rejects resume when they change.
 `run.json` declares `message_format` as `fiasco-message`. `messages.jsonl`
 contains one complete provider-neutral message per line. Each record has its
 run-local `m<N>` ref, timestamp, role, and typed content blocks. The blocks
-directly represent runtime reminders, text, images, reasoning, tool calls and
-results, provider continuation items, and background-task notices. Tool errors
-and `ArtifactRef` values remain attached to their result blocks. Optional
-pending-input idempotency, compaction state, and checkpoint membership use
-`_fiasco` on the same line.
+directly represent runtime reminders, text, images, tool calls and results,
+opaque provider continuation items, and background-task notices. Compatible
+Chat reasoning is the optional assistant sibling `reasoning_content`. Tool
+errors and `ArtifactRef` values remain attached to their result blocks.
+Optional pending-input idempotency and compaction state use `_fiasco` on the
+same line.
 
 This self-contained representation is not a provider wire format. OpenAI Chat,
 OpenAI Responses, and Anthropic adapters project it independently. Keeping the
@@ -31,13 +32,14 @@ runtime representation directly avoids a second metadata log, byte-span
 layout, duplicated sequence, and reconstruction hashes.
 
 The run execution lease permits one writer and any number of read-only viewers.
-Each line records its checkpoint's first ref, index, and count. A singleton is a
-one-message checkpoint. Readers publish a multi-message checkpoint only after
-all of its newline-terminated lines are present and contiguous. Before the next
-append, the writer validates the complete prefix and trims the whole incomplete
-tail checkpoint. Malformed committed JSON and a ref that does not match its
-one-based line fail loading. This pre-release contract does not decode older
-run-record versions.
+A terminating newline makes that message visible immediately. A viewer may
+therefore briefly show an assistant tool call before all result lines from the
+same batch appear. A torn final line stays hidden. Before an existing run starts
+another activity, the sole writer validates the complete lines, trims the torn
+tail, and matches the trailing assistant tool calls against ordered results. If
+any result is absent, it discards that assistant and its result prefix. Malformed
+complete JSON, a noncanonical ref, or an impossible result order fails loading.
+This pre-release contract does not decode older run-record versions.
 
 ## Loop
 
@@ -45,24 +47,26 @@ For each model step:
 
 1. append newly ready background activity results to the current messages;
 2. if compaction is enabled and the tracked usage threshold is reached, send
-   the native older prefix plus one compaction user instruction, then commit
-   the instruction and assistant compacted state as one checkpoint;
+   the native older prefix plus one compaction user instruction, then append
+   the instruction and assistant compacted state;
 3. assemble the active context and send sorted tool schemas to the provider;
 4. stream visible text and explicitly returned reasoning as separate events
    while collecting the complete response;
-5. if the assistant is final, persist it as a singleton checkpoint;
+5. if the assistant is final, persist it as one complete message record;
 6. otherwise execute its requested tools concurrently under one shared
    foreground window;
-7. artifact large outputs, then commit the assistant, complete tool messages in
-   original call order, and optional user attachment message as one checkpoint;
-9. repeat, join outstanding background work before finalization, or write
+7. artifact large outputs, then append the assistant, complete tool messages in
+   original call order, and optional user attachment message as one batch;
+8. repeat, join outstanding background work before finalization, or write
    `final.md` when no tool calls or tasks remain.
 
-On resume, a complete final assistant checkpoint is finalized without another
-model call. An incomplete tool-turn checkpoint is discarded in full. Fiasco
-appends a user/runtime reminder that uncommitted work may have changed the
-workspace or external systems, and the model must inspect state before retrying.
-It does not synthesize missing tool results or automatically replay the turn.
+On resume, complete messages remain. If the last assistant requested tools but
+not every ordered result reached a complete line, that assistant and its result
+prefix are discarded. A compaction request without its following state is inert
+and excluded from active context. Fiasco appends a user/runtime reminder that
+discarded work may have changed the workspace or external systems, and the model
+must inspect state before retrying. It does not synthesize missing tool results
+or automatically replay the turn.
 
 ## Compaction And History
 
@@ -83,9 +87,9 @@ inspection tools (`read` and `bash`) would keep the full context instead of
 compacting without exact retrieval.
 
 Compaction does not mutate committed messages. After a successful response, it
-commits the compaction user message and exact assistant compacted-state message
-together; each record's `_fiasco` state distinguishes control from ordinary
-conversation. Normal
+appends the compaction user message and exact assistant compacted-state message;
+each record's `_fiasco` state distinguishes control from ordinary conversation.
+A request left without a state after a crash remains inert. Normal
 context assembly excludes the compaction instruction and older compaction
 records, using the initial runtime message, latest exact assistant state, one
 synthetic user `<runtime-reminder>` that says to continue rather than compact

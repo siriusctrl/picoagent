@@ -25,7 +25,7 @@ mod trajectory;
 pub use message_log::TranscriptTimeline;
 
 pub const MESSAGE_FORMAT: &str = "fiasco-message";
-const RUN_RECORD_VERSION: u32 = 11;
+const RUN_RECORD_VERSION: u32 = 14;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

@@ -101,12 +101,12 @@ pub(crate) fn append_active_handle_reminder(
         return;
     }
 
-    messages.push(Message {
-        role: Role::User,
-        content: vec![MessageContent::RuntimeReminder {
+    messages.push(Message::new(
+        Role::User,
+        vec![MessageContent::RuntimeReminder {
             text: format!("<runtime-reminder>\n{section}\n</runtime-reminder>"),
         }],
-    });
+    ));
 }
 
 #[cfg(test)]

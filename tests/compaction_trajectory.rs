@@ -18,7 +18,7 @@ use fiasco::{
     hooks::HookPipeline,
     model::{
         Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
-        ToolSpec,
+        ToolCall, ToolSpec,
     },
     storage::RunDirStore,
     tools::{RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
@@ -138,11 +138,11 @@ impl ModelProvider for InspectableTrajectoryProvider {
 
 fn tool_call_response(id: &str, label: &str, input_tokens: u64) -> ModelResponse {
     ModelResponse::new(
-        Message::assistant(vec![MessageContent::ToolCall {
+        Message::assistant(vec![MessageContent::ToolCall(ToolCall {
             id: id.to_owned(),
             name: "marker".to_owned(),
             arguments: json!({"label": label}).into(),
-        }]),
+        })]),
         ModelUsage {
             input_tokens: Some(input_tokens),
             output_tokens: Some(10),
@@ -158,11 +158,11 @@ fn history_tool_call_response(
     input_tokens: u64,
 ) -> ModelResponse {
     ModelResponse::new(
-        Message::assistant(vec![MessageContent::ToolCall {
+        Message::assistant(vec![MessageContent::ToolCall(ToolCall {
             id: id.to_owned(),
             name: name.to_owned(),
             arguments: arguments.into(),
-        }]),
+        })]),
         ModelUsage {
             input_tokens: Some(input_tokens),
             output_tokens: Some(10),
@@ -363,11 +363,7 @@ fn has_tool_call(message: &Message, id: &str, name: &str) -> bool {
     message.content.iter().any(|content| {
         matches!(
             content,
-            MessageContent::ToolCall {
-                id: call_id,
-                name: tool_name,
-                ..
-            } if call_id == id && tool_name == name
+            MessageContent::ToolCall(call) if call.id == id && call.name == name
         )
     })
 }

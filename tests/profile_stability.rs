@@ -13,7 +13,7 @@ use fiasco::{
     memory::MemoryPaths,
     model::{
         Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
-        ToolSpec,
+        ToolCall, ToolSpec,
     },
     storage::RunDirStore,
     tools::{BashTool, RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry, WriteTool},
@@ -67,15 +67,15 @@ impl ModelProvider for CapturingFinalProvider {
 }
 
 #[derive(Default)]
-struct NoCheckpointHistoryProvider {
+struct NoCompactedHistoryProvider {
     normal_calls: AtomicUsize,
     requests: Mutex<Vec<ModelRequest>>,
 }
 
 #[async_trait]
-impl ModelProvider for NoCheckpointHistoryProvider {
+impl ModelProvider for NoCompactedHistoryProvider {
     fn name(&self) -> &str {
-        "no-checkpoint-history"
+        "no-compacted-history"
     }
 
     async fn complete(
@@ -86,15 +86,15 @@ impl ModelProvider for NoCheckpointHistoryProvider {
         self.requests.lock().unwrap().push(request);
         match self.normal_calls.fetch_add(1, Ordering::SeqCst) {
             0 => Ok(ModelResponse::new(
-                Message::assistant(vec![MessageContent::ToolCall {
+                Message::assistant(vec![MessageContent::ToolCall(ToolCall {
                     id: "call-empty-history".to_owned(),
                     name: "history_search".to_owned(),
                     arguments: json!({"pattern": "anything"}).into(),
-                }]),
+                })]),
                 ModelUsage::default(),
             )),
             1 => Ok(final_response("empty history confirmed")),
-            unexpected => bail!("unexpected no-checkpoint model call {unexpected}"),
+            unexpected => bail!("unexpected no-compacted-history model call {unexpected}"),
         }
     }
 }
@@ -149,11 +149,11 @@ fn final_response(text: &str) -> ModelResponse {
 
 fn delegate_response(id: &str, prompt: &str) -> ModelResponse {
     ModelResponse::new(
-        Message::assistant(vec![MessageContent::ToolCall {
+        Message::assistant(vec![MessageContent::ToolCall(ToolCall {
             id: id.to_owned(),
             name: "delegate".to_owned(),
             arguments: json!({"name": "delegated_child", "prompt": prompt}).into(),
-        }]),
+        })]),
         ModelUsage::default(),
     )
 }
@@ -431,9 +431,9 @@ async fn general_task_inherits_the_root_output_limit_by_default() {
 }
 
 #[tokio::test]
-async fn history_search_without_a_checkpoint_returns_an_empty_result() {
+async fn history_search_before_compaction_returns_an_empty_result() {
     let workspace = TempDir::new().unwrap();
-    let provider = Arc::new(NoCheckpointHistoryProvider::default());
+    let provider = Arc::new(NoCompactedHistoryProvider::default());
     let store = RunDirStore::new(workspace.path());
     let runner = runner_with_store(
         workspace.path(),
@@ -447,7 +447,7 @@ async fn history_search_without_a_checkpoint_returns_an_empty_result() {
     );
 
     let result = runner
-        .run(RunRequest::root("search before any checkpoint"))
+        .run(RunRequest::root("search before any compaction"))
         .await
         .unwrap();
     assert_eq!(result.final_output, "empty history confirmed");

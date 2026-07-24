@@ -345,7 +345,7 @@ async fn inspect_run(
     }
     if output.is_some() || !stdout_is_terminal {
         let mut stdout = tokio::io::stdout();
-        return store.write_committed_ndjson(run_id, &mut stdout).await;
+        return store.write_complete_ndjson(run_id, &mut stdout).await;
     }
     let source = TranscriptTimeline::open(&store, run_id)?;
     let mut options = fmtview::view::ViewOptions::default();

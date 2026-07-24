@@ -72,6 +72,17 @@ ADR 0034 later groups those one-record lines into atomic logical checkpoints.
 A newline still completes one physical record, while readers publish a group
 only after every declared line is present.
 
+ADR 0042 later stores compatible Chat `reasoning_content` as an optional
+assistant-message sibling instead of a typed content block. The message remains
+one self-contained provider-neutral record.
+
+ADR 0043 later removes redundant provider and checkpoint fields while
+preserving the same one-record message boundary.
+
+ADR 0044 later removes logical checkpoint membership entirely. Every complete
+newline is visible, while the next writer repairs an incomplete trailing tool
+turn before resume.
+
 ## Alternatives Considered
 
 - **Put the old sidecar under `_fiasco` unchanged.** Rejected because one file

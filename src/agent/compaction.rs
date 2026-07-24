@@ -222,11 +222,11 @@ pub(crate) async fn maybe_compact(
         .saturating_sub(removed_tokens)
         .saturating_add(estimate_message_tokens(&response.assistant));
 
-    // Request and state form one checkpoint. Readers expose both records or
-    // neither, so a torn compaction cannot become active after restart.
+    // A request without its following state is inert and omitted from active
+    // context, so no multi-record commit protocol is needed.
     let records = async {
         let records = store
-            .append_compaction_checkpoint(
+            .append_compaction_messages(
                 run_id,
                 &compaction_request,
                 &response.assistant,
@@ -311,15 +311,15 @@ pub(crate) fn build_active_context(trajectory: &[TrajectoryMessage]) -> Result<V
     let mut active = Vec::with_capacity(trajectory.len() - first_kept + 3);
     active.push(initial.message.clone());
     active.push(state_record.message.clone());
-    active.push(Message {
-        role: Role::User,
-        content: vec![MessageContent::RuntimeReminder {
+    active.push(Message::new(
+        Role::User,
+        vec![MessageContent::RuntimeReminder {
             text: format!(
                 "<runtime-reminder>\n{}\n</runtime-reminder>",
                 agent_prompts().compaction_resume.trim()
             ),
         }],
-    });
+    ));
     active
         .extend(ordinary_messages(&trajectory[first_kept..]).map(|record| record.message.clone()));
     Ok(active)
@@ -428,12 +428,9 @@ pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
             // Image tokenization is provider and resolution dependent. Keep a
             // bounded estimate rather than counting the much larger base64 wire form.
             MessageContent::Image { .. } => 4 * 1024,
-            MessageContent::Reasoning { text } => text.len(),
-            MessageContent::ToolCall {
-                id,
-                name,
-                arguments,
-            } => id.len() + name.len() + arguments.as_raw().len(),
+            MessageContent::ToolCall(call) => {
+                call.id.len() + call.name.len() + call.arguments.as_raw().len()
+            }
             MessageContent::ToolResult {
                 call_id, content, ..
             } => call_id.len() + content.len(),
@@ -454,7 +451,8 @@ pub(crate) fn estimate_message_tokens(message: &Message) -> u64 {
             )
             .len(),
         })
-        .sum::<usize>();
+        .sum::<usize>()
+        + message.reasoning_content.as_ref().map_or(0, String::len);
     (bytes as u64).div_ceil(4)
 }
 
@@ -486,17 +484,14 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::trajectory::CompactionMessage;
+    use crate::{model::ToolCall, trajectory::CompactionMessage};
 
     fn record(seq: u64, role: Role, content: MessageContent) -> TrajectoryMessage {
         TrajectoryMessage {
             message_ref: format!("m{seq}"),
             seq,
             created_at: Utc::now(),
-            message: Message {
-                role,
-                content: vec![content],
-            },
+            message: Message::new(role, vec![content]),
             pending_input_id: None,
             compaction: None,
         }
@@ -531,11 +526,11 @@ mod tests {
             record(
                 2,
                 Role::Assistant,
-                MessageContent::ToolCall {
+                MessageContent::ToolCall(ToolCall {
                     id: "call-1".into(),
                     name: "bash".into(),
                     arguments: json!({}).into(),
-                },
+                }),
             ),
             record(
                 3,
@@ -550,11 +545,11 @@ mod tests {
             record(
                 4,
                 Role::Assistant,
-                MessageContent::ToolCall {
+                MessageContent::ToolCall(ToolCall {
                     id: "call-2".into(),
                     name: "bash".into(),
                     arguments: json!({}).into(),
-                },
+                }),
             ),
             record(
                 5,
@@ -574,9 +569,9 @@ mod tests {
 
     #[test]
     fn handle_result_estimate_counts_the_escaped_runtime_envelope() {
-        let message = Message {
-            role: Role::User,
-            content: vec![MessageContent::RuntimeHandle {
+        let message = Message::new(
+            Role::User,
+            vec![MessageContent::RuntimeHandle {
                 handle: "a1".into(),
                 kind: "agent".into(),
                 name: "entity-heavy".into(),
@@ -584,7 +579,7 @@ mod tests {
                 content: "&<>".repeat(10_000),
                 metadata: crate::artifact::ResultMetadata::empty(),
             }],
-        };
+        );
         let rendered = crate::model::render_runtime_handle_content(&message.content).unwrap();
 
         assert_eq!(
@@ -592,6 +587,19 @@ mod tests {
             (rendered.len() as u64).div_ceil(4)
         );
         assert!(rendered.len() > 100_000);
+    }
+
+    #[test]
+    fn message_estimate_counts_chat_reasoning_content() {
+        let message = Message {
+            role: Role::Assistant,
+            reasoning_content: Some("r".repeat(40)),
+            content: vec![MessageContent::Text {
+                text: "text".to_owned(),
+            }],
+        };
+
+        assert_eq!(estimate_message_tokens(&message), 11);
     }
 
     #[test]

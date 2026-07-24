@@ -15,7 +15,7 @@ cross-cutting invariants, verification, and handoff.
   compile-time `tool.yaml`; related handle, history, and graph tools are grouped
   by family.
 - `src/storage/`, `src/artifact.rs`, and `src/trajectory/`: self-contained run
-  storage, checkpoint-safe transcripts, artifact preservation, and history
+  storage, newline-visible transcripts, artifact preservation, and history
   access.
 - `prompts/agents.yaml`: typed stable agent instructions. Dynamic prompt
   assembly remains in `src/agent/context.rs`.
@@ -44,18 +44,20 @@ See `docs/source-map.md` for the detailed ownership map.
   parentage, display name, capability profile, and open/closed lifetime survive
   the process. Activity state, followups, pending output, and ordinary-tool
   handles are process-local; do not add a second durable task authority.
-- Complete checkpoints are the only resumable boundary. After a process crash,
-  resume the root from its last complete checkpoint, report the lost in-flight
-  work, and let the model decide what to inspect or retry. Do not reconstruct or
-  relaunch old activities. Open child threads remain inert until an explicit
-  message starts a new activity from their complete transcript.
+- A complete newline is the durable message boundary. Before resuming after a
+  process crash, remove a torn final record and discard an incomplete trailing
+  assistant/tool exchange by matching ordered call ids. Report the lost
+  in-flight work and let the model decide what to inspect or retry. Do not
+  reconstruct or relaunch old activities. Open child threads remain inert until
+  an explicit message starts a new activity from their remaining transcript.
 - Keep `messages.jsonl` as the single self-contained durable conversation source
   in the declared `fiasco-message` shape. Persist exact provider-neutral content
   and exact function-call argument strings; parse arguments only at the tool
   boundary. Do not add a parallel metadata or reconstruction log.
 - One execution lease gives a run one writer and any number of lock-free
-  viewers. Only complete checkpoint groups are visible or resumable; incomplete
-  tails are writer recovery state, never conversation history.
+  viewers. Every complete newline is immediately visible, so a viewer may
+  briefly show a prefix of the final tool turn. A torn physical line stays
+  hidden; semantic tail repair belongs only to the next writer.
 - Preserve every large or binary tool result in full under the run. Apply inline
   and preview limits independently per result, keep artifact identities
   immutable and portable, and add asynchronous status envelopes only after
@@ -68,7 +70,7 @@ See `docs/source-map.md` for the detailed ownership map.
 - Planning graphs are run-local files, not runtime state or a scheduler. Memory
   is user/project Markdown outside the live transcript, not a special execution
   subsystem. Both are manipulated through ordinary tools.
-- Fiasco owns checkpoint-aware transcript sourcing and command routing; fmtview
+- Fiasco owns newline-aware transcript sourcing and command routing; fmtview
   owns terminal rendering, navigation, search, and event handling.
 - The launch runtime has no security sandbox or approval engine. Tools, hooks,
   and child processes inherit the fiasco process permissions; never imply
@@ -82,9 +84,10 @@ See `docs/source-map.md` for the detailed ownership map.
 - Implement only agreed product behavior. Before adding a fallback, validation,
   persistent state, recovery guarantee, or new subsystem beyond the current
   design, discuss the concrete need and tradeoff with the user.
-- For rare crashes, prefer one durable authority, complete checkpoints, an
-  explicit crash notice, and model-directed retry over transparent continuation
-  machinery whose external side effects cannot be made exactly once.
+- For rare crashes, prefer one durable message log, minimal trailing-turn
+  repair, an explicit crash notice, and model-directed retry over transparent
+  continuation machinery whose external side effects cannot be made exactly
+  once.
 - Keep checks at real external boundaries and states the program can produce.
   Prefer readable modules over speculative frameworks or defensive fallback
   layers. Review ownership before growing a file already near 400 lines.
@@ -93,8 +96,8 @@ See `docs/source-map.md` for the detailed ownership map.
 
 - Runtime, handles, and restart: `docs/runtime-model.md`,
   `docs/architecture.md`, ADR 0034, and ADR 0038.
-- Messages, checkpoints, and inspection: `docs/architecture.md`, ADR 0032,
-  ADR 0034, and ADR 0037.
+- Messages, tail repair, and inspection: `docs/architecture.md`, ADR 0032,
+  ADR 0037, and ADR 0044.
 - Artifact storage and result envelopes: `docs/artifacts.md`.
 - Prompt and tool assets: `prompts/README.md` and `docs/architecture.md`.
 - Configuration, memory, and planning graphs: `docs/configuration.md`,

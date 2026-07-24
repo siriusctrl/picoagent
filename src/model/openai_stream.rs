@@ -104,7 +104,7 @@ enum OpenAiStreamDelta {
 #[derive(Default)]
 struct OpenAiAccumulator {
     text: String,
-    reasoning: String,
+    reasoning: Option<String>,
     texts: BTreeMap<usize, String>,
     tools: BTreeMap<usize, ToolCallBuilder>,
     item_indexes: BTreeMap<String, usize>,
@@ -170,13 +170,8 @@ impl OpenAiAccumulator {
         if item.get("type").and_then(Value::as_str) == Some("reasoning") {
             if event_type == "response.output_item.done" {
                 let index = output_index(value, self.provider_items.len());
-                self.provider_items.insert(
-                    index,
-                    MessageContent::ProviderItem {
-                        provider: "openai".to_owned(),
-                        item: item.clone(),
-                    },
-                );
+                self.provider_items
+                    .insert(index, MessageContent::ProviderItem { item: item.clone() });
             }
             return Ok(Vec::new());
         }
@@ -252,7 +247,9 @@ impl OpenAiAccumulator {
             .and_then(Value::as_str)
             .filter(|text| !text.is_empty())
         {
-            self.reasoning.push_str(text);
+            self.reasoning
+                .get_or_insert_with(String::new)
+                .push_str(text);
             emitted.push(OpenAiStreamDelta::Reasoning(text.to_owned()));
         }
         if let Some(text) = delta
@@ -299,11 +296,6 @@ impl OpenAiAccumulator {
         }
         if protocol == OpenAiProtocol::ChatCompletions {
             let mut assistant_content = Vec::new();
-            if !self.reasoning.is_empty() {
-                assistant_content.push(MessageContent::Reasoning {
-                    text: self.reasoning,
-                });
-            }
             if !self.text.is_empty() {
                 assistant_content.push(MessageContent::Text {
                     text: self.text.clone(),
@@ -311,16 +303,11 @@ impl OpenAiAccumulator {
             }
             for builder in self.tools.into_values() {
                 let call = builder.finish();
-                assistant_content.push(MessageContent::ToolCall {
-                    id: call.id.clone(),
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                });
+                assistant_content.push(MessageContent::ToolCall(call));
             }
-            return Ok(ModelResponse::new(
-                Message::assistant(assistant_content),
-                self.usage,
-            ));
+            let mut assistant = Message::assistant(assistant_content);
+            assistant.reasoning_content = self.reasoning;
+            return Ok(ModelResponse::new(assistant, self.usage));
         }
 
         let mut assistant_items = self.provider_items;
@@ -331,14 +318,7 @@ impl OpenAiAccumulator {
         }
         for (index, builder) in self.tools {
             let call = builder.finish();
-            assistant_items.insert(
-                index,
-                MessageContent::ToolCall {
-                    id: call.id.clone(),
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                },
-            );
+            assistant_items.insert(index, MessageContent::ToolCall(call));
         }
         Ok(ModelResponse::new(
             Message::assistant(assistant_items.into_values().collect()),
@@ -386,13 +366,14 @@ mod tests {
             .handle_responses("response.completed", &json!({"response": {}}))
             .unwrap();
         let response = accumulator.finish(OpenAiProtocol::Responses).unwrap();
+        assert!(response.assistant.reasoning_content.is_none());
         assert!(matches!(
             response.assistant.content[0],
             MessageContent::ProviderItem { .. }
         ));
         assert!(matches!(
             response.assistant.content[1],
-            MessageContent::ToolCall { .. }
+            MessageContent::ToolCall(_)
         ));
     }
 

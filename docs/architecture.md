@@ -141,13 +141,17 @@ runtime:
 a cloud worker can retain or inspect a job without a database.
 
 The durable message contract is `fiasco-message`. Every `messages.jsonl` line is
-self-contained: `ref`, `created_at`, `role`, and the exact typed
-provider-neutral `content` blocks used by the runner. Tool-error state,
-structured artifact refs, images, reasoning, runtime-handle results, and
-opaque provider continuation items therefore need no second representation or
-reconstruction layout. Optional pending-input idempotency and compaction state
-live under `_fiasco` on the same record. The one-based sequence is derived from
-the required `m<N>` ref and line position rather than stored again.
+self-contained: `ref`, `created_at`, `role`, the exact typed provider-neutral
+`content` blocks used by the runner, and optional assistant
+`reasoning_content`. Tool-error state, structured artifact refs, images,
+runtime-handle results, and opaque provider continuation items therefore need
+no second representation or reconstruction layout. Compatible Chat reasoning
+uses the sibling field because that is the exact replayable payload shape;
+Responses reasoning remains an ordered opaque item whose provider is already
+fixed by the run. Optional
+pending-input idempotency and compaction state live under `_fiasco` on the same
+record. The one-based sequence is derived from the required `m<N>` ref and line
+position rather than stored again.
 
 Assistant function-call `arguments` remain the exact provider string in this
 log, including malformed JSON. Parsing occurs only at the individual tool
@@ -163,25 +167,24 @@ modality declaration, persisted profile, and remaining delegation depth. Resume
 requires the current model declaration to match and restores delegation
 authority from that run snapshot rather than current depth configuration.
 
-Only complete checkpoints are resumable. Stream deltas are emitted to live
-sinks but omitted from the persisted `events.jsonl` and are never appended as
-partial conversation messages.
+Only complete messages enter the durable transcript. Stream deltas are emitted
+to live sinks but omitted from the persisted `events.jsonl` and are never
+appended as partial conversation messages.
 
-The one process holding the run execution lease is the sole writer. Each
-newline completes one physical message record, while `_fiasco.checkpoint` groups
-one or more records into the logical commit boundary. Read-only viewers take no
-message-log lock and publish a group only when every declared line is complete.
-The writer trims an incomplete tail group before resuming appends. Malformed
-completed records and out-of-sequence refs fail loading. The current pre-release
-format intentionally does not load older run-record versions.
+The one process holding the run execution lease is the sole writer. A newline
+immediately exposes its message to lock-free readers, including a possible
+prefix of the final assistant/tool batch. A torn physical line remains hidden.
+Before an existing run starts another activity, the writer trims that line and
+discards a trailing assistant tool call unless every result exists in original
+call order. Malformed complete records, out-of-sequence refs, and impossible
+result order fail loading. The current pre-release format intentionally does
+not load older run-record versions.
 
-One incremental checkpoint decoder owns this definition for every reader. Its
-synchronous core validates complete physical lines from any known sequence and
-byte offset, retains at most one incomplete checkpoint, and returns exact raw
-lines only after the whole group commits. The async file wrapper retains a torn
-final line across EOF and streams forward without reading the whole file;
-trajectory loading collects its committed records, while append recovery only
-counts them and uses the same committed byte offset.
+One small line decoder validates physical records from any known sequence and
+byte offset and preserves their exact raw representation. The async wrapper
+retains a torn final line across EOF and streams forward without reading the
+whole file. Trajectory loading exposes every complete line; writer recovery
+performs the separate trailing tool-call/result check.
 
 ### Transcript inspection
 
@@ -189,7 +192,7 @@ counts them and uses the same committed byte offset.
 
 ```text
 inspect command
-  -> TranscriptTimeline (Fiasco storage/checkpoints/run state)
+  -> TranscriptTimeline (Fiasco storage/newlines/run state)
      -> fmtview::view::RecordTimeline
         -> fmtview (tail loading/search/navigation/render/terminal lifecycle)
 ```
@@ -200,23 +203,21 @@ interactive path constructs no provider, MCP client, hooks, tools, or runner.
 Fiasco depends on the released `fmtview` facade and does not depend directly on
 `fmtview-core` or own ratatui/crossterm behavior.
 
-The timeline opens at the last committed checkpoint by scanning physical lines
-backward from EOF. It loads older checkpoints backward and newer checkpoints
-forward; one logical checkpoint may exceed a requested record/byte budget when
-it is the first group in a batch, but is never split across published batches.
-Prefix probes are bounded. The initial tail path does not index or validate
-every earlier message, so a large history can show its first screen without a
-forward scan.
+The timeline opens at the last complete line by scanning backward from EOF. It
+loads individual older and newer messages in sequence and may therefore display
+a prefix of a tool batch. One large message may exceed a requested byte budget
+when it is the first record in a batch. Prefix probes are bounded. The initial
+tail path does not index or validate every earlier message, so a large history
+can show its first screen without a forward scan.
 
-Follow refresh retains the shared `CheckpointDecoder`, its pending checkpoint,
-a torn-line buffer, and the scanned suffix cursor. An unchanged large pending
-checkpoint therefore costs only bounded head/middle/tail probes per refresh.
-Rewriting only the uncommitted suffix invalidates and rebuilds this tracker from
-the unchanged committed boundary without changing the epoch. Reads from a
+Follow refresh retains a line decoder, torn-line buffer, and scanned suffix
+cursor. An unchanged large torn line therefore costs only bounded
+head/middle/tail probes per refresh. Rewriting that suffix rebuilds the tracker
+from the unchanged visible boundary without changing the epoch. Reads from a
 concurrently shrinking or rewritten suffix are retried from a clean working
 tracker and published only after one coherent file observation. Truncating a
-committed prefix, replacing the file identity, or changing bounded committed
-prefix probes starts a new epoch so fmtview discards old record identities.
+visible prefix, replacing the file identity, or changing bounded prefix probes
+starts a new epoch so fmtview discards old record identities.
 Queued, running, and idle runs report a live boundary; completed, failed,
 cancelled, and closed runs report a terminal boundary.
 
@@ -241,9 +242,10 @@ failed/running -> running  # explicit resume, if not already owned
 ```
 
 The loop injects newly completed runtime-handle results, optionally compacts an
-old completed-message prefix, requests model output, persists the complete
-assistant message, executes zero or more direct tool calls, persists their
-results, then either repeats or completes.
+old completed-message prefix, and requests model output. A final assistant
+message appends alone. After a tool batch settles, the assistant, ordered
+direct-tool results, and optional attachment are written in one ordered append;
+their complete lines may become visible independently.
 
 Handle state is process-local execution coordination. A promoted tool uses a
 `j_<ulid>` handle until that process ends. A delegated agent uses its child run
@@ -266,14 +268,13 @@ refreshed after compaction so newly completed work is delivered before the next
 normal request.
 
 The full run holds a filesystem execution lease. Resume rebuilds the recorded
-profile, validates provider/model/workspace identity, loads the message log and
-latest complete checkpoint, and continues from there. A normal tool-turn
-checkpoint contains the assistant message, every ordered tool result, and any
-attachment message. An incomplete tail checkpoint is discarded as a unit and
-replaced by a user/runtime warning about possible workspace or external side
-effects; the call is never automatically replayed. Root restart also clears
-pending input and unconditionally tells the model that the prior process and
-its asynchronous work stopped.
+profile, validates provider/model/workspace identity, repairs the message tail,
+and continues from there. If the final assistant requested tools and its
+ordered result sequence is incomplete, the assistant and existing result prefix
+are discarded. A compaction request without a following state remains inert.
+The root receives a warning about possible workspace or external side effects;
+the call is never automatically replayed. Root restart also clears pending input
+and reports that the prior process and its asynchronous work stopped.
 
 ### Artifact storage
 
@@ -286,9 +287,9 @@ artifact envelope. Each result is limited independently; earlier output and
 compaction do not change later representation. See
 [artifacts.md](artifacts.md).
 
-For immediate image reads, the runner puts every tool result from the batch in
-assistant call order and one user attachment message into the same checkpoint.
-This keeps native tool-call/result adjacency valid while still allowing several
+For immediate image reads, the runner appends every tool result from the batch
+in assistant call order followed by one user attachment message. This keeps
+native tool-call/result adjacency valid while still allowing several
 concurrently read images to share one model input message.
 
 ### Context compaction and trajectory retrieval

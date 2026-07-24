@@ -1,6 +1,6 @@
 # ADR 0034: Resume from Atomic Turn Checkpoints
 
-- Status: Accepted
+- Status: Superseded by ADR 0044
 - Date: 2026-07-21
 - Supersedes: ADR 0027
 - Refines: ADR 0006 (resume boundary and child coordination)
@@ -11,6 +11,14 @@ ADR 0038 replaces durable task recovery with process-local runtime handles.
 Atomic checkpoints remain the resume boundary, but restart now reports the
 crash and leaves open child threads inert until an explicit message starts a
 new activity.
+
+ADR 0043 refines only the encoding: singleton records rely on their newline,
+while multi-message members retain the index and count needed by reverse
+readers. The atomic checkpoint boundary remains unchanged.
+
+ADR 0044 later removes multi-message checkpoint framing. Complete newlines are
+visible independently, and only the next writer repairs a semantically
+incomplete trailing tool turn.
 
 ## Context
 

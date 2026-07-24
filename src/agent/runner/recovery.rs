@@ -11,7 +11,7 @@ use crate::{
 use super::{AgentRunner, RunRequest, RunResult, lifecycle::RunMode};
 use crate::agent::{compaction::estimate_message_tokens, handle::HandleOutputNotice};
 
-const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous fiasco process stopped after the last complete checkpoint. All activities and asynchronous tool jobs from that process stopped and were not resumed; pending input and undelivered results were discarded. Existing agent threads keep their complete history and remain available through list_handles, inspect, and an explicit send_message. Workspace or external side effects may already have occurred, so inspect current state before retrying operations.\n</runtime-reminder>";
+const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous fiasco process stopped. Any incomplete trailing tool turn was discarded; activities and asynchronous tool jobs from that process stopped and were not resumed. Pending input and undelivered results were also discarded. Existing agent threads keep their complete messages and remain available through list_handles, inspect, and an explicit send_message. Workspace or external side effects may already have occurred, so inspect current state before retrying operations.\n</runtime-reminder>";
 
 impl AgentRunner {
     pub async fn resume(self: &Arc<Self>, run_id: impl Into<String>) -> Result<RunResult> {
@@ -82,6 +82,7 @@ impl AgentRunner {
             record.model_modalities,
             plan.modalities
         );
+        self.store.prepare_resume(&run_id).await?;
         let mode = match expected_parent_run_id {
             Some(_) if self.store.load_trajectory(&run_id).await?.is_empty() => RunMode::New,
             Some(_) => RunMode::ChildActivity,
@@ -112,10 +113,7 @@ pub(super) async fn append_handle_results(
             metadata: notice.output.metadata.clone(),
         })
         .collect::<Vec<_>>();
-    let message = Message {
-        role: Role::User,
-        content,
-    };
+    let message = Message::new(Role::User, content);
     let estimated_tokens = estimate_message_tokens(&message);
     let trajectory_record = store.append_message(run_id, &message).await?;
     trajectory.push(trajectory_record);
@@ -127,12 +125,12 @@ pub(super) async fn append_restart_reminder(
     run_id: &str,
     trajectory: &mut Vec<TrajectoryMessage>,
 ) -> Result<()> {
-    let message = Message {
-        role: Role::User,
-        content: vec![MessageContent::RuntimeReminder {
+    let message = Message::new(
+        Role::User,
+        vec![MessageContent::RuntimeReminder {
             text: RESTART_REMINDER.to_owned(),
         }],
-    };
+    );
     trajectory.push(store.append_message(run_id, &message).await?);
     Ok(())
 }

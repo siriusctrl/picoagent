@@ -43,10 +43,10 @@ pub(crate) fn history_tool_result_message_indices(
     for (message_index, record) in messages.iter().enumerate() {
         for content in &record.message.content {
             match content {
-                MessageContent::ToolCall { id, name, .. } => pending
-                    .entry(id)
+                MessageContent::ToolCall(call) => pending
+                    .entry(call.id.as_str())
                     .or_default()
-                    .push_back(is_history_tool(name)),
+                    .push_back(is_history_tool(&call.name)),
                 MessageContent::ToolResult { call_id, .. }
                     if pending
                         .get_mut(call_id.as_str())

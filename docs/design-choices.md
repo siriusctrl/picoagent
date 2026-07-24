@@ -37,8 +37,8 @@ trickle traffic could retain a model slot indefinitely. See
 
 The agent runtime emits structured events and portable artifacts without UI
 state. The `inspect` command is a separate read-only adapter that embeds
-fmtview's terminal frontend over a backend-neutral checkpoint timeline. Fiasco
-does not own terminal rendering, viewport, search, or event-loop behavior.
+fmtview's terminal frontend over a backend-neutral message timeline. Fiasco does
+not own terminal rendering, viewport, search, or event-loop behavior.
 
 Rejected: preserving the legacy Bun/Hono/Ink surfaces. A future service can wrap
 the Rust library and event stream without owning agent behavior. Also rejected:
@@ -66,41 +66,46 @@ decision context and rejected alternatives.
 Revisit when cross-run queries, multi-worker ownership, or server-side pagination
 become concrete requirements.
 
-## Complete-Checkpoint Resume
+## Minimal Tail Repair
 
-Main runs and GeneralTask children resume from complete checkpoints. A normal
-tool turn groups the assistant, every ordered tool result, and any attachment;
-compaction groups request and state. A torn group is invisible and is removed
-before the next append. Resume injects one user/runtime warning about possible
-side effects instead of synthesizing tool errors or replaying the discarded
-turn.
+Every newline-complete message is durable and visible. Before starting another
+activity on an existing run, Fiasco removes a torn final record and checks only
+the trailing assistant/tool exchange. If ordered results are missing, it drops
+that assistant and the result prefix. A compaction request without a state is
+inert. Resume injects one user/runtime warning about possible side effects
+instead of synthesizing tool errors or replaying the discarded turn.
 
 Restart does not reconstruct process-local handle state. Tool jobs, active child
 work, pending input, and undelivered output are discarded; the root receives an
 unconditional crash notice and decides what to retry. Direct child runs remain
 discoverable as durable open threads. Their first explicit `send_message`
 clears stale pending input, adds a child crash reminder, and starts a new
-activity from complete context. This assumes a supervisor has killed the old
+activity from the remaining context. This assumes a supervisor has killed the old
 local process tree before resume. See
-[ADR 0034](adr/0034-atomic-turn-checkpoints.md) and
+[ADR 0044](adr/0044-newline-visible-messages-and-tail-repair.md) and
 [ADR 0038](adr/0038-runtime-handles-and-explicit-restart.md).
 
 ## Self-Contained Message Log
 
 `messages.jsonl` stores the runner's provider-neutral message directly. Each
-model-readable record contains `ref`, `created_at`, `role`, and typed `content`;
-rare local lifecycle classification uses optional `_fiasco`. There is no metadata
-sidecar, reconstruction layout, or second transcript representation.
+model-readable record contains `ref`, `created_at`, `role`, typed `content`, and
+optional assistant `reasoning_content`; rare local lifecycle classification
+uses optional `_fiasco`. Compatible Chat reasoning keeps its upstream sibling
+shape and exact text, while Responses reasoning remains an ordered opaque
+provider item. There is no metadata sidecar, reconstruction layout, or second
+transcript representation.
 
 One execution lease gives a run exactly one writer while allowing any number
-of lock-free viewers. `_fiasco.checkpoint` groups one or more newline-terminated
-records. Viewers publish only complete groups; the writer trims an incomplete
-tail group before appending after a crash. This deliberately assumes viewers
-never mutate the run and rejects supporting multiple competing writers.
+of lock-free viewers. A newline makes that record visible immediately. A viewer
+may briefly show a prefix of the final tool turn; only a torn physical line
+stays hidden. Semantic cleanup runs once before the next writer activity rather
+than complicating the read-only viewer.
 
 Rejected: a two-file commit protocol, a provider-specific durable wire format,
 duplicated message bodies, and compatibility code for unreleased runs. See
-[ADR 0032](adr/0032-self-contained-message-log.md).
+[ADR 0032](adr/0032-self-contained-message-log.md),
+[ADR 0042](adr/0042-chat-reasoning-sibling-field.md), and
+[ADR 0044](adr/0044-newline-visible-messages-and-tail-repair.md).
 
 ## Append-Only Local Compaction
 

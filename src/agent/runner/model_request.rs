@@ -62,12 +62,12 @@ impl AgentRunner {
                         .await?;
                     drop(model_permit);
                     if should_repair {
-                        request.messages.push(Message {
-                            role: Role::User,
-                            content: vec![MessageContent::RuntimeReminder {
+                        request.messages.push(Message::new(
+                            Role::User,
+                            vec![MessageContent::RuntimeReminder {
                                 text: INCOMPLETE_REPAIR_REMINDER.to_owned(),
                             }],
-                        });
+                        ));
                         continue;
                     }
                     return Err(error);

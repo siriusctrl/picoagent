@@ -25,7 +25,7 @@ pub(crate) enum Command {
         #[arg(long, value_enum, default_value = "text")]
         output: OutputFormat,
     },
-    /// Continue an interrupted or failed run from its last complete checkpoint.
+    /// Continue an interrupted or failed run after repairing its message tail.
     Resume {
         run_id: String,
         #[arg(long, value_enum, default_value = "text")]
@@ -34,10 +34,10 @@ pub(crate) enum Command {
     /// Inspect a run's committed transcript or persisted summary.
     Inspect {
         run_id: String,
-        /// Continue following newly committed checkpoints.
+        /// Continue following newly completed message lines.
         #[arg(long, conflicts_with_all = ["output", "summary"])]
         follow: bool,
-        /// Write checkpoint-safe records instead of opening the viewer.
+        /// Write complete message records instead of opening the viewer.
         #[arg(long, value_enum, conflicts_with_all = ["follow", "summary"])]
         output: Option<InspectOutput>,
         /// Print persisted metadata and final output.

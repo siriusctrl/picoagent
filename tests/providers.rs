@@ -9,6 +9,7 @@ use std::{
 use anyhow::Result;
 use async_trait::async_trait;
 use fiasco::{
+    artifact::ResultMetadata,
     events::{EventSink, NoopEventSink, RuntimeEvent, RuntimeEventKind},
     model::{
         AnthropicCompatibleOptions, AnthropicCompatibleProvider, ImageAttachment, Message,
@@ -159,21 +160,97 @@ async fn chat_stream_reassembles_fragmented_tool_arguments_and_supplies_missing_
     );
     assert_eq!(response.text(), "checking ");
     assert_eq!(response.usage.reasoning_tokens, Some(7));
+    assert_eq!(
+        response.assistant.reasoning_content.as_deref(),
+        Some("inspect first")
+    );
     assert!(matches!(
         &response.assistant.content[0],
-        fiasco::model::MessageContent::Reasoning { text } if text == "inspect first"
-    ));
-    assert!(matches!(
-        &response.assistant.content[1],
         fiasco::model::MessageContent::Text { text } if text == "checking "
     ));
     assert!(matches!(
-        &response.assistant.content[2],
-        fiasco::model::MessageContent::ToolCall { id, .. } if id == &tool_calls[0].id
+        &response.assistant.content[1],
+        fiasco::model::MessageContent::ToolCall(call) if call.id == tool_calls[0].id
     ));
     let recorded = events.0.lock().expect("recording lock poisoned");
     assert_eq!(recorded.reasoning, ["inspect ", "first"]);
     assert_eq!(recorded.text, ["checking "]);
+}
+
+#[tokio::test]
+async fn chat_replays_streamed_reasoning_content_without_reformatting() {
+    let server = MockServer::start().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let responder_calls = calls.clone();
+    let first = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"inspect \\n\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"  first\\t\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let second = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(move |_: &wiremock::Request| {
+            let body = if responder_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                first
+            } else {
+                second
+            };
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let provider = OpenAiCompatibleProvider::new(
+        format!("{}/v1", server.uri()),
+        "test-key",
+        OpenAiProtocol::ChatCompletions,
+    );
+    let first_response = provider
+        .complete(request(), Arc::new(NoopEventSink))
+        .await
+        .unwrap();
+    let expected_reasoning = "inspect \n  first\t";
+    assert_eq!(
+        first_response.assistant.reasoning_content.as_deref(),
+        Some(expected_reasoning)
+    );
+
+    let mut continuation = request();
+    continuation.messages.push(first_response.assistant);
+    continuation.messages.push(Message::new(
+        Role::Tool,
+        vec![MessageContent::ToolResult {
+            call_id: "call_1".to_owned(),
+            content: "file contents".to_owned(),
+            is_error: false,
+            metadata: ResultMetadata::empty(),
+        }],
+    ));
+    let response = provider
+        .complete(continuation, Arc::new(NoopEventSink))
+        .await
+        .unwrap();
+    assert_eq!(response.text(), "done");
+
+    let requests = server.received_requests().await.unwrap();
+    let continuation_body: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(
+        continuation_body["messages"][2]["reasoning_content"],
+        expected_reasoning
+    );
+    assert_eq!(continuation_body["messages"][2]["content"], "");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -240,7 +317,7 @@ async fn chat_stream_preserves_provider_tool_call_id() {
     assert_eq!(response.tool_calls()[0].id, "call_provider_1");
     assert!(matches!(
         &response.assistant.content[0],
-        fiasco::model::MessageContent::ToolCall { id, .. } if id == "call_provider_1"
+        fiasco::model::MessageContent::ToolCall(call) if call.id == "call_provider_1"
     ));
 }
 
@@ -268,9 +345,9 @@ async fn chat_sends_images_as_native_user_content_parts() {
         OpenAiProtocol::ChatCompletions,
     );
     let mut request = request();
-    request.messages = vec![Message {
-        role: Role::User,
-        content: vec![
+    request.messages = vec![Message::new(
+        Role::User,
+        vec![
             MessageContent::Text {
                 text: "inspect".to_owned(),
             },
@@ -278,7 +355,7 @@ async fn chat_sends_images_as_native_user_content_parts() {
                 attachment: ImageAttachment::from_bytes("image/png", b"png"),
             },
         ],
-    }];
+    )];
     let response = OpenAiCompatibleProvider::with_options(options)
         .complete(request, Arc::new(NoopEventSink))
         .await

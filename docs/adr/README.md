@@ -117,3 +117,9 @@ Use these sections:
   documents](0040-initialize-complete-graph-documents.md)
 - [ADR 0041: Close active agent
   threads](0041-close-active-agent-threads.md)
+- [ADR 0042: Store compatible Chat reasoning beside assistant
+  content](0042-chat-reasoning-sibling-field.md)
+- [ADR 0043: Compact message and checkpoint
+  payloads](0043-compact-message-and-checkpoint-payloads.md)
+- [ADR 0044: Expose complete lines and repair only the resume
+  tail](0044-newline-visible-messages-and-tail-repair.md)

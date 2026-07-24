@@ -15,7 +15,7 @@ use fiasco::{
     hooks::HookPipeline,
     model::{
         Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
-        ToolSpec,
+        ToolCall, ToolSpec,
     },
     storage::{RunDirStore, RunState},
     tools::{RawToolOutput, ReadTool, Tool, ToolContext, ToolRegistry},
@@ -164,11 +164,11 @@ fn tool_call_response(id: &str, label: &str) -> ModelResponse {
 
 fn tool_call_response_with_usage(id: &str, label: &str, input_tokens: u64) -> ModelResponse {
     ModelResponse::new(
-        Message::assistant(vec![MessageContent::ToolCall {
+        Message::assistant(vec![MessageContent::ToolCall(ToolCall {
             id: id.to_owned(),
             name: "marker".to_owned(),
             arguments: json!({"label": label}).into(),
-        }]),
+        })]),
         ModelUsage {
             input_tokens: Some(input_tokens),
             output_tokens: Some(10),
@@ -490,15 +490,18 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     assert_eq!(trajectory[5].message_ref, "m6");
     assert_eq!(trajectory[5].message.role, Role::User);
     assert!(text_content(&trajectory[5].message).contains("# Compacted state"));
-    let checkpoint = trajectory[6].compaction_state().unwrap();
+    let compaction_state = trajectory[6].compaction_state().unwrap();
     assert_eq!(trajectory[6].message_ref, "m7");
     assert_eq!(trajectory[6].message.role, Role::Assistant);
     assert_eq!(trajectory[6].message.visible_text(), SUMMARY_TEXT);
     assert_eq!(
-        checkpoint.covered_through_message_ref,
+        compaction_state.covered_through_message_ref,
         trajectory[2].message_ref
     );
-    assert_eq!(checkpoint.first_kept_message_ref, trajectory[3].message_ref);
+    assert_eq!(
+        compaction_state.first_kept_message_ref,
+        trajectory[3].message_ref
+    );
     let paths = store.paths(&result.run_id);
     assert!(!paths.directory.join("compactions.jsonl").exists());
     let messages = tokio::fs::read_to_string(&paths.messages).await.unwrap();
@@ -512,11 +515,11 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
     assert!(messages[6].get("type").is_none());
     assert_eq!(messages[5]["_fiasco"]["compaction"]["kind"], "request");
     assert_eq!(messages[6]["_fiasco"]["compaction"]["kind"], "state");
-    for (index, message) in messages[5..7].iter().enumerate() {
-        assert_eq!(message["_fiasco"]["checkpoint"]["first_message_ref"], "m6");
-        assert_eq!(message["_fiasco"]["checkpoint"]["index"], index);
-        assert_eq!(message["_fiasco"]["checkpoint"]["count"], 2);
-    }
+    assert!(
+        messages[5..7]
+            .iter()
+            .all(|message| message["_fiasco"].get("checkpoint").is_none())
+    );
     assert_eq!(
         messages[6]["_fiasco"]["compaction"]["state"]
             .as_object()
@@ -559,8 +562,8 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
         completed,
         Some((
             &trajectory[6].message_ref,
-            &checkpoint.covered_through_message_ref,
-            &checkpoint.first_kept_message_ref,
+            &compaction_state.covered_through_message_ref,
+            &compaction_state.first_kept_message_ref,
             &Some(42),
             &Some(9),
             &Some(21),
@@ -748,11 +751,7 @@ fn has_tool_call(message: &Message, id: &str, name: &str) -> bool {
     message.content.iter().any(|content| {
         matches!(
             content,
-            MessageContent::ToolCall {
-                id: call_id,
-                name: tool_name,
-                ..
-            } if call_id == id && tool_name == name
+            MessageContent::ToolCall(call) if call.id == id && call.name == name
         )
     })
 }

@@ -80,19 +80,19 @@ Runtime output is stored beneath the current project:
   graphs/
 ```
 
-On an interactive terminal, inspect opens the current committed tail and loads
-older checkpoints lazily:
+On an interactive terminal, inspect opens the current newline-complete tail and
+loads older messages lazily:
 
 ```bash
 fiasco inspect <run-id>
 fiasco inspect <run-id> --follow
 ```
 
-`--follow` refreshes newly committed checkpoints while preserving fmtview's
+`--follow` refreshes newly completed message lines while preserving fmtview's
 attached, detached, and paused browsing states. A redirected `--follow` is
 rejected because this mode requires an interactive terminal.
 
-When stdout is redirected, inspect instead writes exact checkpoint-safe JSONL.
+When stdout is redirected, inspect instead writes exact newline-complete JSONL.
 The explicit form is useful in scripts. The legacy metadata/final-output view
 remains available separately:
 
@@ -102,16 +102,17 @@ fiasco inspect <run-id> --output ndjson
 fiasco inspect <run-id> --summary
 ```
 
-Resume an interrupted or failed run from its last complete checkpoint:
+Resume an interrupted or failed run after repairing its message tail:
 
 ```bash
 fiasco resume <run-id>
 ```
 
-An assistant tool turn is one checkpoint containing the assistant message, all
-ordered tool results, and any attachment message. Resume discards an incomplete
-checkpoint and appends a user/runtime reminder that the process stopped and
-workspace or external side effects may already have occurred. It does not
+Every complete newline is visible to inspectors, including a possible prefix of
+the final assistant/tool exchange. Before resume, Fiasco matches the trailing
+assistant's tool calls against ordered results and discards that exchange if
+any result is missing. It then appends a user/runtime reminder that the process
+stopped and workspace or external side effects may already have occurred. It does not
 restore ordinary asynchronous tool jobs, active child work, pending input, or
 undelivered results. Existing child threads keep their complete transcripts and
 remain discoverable through `list_handles`; an explicit `send_message` clears
@@ -146,26 +147,25 @@ request.
 short `ref` (`m1`, `m2`, ...), `created_at`, `role`, and typed `content` blocks.
 Those blocks are the exact provider-neutral messages replayed by the runner, so
 tool failures, artifact refs, images, reasoning, and opaque provider
-continuation items need no sidecar or reconstruction layout. Optional steering,
-compaction, and checkpoint membership live under `_fiasco` on the same line. The
+continuation items need no sidecar or reconstruction layout. Optional steering
+and compaction classification live under `_fiasco` on the same line. The
 sequence is derived from `ref` and the line position rather than duplicated.
 
 The single process holding the run execution lease is the only writer; any
-number of viewers may read complete checkpoints without taking a message-log
-lock. A viewer publishes a multi-line checkpoint only after every declared
-newline-terminated record exists, and the writer trims an incomplete tail group
-before resuming appends. `run.json` declares
+number of viewers may read complete message lines without taking a message-log
+lock. A viewer may briefly show a prefix of a tool turn while its batch is being
+written. The next writer trims a torn line and any semantically incomplete
+trailing tool exchange before resuming appends. `run.json` declares
 `"message_format": "fiasco-message"`, retains the original user prompt, and
 freezes the stored profile plus remaining delegation depth. Compaction never
 rewrites or deletes committed trajectory records.
 
 The interactive inspector delegates terminal lifecycle, JSON/chat rendering,
 search, navigation, wrap, and follow state to the released `fmtview` embedding
-facade. Fiasco owns only run lookup and a checkpoint-aware `RecordTimeline`;
+facade. Fiasco owns only run lookup and a newline-aware `RecordTimeline`;
 the inspector never introduces ratatui/crossterm rendering or event-loop logic
 into the runtime. Tail discovery scans backward from EOF, older loads move by
-whole checkpoints, and refresh continues the shared incremental checkpoint
-decoder from the last committed byte boundary.
+physical message lines, and refresh continues from the last complete newline.
 
 Stable agent instructions are folded scalar values in the typed, compile-time
 `prompts/agents.yaml` registry. Every local model-facing tool adapter has a
@@ -490,7 +490,8 @@ foreground window. If all finish early, fiasco returns immediately. At the
 configured deadline, it preserves each unfinished exact future, moves only
 those calls under process-local `j_<ulid>` handles, and returns those handles;
 no tool is stopped or restarted. The assistant message, tool-result messages in
-original call order, and any attachment message commit as one checkpoint.
+original call order, and any attachment message are appended in that order;
+each complete line becomes visible independently.
 Results retain their original `tool_call_id`, even though completion events can
 arrive in another order. The model should put only independent calls in one
 batch and issue dependent work after seeing results.

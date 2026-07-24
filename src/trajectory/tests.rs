@@ -4,13 +4,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::DateTime;
 use regex::Regex;
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use crate::{
     artifact::{ArtifactRef, ResultMetadata},
-    model::{Message, MessageContent, Role},
+    model::{Message, MessageContent, Role, ToolCall},
 };
 
 use super::*;
@@ -56,10 +56,18 @@ fn record(seq: u64, role: Role, content: Vec<MessageContent>) -> TrajectoryMessa
         message_ref: format!("m{seq}"),
         seq,
         created_at: DateTime::from_timestamp(seq as i64, 0).unwrap(),
-        message: Message { role, content },
+        message: Message::new(role, content),
         pending_input_id: None,
         compaction: None,
     }
+}
+
+fn tool_call(id: &str, name: &str, arguments: Value) -> MessageContent {
+    MessageContent::ToolCall(ToolCall {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        arguments: arguments.into(),
+    })
 }
 
 fn reader(messages: Vec<TrajectoryMessage>) -> StaticReader {
@@ -175,11 +183,11 @@ async fn search_supports_inline_regex_flags_and_hides_internal_content() {
         record(
             2,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "internal-call".to_owned(),
-                name: "history_search".to_owned(),
-                arguments: json!({"pattern": "Visible"}).into(),
-            }],
+            vec![tool_call(
+                "internal-call",
+                "history_search",
+                json!({"pattern": "Visible"}),
+            )],
         ),
         record(
             3,
@@ -217,9 +225,9 @@ async fn search_supports_inline_regex_flags_and_hides_internal_content() {
 
 #[tokio::test]
 async fn handle_search_snippet_matches_the_chat_projection_read_returns() {
-    let message = Message {
-        role: Role::User,
-        content: vec![MessageContent::RuntimeHandle {
+    let message = Message::new(
+        Role::User,
+        vec![MessageContent::RuntimeHandle {
             handle: "a1".to_owned(),
             kind: "agent".to_owned(),
             name: "review".to_owned(),
@@ -227,7 +235,7 @@ async fn handle_search_snippet_matches_the_chat_projection_read_returns() {
             content: "result contains <needle> & evidence".to_owned(),
             metadata: ResultMetadata::empty(),
         }],
-    };
+    );
     let reader = reader(vec![record(
         1,
         message.role.clone(),
@@ -267,11 +275,11 @@ async fn read_returns_a_contiguous_window_and_keeps_tool_pairs() {
         record(
             2,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "call-1".to_owned(),
-                name: "bash".to_owned(),
-                arguments: json!({"command": "cargo test"}).into(),
-            }],
+            vec![tool_call(
+                "call-1",
+                "bash",
+                json!({"command": "cargo test"}),
+            )],
         ),
         record(
             3,
@@ -318,11 +326,7 @@ async fn read_pairs_reused_call_ids_by_occurrence() {
         record(
             1,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "reused".to_owned(),
-                name: "bash".to_owned(),
-                arguments: json!({"command": "old"}).into(),
-            }],
+            vec![tool_call("reused", "bash", json!({"command": "old"}))],
         ),
         record(
             2,
@@ -337,11 +341,7 @@ async fn read_pairs_reused_call_ids_by_occurrence() {
         record(
             3,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "reused".to_owned(),
-                name: "read".to_owned(),
-                arguments: json!({"path": "new"}).into(),
-            }],
+            vec![tool_call("reused", "read", json!({"path": "new"}))],
         ),
         record(
             4,
@@ -381,11 +381,11 @@ async fn history_projection_hides_only_the_matching_reused_call_occurrence() {
         record(
             1,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "reused".to_owned(),
-                name: "history_search".to_owned(),
-                arguments: json!({"pattern": "old"}).into(),
-            }],
+            vec![tool_call(
+                "reused",
+                "history_search",
+                json!({"pattern": "old"}),
+            )],
         ),
         record(
             2,
@@ -400,11 +400,7 @@ async fn history_projection_hides_only_the_matching_reused_call_occurrence() {
         record(
             3,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "reused".to_owned(),
-                name: "bash".to_owned(),
-                arguments: json!({"command": "real work"}).into(),
-            }],
+            vec![tool_call("reused", "bash", json!({"command": "real work"}))],
         ),
         record(
             4,
@@ -442,18 +438,9 @@ async fn history_projection_hides_only_the_matching_reused_call_occurrence() {
 
 #[tokio::test]
 async fn read_preserves_reasoning_in_exact_assistant_messages() {
-    let reader = reader(vec![record(
-        1,
-        Role::Assistant,
-        vec![
-            MessageContent::Reasoning {
-                text: "inspect the omitted evidence".to_owned(),
-            },
-            MessageContent::Text {
-                text: "the answer".to_owned(),
-            },
-        ],
-    )]);
+    let mut reasoning_record = record(1, Role::Assistant, Vec::new());
+    reasoning_record.message.reasoning_content = Some("inspect the omitted evidence".to_owned());
+    let reader = reader(vec![reasoning_record]);
 
     let result = reader
         .read(HistoryReadRequest {
@@ -465,10 +452,21 @@ async fn read_preserves_reasoning_in_exact_assistant_messages() {
         .await
         .unwrap();
 
-    assert!(matches!(
-        &result.messages[0].message.content[0],
-        MessageContent::Reasoning { text } if text == "inspect the omitted evidence"
-    ));
+    assert_eq!(
+        result.messages[0].message.reasoning_content.as_deref(),
+        Some("inspect the omitted evidence")
+    );
+    assert!(result.messages[0].message.content.is_empty());
+
+    let search = reader
+        .search(HistorySearchRequest {
+            run_id: "run".to_owned(),
+            pattern: Regex::new("omitted evidence").unwrap(),
+            max_matches: 10,
+        })
+        .await
+        .unwrap();
+    assert!(search.matches.is_empty());
 }
 
 #[tokio::test]
@@ -485,11 +483,11 @@ async fn search_matches_the_complete_tool_result_artifact() {
         record(
             1,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "call-1".to_owned(),
-                name: "bash".to_owned(),
-                arguments: json!({"command": "large-output"}).into(),
-            }],
+            vec![tool_call(
+                "call-1",
+                "bash",
+                json!({"command": "large-output"}),
+            )],
         ),
         record(
             2,
@@ -561,11 +559,11 @@ async fn search_stops_before_an_older_missing_artifact_after_limit_is_known() {
         record(
             1,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "old-call".to_owned(),
-                name: "bash".to_owned(),
-                arguments: json!({"command": "huge-output"}).into(),
-            }],
+            vec![tool_call(
+                "old-call",
+                "bash",
+                json!({"command": "huge-output"}),
+            )],
         ),
         record(
             2,
@@ -628,11 +626,11 @@ async fn reused_call_ids_resolve_each_result_to_its_exact_artifact() {
         record(
             1,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "reused-call".to_owned(),
-                name: "bash".to_owned(),
-                arguments: json!({"command": "old-output"}).into(),
-            }],
+            vec![tool_call(
+                "reused-call",
+                "bash",
+                json!({"command": "old-output"}),
+            )],
         ),
         record(
             2,
@@ -647,11 +645,7 @@ async fn reused_call_ids_resolve_each_result_to_its_exact_artifact() {
         record(
             3,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "reused-call".to_owned(),
-                name: "read".to_owned(),
-                arguments: json!({"path": "new"}).into(),
-            }],
+            vec![tool_call("reused-call", "read", json!({"path": "new"}))],
         ),
         record(
             4,
@@ -736,11 +730,11 @@ async fn plain_result_does_not_claim_a_reused_call_ids_only_artifact() {
         record(
             1,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "reused-call".to_owned(),
-                name: "bash".to_owned(),
-                arguments: json!({"command": "large"}).into(),
-            }],
+            vec![tool_call(
+                "reused-call",
+                "bash",
+                json!({"command": "large"}),
+            )],
         ),
         record(
             2,
@@ -755,11 +749,7 @@ async fn plain_result_does_not_claim_a_reused_call_ids_only_artifact() {
         record(
             3,
             Role::Assistant,
-            vec![MessageContent::ToolCall {
-                id: "reused-call".to_owned(),
-                name: "read".to_owned(),
-                arguments: json!({"path": "small"}).into(),
-            }],
+            vec![tool_call("reused-call", "read", json!({"path": "small"}))],
         ),
         record(
             4,

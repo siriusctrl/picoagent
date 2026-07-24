@@ -15,6 +15,7 @@ use fiasco::{
     hooks::HookPipeline,
     model::{
         Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
+        ToolCall,
     },
     storage::RunDirStore,
     tools::{ReadTool, ToolRegistry},
@@ -259,11 +260,11 @@ fn tool_response(
     input_tokens: u64,
 ) -> ModelResponse {
     ModelResponse::new(
-        Message::assistant(vec![MessageContent::ToolCall {
+        Message::assistant(vec![MessageContent::ToolCall(ToolCall {
             id: id.to_owned(),
             name: name.to_owned(),
             arguments: arguments.into(),
-        }]),
+        })]),
         ModelUsage {
             input_tokens: Some(input_tokens),
             output_tokens: Some(10),

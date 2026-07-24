@@ -1,9 +1,12 @@
 # ADR 0037: Embed fmtview Over a Checkpoint Timeline
 
-- Status: Accepted
+- Status: Superseded by ADR 0044
 - Date: 2026-07-22
 - Refines: ADR 0032 (read-only message-log inspection)
 - Refines: ADR 0034 (checkpoint visibility boundary)
+
+ADR 0044 keeps the fmtview ownership boundary but replaces checkpoint-aware
+visibility with individual newline-complete messages.
 
 ## Context
 

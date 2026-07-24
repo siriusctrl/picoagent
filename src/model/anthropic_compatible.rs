@@ -202,18 +202,21 @@ fn anthropic_message(message: &Message) -> Value {
                 .iter()
                 .map(|block| match block {
                     MessageContent::Text { text } => json!({"type": "text", "text": text}),
-                    MessageContent::ToolCall {
-                        id,
-                        name,
-                        arguments,
-                    } => {
-                        let input = arguments.parse().unwrap_or_else(|_| serde_json::json!({}));
-                        json!({"type": "tool_use", "id": id, "name": name, "input": input})
+                    MessageContent::ToolCall(call) => {
+                        let input = call
+                            .arguments
+                            .parse()
+                            .unwrap_or_else(|_| serde_json::json!({}));
+                        json!({
+                            "type": "tool_use",
+                            "id": call.id,
+                            "name": call.name,
+                            "input": input
+                        })
                     }
                     MessageContent::RuntimeReminder { .. }
                     | MessageContent::Image { .. }
                     | MessageContent::ToolResult { .. }
-                    | MessageContent::Reasoning { .. }
                     | MessageContent::ProviderItem { .. }
                     | MessageContent::RuntimeHandle { .. } => Value::Null,
                 })
@@ -372,14 +375,7 @@ impl AnthropicAccumulator {
         }
         for (index, builder) in self.tools {
             let call = builder.finish();
-            content.insert(
-                index,
-                MessageContent::ToolCall {
-                    id: call.id,
-                    name: call.name,
-                    arguments: call.arguments,
-                },
-            );
+            content.insert(index, MessageContent::ToolCall(call));
         }
         Ok(ModelResponse::new(
             Message::assistant(content.into_values().collect()),
@@ -391,6 +387,7 @@ impl AnthropicAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ToolCall;
 
     #[test]
     fn options_debug_redacts_resolved_api_key() {
@@ -466,37 +463,38 @@ mod tests {
                 Message::text(Role::User, "start"),
                 Message {
                     role: Role::Assistant,
+                    reasoning_content: Some("chat-only reasoning".into()),
                     content: vec![
-                        MessageContent::ToolCall {
+                        MessageContent::ToolCall(ToolCall {
                             id: "call-1".into(),
                             name: "read".into(),
                             arguments: json!({"path": "one"}).into(),
-                        },
-                        MessageContent::ToolCall {
+                        }),
+                        MessageContent::ToolCall(ToolCall {
                             id: "call-2".into(),
                             name: "read".into(),
                             arguments: json!({"path": "two"}).into(),
-                        },
+                        }),
                     ],
                 },
-                Message {
-                    role: Role::Tool,
-                    content: vec![MessageContent::ToolResult {
+                Message::new(
+                    Role::Tool,
+                    vec![MessageContent::ToolResult {
                         call_id: "call-1".into(),
                         content: "one result".into(),
                         is_error: false,
                         metadata: crate::artifact::ResultMetadata::empty(),
                     }],
-                },
-                Message {
-                    role: Role::Tool,
-                    content: vec![MessageContent::ToolResult {
+                ),
+                Message::new(
+                    Role::Tool,
+                    vec![MessageContent::ToolResult {
                         call_id: "call-2".into(),
                         content: "two result".into(),
                         is_error: true,
                         metadata: crate::artifact::ResultMetadata::empty(),
                     }],
-                },
+                ),
                 Message::text(Role::Assistant, "done"),
             ],
             Vec::new(),
@@ -545,9 +543,9 @@ mod tests {
             run_id: "run".into(),
             model: "model".into(),
             system: String::new(),
-            messages: vec![Message {
-                role: Role::User,
-                content: vec![MessageContent::RuntimeHandle {
+            messages: vec![Message::new(
+                Role::User,
+                vec![MessageContent::RuntimeHandle {
                     handle: "a1".into(),
                     kind: "agent".into(),
                     name: "general-task".into(),
@@ -555,7 +553,7 @@ mod tests {
                     content: "done".into(),
                     metadata: crate::artifact::ResultMetadata::empty(),
                 }],
-            }],
+            )],
             tools: Vec::new(),
             max_output_tokens: None,
             stream_idle_timeout: std::time::Duration::from_secs(300),
@@ -574,9 +572,9 @@ mod tests {
             run_id: "run".into(),
             model: "model".into(),
             system: String::new(),
-            messages: vec![Message {
-                role: Role::User,
-                content: vec![
+            messages: vec![Message::new(
+                Role::User,
+                vec![
                     MessageContent::RuntimeReminder {
                         text: "<runtime-reminder>context</runtime-reminder>".into(),
                     },
@@ -584,7 +582,7 @@ mod tests {
                         text: "do the task".into(),
                     },
                 ],
-            }],
+            )],
             tools: Vec::new(),
             max_output_tokens: None,
             stream_idle_timeout: std::time::Duration::from_secs(300),
@@ -600,9 +598,9 @@ mod tests {
     #[test]
     fn image_attachments_use_anthropic_base64_sources() {
         let request = request_with(
-            vec![Message {
-                role: Role::User,
-                content: vec![
+            vec![Message::new(
+                Role::User,
+                vec![
                     MessageContent::Text {
                         text: "inspect".into(),
                     },
@@ -610,7 +608,7 @@ mod tests {
                         attachment: crate::model::ImageAttachment::from_bytes("image/png", b"png"),
                     },
                 ],
-            }],
+            )],
             Vec::new(),
         );
 

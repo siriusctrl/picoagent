@@ -13,7 +13,7 @@ use super::{
     HandleKind, HandleRecord, HandleSnapshot, HandleState, PendingAgentInput, RuntimeHandleManager,
 };
 
-const AGENT_RESTART_REMINDER: &str = "The previous fiasco process stopped after this agent thread's last complete checkpoint. Its prior activity and pending input were discarded, but workspace or external side effects may already have occurred. Inspect current state before repeating operations.";
+const AGENT_RESTART_REMINDER: &str = "The previous fiasco process stopped. This agent thread's incomplete trailing tool turn, prior activity, and pending input were discarded, but workspace or external side effects may already have occurred. Inspect current state before repeating operations.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendMode {

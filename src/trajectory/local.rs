@@ -159,8 +159,7 @@ fn project_readable_messages(
                 MessageContent::RuntimeReminder { .. } | MessageContent::ProviderItem { .. } => {
                     false
                 }
-                MessageContent::Reasoning { .. } => true,
-                MessageContent::ToolCall { name, .. } => !is_history_tool(name),
+                MessageContent::ToolCall(call) => !is_history_tool(&call.name),
                 MessageContent::ToolResult { .. } => {
                     !hidden_result_messages.contains(&message_index)
                 }
@@ -168,7 +167,8 @@ fn project_readable_messages(
                 MessageContent::Image { .. } => true,
                 MessageContent::Text { .. } => true,
             });
-            (!record.message.content.is_empty()).then_some(record)
+            (!record.message.content.is_empty() || record.message.reasoning_content.is_some())
+                .then_some(record)
         })
         .collect())
 }
@@ -177,10 +177,7 @@ fn project_searchable_messages(messages: Vec<TrajectoryMessage>) -> Result<Vec<T
     Ok(project_readable_messages(messages)?
         .into_iter()
         .filter_map(|mut record| {
-            record
-                .message
-                .content
-                .retain(|content| !matches!(content, MessageContent::Reasoning { .. }));
+            record.message.reasoning_content = None;
             (!record.message.content.is_empty()).then_some(record)
         })
         .collect())
@@ -192,9 +189,9 @@ fn tool_pairs(messages: &[TrajectoryMessage]) -> Vec<ToolPair> {
     for (message_index, record) in messages.iter().enumerate() {
         for content in &record.message.content {
             match content {
-                MessageContent::ToolCall { id, .. } => {
+                MessageContent::ToolCall(call) => {
                     pending
-                        .entry(id.clone())
+                        .entry(call.id.clone())
                         .or_default()
                         .push_back(message_index);
                 }
@@ -246,9 +243,9 @@ fn match_message(record: &TrajectoryMessage, pattern: &Regex) -> Option<HistoryM
         let searchable = match content {
             MessageContent::Text { text } => text.clone(),
             MessageContent::Image { .. } => return None,
-            MessageContent::ToolCall {
-                name, arguments, ..
-            } => format!("{name} {}", arguments.as_raw()),
+            MessageContent::ToolCall(call) => {
+                format!("{} {}", call.name, call.arguments.as_raw())
+            }
             MessageContent::ToolResult { content, .. } => content.clone(),
             MessageContent::RuntimeHandle {
                 handle,
@@ -264,9 +261,9 @@ fn match_message(record: &TrajectoryMessage, pattern: &Regex) -> Option<HistoryM
                 Some(status),
                 content,
             ),
-            MessageContent::RuntimeReminder { .. }
-            | MessageContent::Reasoning { .. }
-            | MessageContent::ProviderItem { .. } => return None,
+            MessageContent::RuntimeReminder { .. } | MessageContent::ProviderItem { .. } => {
+                return None;
+            }
         };
         let found = pattern.find(&searchable)?;
         Some(HistoryMatch {

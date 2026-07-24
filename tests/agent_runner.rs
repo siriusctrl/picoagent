@@ -31,16 +31,7 @@ fn text_response(text: impl Into<String>, usage: ModelUsage) -> ModelResponse {
 
 fn tool_response(calls: Vec<ToolCall>, usage: ModelUsage) -> ModelResponse {
     ModelResponse::new(
-        Message::assistant(
-            calls
-                .into_iter()
-                .map(|call| MessageContent::ToolCall {
-                    id: call.id,
-                    name: call.name,
-                    arguments: call.arguments,
-                })
-                .collect(),
-        ),
+        Message::assistant(calls.into_iter().map(MessageContent::ToolCall).collect()),
         usage,
     )
 }
@@ -170,28 +161,28 @@ async fn create_interrupted_run(store: &RunDirStore, workspace: &Path, run_id: &
 }
 
 #[tokio::test]
-async fn resume_discards_an_incomplete_tool_checkpoint_and_warns_without_reexecution() {
+async fn resume_discards_an_incomplete_tool_turn_and_warns_without_reexecution() {
     let workspace = TempDir::new().unwrap();
     let setup_store = RunDirStore::new(workspace.path());
     create_interrupted_run(&setup_store, workspace.path(), "resume-tool").await;
     setup_store
-        .append_checkpoint(
+        .append_messages(
             "resume-tool",
             &[
-                Message::assistant(vec![MessageContent::ToolCall {
+                Message::assistant(vec![MessageContent::ToolCall(ToolCall {
                     id: "side-effect-call".to_owned(),
                     name: "side_effect".to_owned(),
                     arguments: json!({}).into(),
-                }]),
-                Message {
-                    role: Role::Tool,
-                    content: vec![MessageContent::ToolResult {
+                })]),
+                Message::new(
+                    Role::Tool,
+                    vec![MessageContent::ToolResult {
                         call_id: "side-effect-call".to_owned(),
                         content: "uncommitted result".to_owned(),
                         is_error: false,
                         metadata: ResultMetadata::empty(),
                     }],
-                },
+                ),
             ],
         )
         .await
@@ -208,7 +199,7 @@ async fn resume_discards_an_incomplete_tool_checkpoint_and_warns_without_reexecu
         .await
         .unwrap();
     let store = RunDirStore::new(workspace.path());
-    assert_eq!(store.load_messages("resume-tool").await.unwrap().len(), 1);
+    assert_eq!(store.load_messages("resume-tool").await.unwrap().len(), 2);
     let model_calls = Arc::new(AtomicUsize::new(0));
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let mut tools = ToolRegistry::default();
@@ -390,7 +381,7 @@ impl ModelProvider for RuntimeRestartProvider {
                 .iter()
                 .map(Message::visible_text)
                 .collect::<Vec<_>>();
-            if !visible.iter().any(|text| text == "old checkpoint") {
+            if !visible.iter().any(|text| text == "old context") {
                 bail!("reused child omitted its complete prior context");
             }
             if !visible.iter().any(|text| text == "fresh request") {
@@ -592,23 +583,23 @@ async fn restart_recovers_agent_threads_but_not_activity_or_tool_jobs() {
         .await
         .unwrap();
     store
-        .append_checkpoint(
+        .append_messages(
             "restart-root",
             &[
-                Message::assistant(vec![MessageContent::ToolCall {
+                Message::assistant(vec![MessageContent::ToolCall(ToolCall {
                     id: "old-tool-call".to_owned(),
                     name: "slow_output".to_owned(),
                     arguments: json!({}).into(),
-                }]),
-                Message {
-                    role: Role::Tool,
-                    content: vec![MessageContent::ToolResult {
+                })]),
+                Message::new(
+                    Role::Tool,
+                    vec![MessageContent::ToolResult {
                         call_id: "old-tool-call".to_owned(),
                         content: "<runtime_handle handle=\"j_lost\" kind=\"tool\" name=\"slow_output\">The runtime handle is active.</runtime_handle>".to_owned(),
                         is_error: false,
                         metadata: ResultMetadata::empty(),
                     }],
-                },
+                ),
             ],
         )
         .await
@@ -643,10 +634,7 @@ async fn restart_recovers_agent_threads_but_not_activity_or_tool_jobs() {
         .await
         .unwrap();
     store
-        .append_message(
-            "old-child",
-            &Message::text(Role::Assistant, "old checkpoint"),
-        )
+        .append_message("old-child", &Message::text(Role::Assistant, "old context"))
         .await
         .unwrap();
     let stale_input = json!({
@@ -765,14 +753,13 @@ impl ModelProvider for FileProducingProvider {
             .collect::<std::collections::HashSet<_>>();
         if completed.contains("small-call") {
             Ok(ModelResponse::new(
-                Message::assistant(vec![
-                    MessageContent::Reasoning {
-                        text: "finish reasoning".to_owned(),
-                    },
-                    MessageContent::Text {
+                Message {
+                    role: Role::Assistant,
+                    reasoning_content: Some("finish reasoning".to_owned()),
+                    content: vec![MessageContent::Text {
                         text: "finished".to_owned(),
-                    },
-                ]),
+                    }],
+                },
                 ModelUsage {
                     input_tokens: Some(12),
                     output_tokens: Some(2),
@@ -796,16 +783,11 @@ impl ModelProvider for FileProducingProvider {
                 arguments: json!({}).into(),
             };
             Ok(ModelResponse::new(
-                Message::assistant(vec![
-                    MessageContent::Reasoning {
-                        text: "tool reasoning".to_owned(),
-                    },
-                    MessageContent::ToolCall {
-                        id: call.id,
-                        name: call.name,
-                        arguments: call.arguments,
-                    },
-                ]),
+                Message {
+                    role: Role::Assistant,
+                    reasoning_content: Some("tool reasoning".to_owned()),
+                    content: vec![MessageContent::ToolCall(call)],
+                },
                 ModelUsage {
                     input_tokens: Some(10),
                     output_tokens: Some(1),
@@ -894,21 +876,15 @@ async fn runner_spills_a_large_result_without_affecting_the_next_small_result() 
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .collect::<Vec<_>>();
-    for (index, line) in stored_lines[1..3].iter().enumerate() {
-        assert_eq!(line["_fiasco"]["checkpoint"]["first_message_ref"], "m2");
-        assert_eq!(line["_fiasco"]["checkpoint"]["index"], index);
-        assert_eq!(line["_fiasco"]["checkpoint"]["count"], 2);
-    }
-    for (index, line) in stored_lines[3..5].iter().enumerate() {
-        assert_eq!(line["_fiasco"]["checkpoint"]["first_message_ref"], "m4");
-        assert_eq!(line["_fiasco"]["checkpoint"]["index"], index);
-        assert_eq!(line["_fiasco"]["checkpoint"]["count"], 2);
-    }
+    assert!(
+        stored_lines[1..5]
+            .iter()
+            .all(|line| line.get("_fiasco").is_none())
+    );
     assert_eq!(
         messages
             .iter()
-            .flat_map(|message| &message.content)
-            .filter(|content| matches!(content, MessageContent::Reasoning { .. }))
+            .filter(|message| message.reasoning_content.is_some())
             .count(),
         2
     );
@@ -1613,7 +1589,7 @@ impl ModelProvider for FollowupProvider {
                         message.role == Role::Assistant
                             && message.visible_text() == "first activity complete"
                     })
-                    .context("follow-up activity omitted the first activity checkpoint")?;
+                    .context("follow-up activity omitted the first activity result")?;
                 if followup_index <= first_result_index {
                     bail!("follow-up was inserted before the first activity completed");
                 }
@@ -2153,7 +2129,7 @@ async fn stop_then_immediate_send_waits_for_child_cleanup_before_reuse() {
         [
             (
                 "cancelled".to_owned(),
-                "agent activity was stopped by the parent after its last complete checkpoint"
+                "agent activity was stopped by the parent; any incomplete trailing tool turn was discarded"
                     .to_owned(),
             ),
             (

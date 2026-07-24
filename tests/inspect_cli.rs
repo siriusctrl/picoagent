@@ -41,10 +41,10 @@ fn fiasco(workspace: &TempDir) -> Command {
 }
 
 #[tokio::test]
-async fn redirected_inspect_writes_exact_committed_ndjson_without_loading_config() {
+async fn redirected_inspect_writes_exact_complete_ndjson_without_loading_config() {
     let (workspace, store) = workspace_with_run().await;
     let paths = store.paths("run-1");
-    let committed = std::fs::read(&paths.messages).unwrap();
+    let complete = std::fs::read(&paths.messages).unwrap();
     let bad_config = workspace.path().join("bad.toml");
     std::fs::write(&bad_config, "this is not valid toml = [").unwrap();
     let mut file = OpenOptions::new()
@@ -64,7 +64,7 @@ async fn redirected_inspect_writes_exact_committed_ndjson_without_loading_config
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(output.stdout, committed);
+    assert_eq!(output.stdout, complete);
     for line in output
         .stdout
         .split(|byte| *byte == b'\n')

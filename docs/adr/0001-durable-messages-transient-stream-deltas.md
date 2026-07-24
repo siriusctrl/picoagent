@@ -12,6 +12,10 @@ ADR 0032 supersedes ADR 0005's physical encoding with one self-contained
 provider-neutral record per message. The completed-message boundary and
 transient-delta decision here remain accepted.
 
+ADR 0042 refines explicit compatible Chat reasoning into an optional sibling
+field on the completed assistant message. It remains part of the same durable
+checkpoint while per-chunk reasoning deltas remain transient.
+
 ## Context
 
 Fiasco needs a portable, searchable trajectory for inspection and future

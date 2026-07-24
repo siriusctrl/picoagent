@@ -48,14 +48,14 @@
   spilled result.
 - `src/storage/mod.rs`: run directories, metadata, events, and shared JSON
   persistence helpers.
-- `src/storage/message_log.rs`: message checkpoint append, committed-prefix
-  loading, and writer-tail recovery.
-- `src/storage/message_log/decoder.rs`: synchronous incremental checkpoint
-  validation plus the forward async reader; it preserves exact raw lines and
-  committed byte offsets without exposing partial groups.
+- `src/storage/message_log.rs`: ordered message append, complete-line loading,
+  and writer-tail recovery.
+- `src/storage/message_log/decoder.rs`: synchronous line validation plus the
+  forward async reader; it preserves exact raw lines and byte offsets while
+  hiding only a torn final record.
 - `src/storage/message_log/transcript.rs`: tail-first, bidirectional fmtview
-  timeline over complete checkpoints, incremental follow refresh, reset
-  detection, and exact committed-NDJSON streaming.
+  timeline over complete message lines, incremental follow refresh, reset
+  detection, and exact NDJSON streaming.
 - `src/storage/trajectory.rs`: classified append-only messages and
   compacted-history loading.
 - `src/skills/mod.rs`: Agent Skills metadata discovery and body/path loading;

@@ -18,6 +18,7 @@ use fiasco::{
     hooks::HookPipeline,
     model::{
         Message, MessageContent, ModelProvider, ModelRequest, ModelResponse, ModelUsage, Role,
+        ToolCall,
     },
     storage::RunDirStore,
     tools::{ReadTool, ToolRegistry},
@@ -217,11 +218,11 @@ fn runtime_handle_id(content: &str) -> Option<String> {
 
 fn tool_response(id: &str, name: &str, arguments: serde_json::Value) -> ModelResponse {
     ModelResponse::new(
-        Message::assistant(vec![MessageContent::ToolCall {
+        Message::assistant(vec![MessageContent::ToolCall(ToolCall {
             id: id.to_owned(),
             name: name.to_owned(),
             arguments: arguments.into(),
-        }]),
+        })]),
         ModelUsage {
             input_tokens: Some(1_000),
             output_tokens: Some(10),

@@ -81,16 +81,7 @@ pub enum MessageContent {
     Image {
         attachment: ImageAttachment,
     },
-    /// Reasoning text explicitly returned by a compatible provider.
-    /// Replayed separately from visible assistant content when supported.
-    Reasoning {
-        text: String,
-    },
-    ToolCall {
-        id: String,
-        name: String,
-        arguments: ToolArguments,
-    },
+    ToolCall(ToolCall),
     ToolResult {
         call_id: String,
         content: String,
@@ -99,7 +90,6 @@ pub enum MessageContent {
     },
     /// Provider-owned continuation material, such as encrypted OpenAI reasoning.
     ProviderItem {
-        provider: String,
         item: Value,
     },
     RuntimeHandle {
@@ -136,22 +126,27 @@ impl ImageAttachment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
+    /// Exact Chat-compatible reasoning text, kept separate from visible content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     pub content: Vec<MessageContent>,
 }
 
 impl Message {
-    pub fn text(role: Role, text: impl Into<String>) -> Self {
+    pub fn new(role: Role, content: Vec<MessageContent>) -> Self {
         Self {
             role,
-            content: vec![MessageContent::Text { text: text.into() }],
+            reasoning_content: None,
+            content,
         }
     }
 
+    pub fn text(role: Role, text: impl Into<String>) -> Self {
+        Self::new(role, vec![MessageContent::Text { text: text.into() }])
+    }
+
     pub fn assistant(content: Vec<MessageContent>) -> Self {
-        Self {
-            role: Role::Assistant,
-            content,
-        }
+        Self::new(Role::Assistant, content)
     }
 
     pub fn visible_text(&self) -> String {
@@ -169,21 +164,17 @@ impl Message {
         self.content
             .iter()
             .filter_map(|block| match block {
-                MessageContent::ToolCall {
-                    id,
-                    name,
-                    arguments,
-                } => Some(ToolCall {
-                    id: id.clone(),
-                    name: name.clone(),
-                    arguments: arguments.clone(),
-                }),
+                MessageContent::ToolCall(call) => Some(call.clone()),
                 _ => None,
             })
             .collect()
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        ensure!(
+            self.role == Role::Assistant || self.reasoning_content.is_none(),
+            "`reasoning_content` is valid only on assistant messages"
+        );
         match self.role {
             Role::User => {
                 let has_runtime_handle = self
@@ -213,11 +204,10 @@ impl Message {
                 self.content.iter().all(|block| matches!(
                     block,
                     MessageContent::Text { .. }
-                        | MessageContent::Reasoning { .. }
-                        | MessageContent::ToolCall { .. }
+                        | MessageContent::ToolCall(_)
                         | MessageContent::ProviderItem { .. }
                 )),
-                "assistant messages contain only text, reasoning, tool calls, or provider items"
+                "assistant messages contain only text, tool calls, or provider items"
             ),
             Role::Tool => {
                 let [
@@ -314,8 +304,9 @@ pub struct ModelRequest {
 pub struct ModelResponse {
     /// The one completed assistant message returned by the provider.
     ///
-    /// Content ordering is provider-significant: opaque continuation items,
-    /// visible text, reasoning, and tool calls must remain in wire order.
+    /// Content ordering is provider-significant for opaque continuation items,
+    /// visible text, and tool calls. Chat-compatible reasoning is stored in the
+    /// message's separate `reasoning_content` field.
     pub assistant: Message,
     pub usage: ModelUsage,
 }
@@ -393,19 +384,34 @@ mod tests {
 
     #[test]
     fn visible_text_matches_chat_projection_for_multiple_text_blocks() {
-        let message = Message::assistant(vec![
-            MessageContent::Text {
-                text: "first".to_owned(),
-            },
-            MessageContent::Reasoning {
-                text: "between".to_owned(),
-            },
-            MessageContent::Text {
-                text: "second".to_owned(),
-            },
-        ]);
+        let message = Message {
+            role: Role::Assistant,
+            reasoning_content: Some("hidden reasoning".to_owned()),
+            content: vec![
+                MessageContent::Text {
+                    text: "first".to_owned(),
+                },
+                MessageContent::Text {
+                    text: "second".to_owned(),
+                },
+            ],
+        };
 
         assert_eq!(message.visible_text(), "first\nsecond");
+    }
+
+    #[test]
+    fn validation_rejects_reasoning_content_on_non_assistant_messages() {
+        let message = Message {
+            role: Role::User,
+            reasoning_content: Some("invalid".to_owned()),
+            content: vec![MessageContent::Text {
+                text: "hello".to_owned(),
+            }],
+        };
+
+        let error = message.validate().unwrap_err().to_string();
+        assert!(error.contains("only on assistant messages"), "{error}");
     }
 
     #[test]

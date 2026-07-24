@@ -135,9 +135,9 @@ impl AgentRunner {
                 request.profile,
                 plan.remaining_delegation_depth,
             )?;
-            let user_message = Message {
-                role: Role::User,
-                content: vec![
+            let user_message = Message::new(
+                Role::User,
+                vec![
                     MessageContent::RuntimeReminder {
                         text: runtime_reminder,
                     },
@@ -145,7 +145,7 @@ impl AgentRunner {
                         text: request.prompt.clone(),
                     },
                 ],
-            };
+            );
             trajectory.push(self.store.append_message(&run_id, &user_message).await?);
         }
         let tool_assembly = RunToolAssembly::new(
@@ -368,14 +368,14 @@ impl AgentRunner {
                 }
 
                 let tool_messages = direct_tools.execute_batch(tool_calls).await?;
-                let mut checkpoint = Vec::with_capacity(tool_messages.len().saturating_add(1));
-                checkpoint.push(assistant_message);
+                let mut messages = Vec::with_capacity(tool_messages.len().saturating_add(1));
+                messages.push(assistant_message);
                 for tool_message in tool_messages {
                     context_tokens =
                         context_tokens.saturating_add(estimate_message_tokens(&tool_message));
-                    checkpoint.push(tool_message);
+                    messages.push(tool_message);
                 }
-                trajectory.extend(self.store.append_checkpoint(&run_id, &checkpoint).await?);
+                trajectory.extend(self.store.append_messages(&run_id, &messages).await?);
                 step = step.saturating_add(1);
             }
         }

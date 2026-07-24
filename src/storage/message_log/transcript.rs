@@ -3,29 +3,26 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use fmtview::view::{
     RecordLoadLimit, RecordTimeline, TimelineRead, TimelineReadNext, TimelineRefresh,
     TimelineSnapshot,
 };
 use tokio::io::{AsyncWrite, AsyncWriteExt, BufReader as AsyncBufReader};
 
-use super::{CommittedCheckpointReader, DecodeResult};
+use super::CompleteLineReader;
 use crate::storage::{RunDirStore, RunRecord, RunState, ensure_run_exists, validate_loaded_run};
 
 mod refresh;
 mod scan;
 
 use refresh::{FileIdentity, PrefixSample, SuffixTracker};
-use scan::{
-    checkpoint_first_seq, checkpoint_next_seq, checkpoint_raw_bytes, decode_group_with_limit,
-    find_committed_tail, normalized_limit, read_forward_batch, timeline_records,
-};
+use scan::{find_visible_tail, normalized_limit, read_forward_batch, read_reverse_batch};
 
-/// A checkpoint-safe, bidirectional view over one Fiasco transcript.
+/// A newline-aware, bidirectional view over one Fiasco transcript.
 ///
-/// Construction reads only the physical EOF suffix and the last logical
-/// checkpoint. Both directional cursors start at that committed tail.
+/// Every complete physical line is visible. A partial final line remains
+/// pending until it receives its terminating newline.
 pub struct TranscriptTimeline {
     label: String,
     metadata_path: PathBuf,
@@ -83,15 +80,15 @@ impl TranscriptTimeline {
         );
         let observed_end = metadata.len();
         let mut instrumentation = TranscriptInstrumentation::default();
-        let tail = find_committed_tail(
+        let tail = find_visible_tail(
             &mut file,
             &messages_path,
             observed_end,
             &mut instrumentation,
         )?;
         let prefix_sample =
-            PrefixSample::read(&mut file, tail.committed_end, &mut instrumentation, &label)?;
-        let mut suffix_tracker = SuffixTracker::new(tail.committed_end, tail.next_seq);
+            PrefixSample::read(&mut file, tail.visible_end, &mut instrumentation, &label)?;
+        let mut suffix_tracker = SuffixTracker::new(tail.visible_end, tail.next_seq);
         suffix_tracker.scan_to(
             &mut file,
             &messages_path,
@@ -100,7 +97,7 @@ impl TranscriptTimeline {
             &label,
         )?;
         ensure!(
-            suffix_tracker.committed_end() == tail.committed_end,
+            suffix_tracker.visible_end() == tail.visible_end,
             "tail discovery and forward suffix validation disagree"
         );
 
@@ -112,12 +109,12 @@ impl TranscriptTimeline {
             identity: FileIdentity::from_metadata(&metadata),
             epoch,
             state: run.state,
-            committed_end: tail.committed_end,
+            committed_end: tail.visible_end,
             committed_next_seq: tail.next_seq,
             observed_end,
-            older_cursor: tail.committed_end,
+            older_cursor: tail.visible_end,
             older_next_seq: tail.next_seq,
-            newer_cursor: tail.committed_end,
+            newer_cursor: tail.visible_end,
             newer_next_seq: tail.next_seq,
             prefix_sample,
             suffix_tracker,
@@ -195,75 +192,21 @@ impl RecordTimeline for TranscriptTimeline {
             return Ok(TimelineRead::End);
         }
         let limit = normalized_limit(limit);
-        let mut cursor = self.older_cursor;
-        let mut expected_next_seq = self.older_next_seq;
-        let mut groups = Vec::new();
-        let mut record_count = 0_usize;
-        let mut byte_count = 0_usize;
-
-        while cursor > 0 {
-            let remaining = (!groups.is_empty()).then(|| {
-                RecordLoadLimit::new(
-                    limit.max_records.saturating_sub(record_count),
-                    limit.max_bytes.saturating_sub(byte_count),
-                )
-            });
-            let Some(group) = decode_group_with_limit(
-                &mut self.file,
-                &self.messages_path,
-                cursor,
-                remaining,
-                &mut self.instrumentation,
-                &self.label,
-            )?
-            else {
-                break;
-            };
-            let checkpoint = match group.decode {
-                DecodeResult::Checkpoint(checkpoint) => checkpoint,
-                DecodeResult::NeedMore => {
-                    bail!("incomplete checkpoint ends inside committed transcript at byte {cursor}")
-                }
-            };
-            let first_seq = checkpoint_first_seq(&checkpoint)?;
-            let next_seq = checkpoint_next_seq(&checkpoint)?;
-            ensure!(
-                next_seq == expected_next_seq,
-                "checkpoint before byte {cursor} ends at m{}, expected m{}",
-                next_seq.saturating_sub(1),
-                expected_next_seq.saturating_sub(1)
-            );
-            if group.start == 0 {
-                ensure!(
-                    first_seq == 1,
-                    "transcript starts at m{first_seq} instead of m1"
-                );
-            }
-            let group_records = checkpoint.records.len();
-            let group_bytes = checkpoint_raw_bytes(&checkpoint);
-            record_count = record_count.saturating_add(group_records);
-            byte_count = byte_count.saturating_add(group_bytes);
-            cursor = group.start;
-            expected_next_seq = first_seq;
-            groups.push(checkpoint);
-            if record_count >= limit.max_records || byte_count >= limit.max_bytes {
-                break;
-            }
-        }
-
-        let mut records = Vec::with_capacity(record_count);
-        for checkpoint in groups.into_iter().rev() {
-            records.extend(timeline_records(self.epoch, checkpoint));
-        }
-        self.older_cursor = cursor;
-        self.older_next_seq = expected_next_seq;
-        self.instrumentation.records_yielded = self
-            .instrumentation
-            .records_yielded
-            .saturating_add(records.len() as u64);
+        let batch = read_reverse_batch(
+            &mut self.file,
+            &self.messages_path,
+            self.epoch,
+            self.older_cursor,
+            self.older_next_seq,
+            limit,
+            &mut self.instrumentation,
+            &self.label,
+        )?;
+        self.older_cursor = batch.cursor;
+        self.older_next_seq = batch.next_seq;
         Ok(TimelineRead::Records {
-            records,
-            next: if cursor == 0 {
+            records: batch.records,
+            next: if self.older_cursor == 0 {
                 TimelineReadNext::End
             } else {
                 TimelineReadNext::More
@@ -304,10 +247,10 @@ impl RecordTimeline for TranscriptTimeline {
 }
 
 impl RunDirStore {
-    /// Copy only complete committed checkpoints to an NDJSON sink.
+    /// Copy only complete newline-terminated messages to an NDJSON sink.
     ///
     /// Record bytes, including their LF delimiters, are not reserialized.
-    pub async fn write_committed_ndjson<W>(&self, run_id: &str, output: &mut W) -> Result<()>
+    pub async fn write_complete_ndjson<W>(&self, run_id: &str, output: &mut W) -> Result<()>
     where
         W: AsyncWrite + Unpin,
     {
@@ -317,15 +260,12 @@ impl RunDirStore {
         let file = tokio::fs::File::open(&paths.messages)
             .await
             .with_context(|| format!("open transcript {}", paths.messages.display()))?;
-        let mut reader =
-            CommittedCheckpointReader::new(AsyncBufReader::new(file), paths.messages.clone());
-        while let DecodeResult::Checkpoint(checkpoint) = reader.next_checkpoint().await? {
-            for record in checkpoint.records {
-                output
-                    .write_all(&record.raw)
-                    .await
-                    .context("write committed transcript NDJSON")?;
-            }
+        let mut reader = CompleteLineReader::new(AsyncBufReader::new(file), paths.messages.clone());
+        while let Some(record) = reader.next_record().await? {
+            output
+                .write_all(&record.raw)
+                .await
+                .context("write visible transcript NDJSON")?;
         }
         output.flush().await.context("flush transcript NDJSON")
     }
