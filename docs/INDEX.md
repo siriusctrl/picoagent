@@ -13,3 +13,6 @@
   alternatives, and consequences.
 - [Golden principles](golden-principles.md): short implementation rules.
 - [Source map](source-map.md): file-level navigation.
+- [Unified command surface TODO](todo-unified-command-surface.md): implementation
+  handoff for comparing one in-process command router with a smaller Bash-first
+  CLI surface.
