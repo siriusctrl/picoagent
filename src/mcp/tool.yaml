@@ -1,0 +1,19 @@
+name: mcp
+description: >-
+  Execute one command from a configured MCP source. Read that source's MCP.md
+  source map and the relevant referenced documentation before calling it. Use
+  `<source> <tool> [name=value ...]`; a one-parameter tool also accepts one
+  positional value. Quote spaces with shell syntax and encode arrays or objects
+  as JSON values.
+returns: >-
+  Remote text directly, structured JSON when the server returns structured
+  data without text, or the exact rich MCP result when non-text content must be
+  preserved.
+input_schema:
+  type: object
+  properties:
+    command:
+      type: string
+  required:
+    - command
+  additionalProperties: false

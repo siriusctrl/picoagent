@@ -1,19 +1,22 @@
 use std::{
     env,
-    io::IsTerminal,
+    io::{IsTerminal, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use clap::Parser;
 use fiasco::{
     agent::runner::{AgentRunner, AgentRunnerConfig, RunRequest, RunnerOptions},
     artifact::{ArtifactPolicy, ArtifactStore},
-    config::{AppConfig, ProviderConfig, resolve_env_reference, resolve_openai_api_key},
+    config::{AppConfig, ProviderConfig, resolve_openai_api_key},
     events::{NdjsonEventSink, NoopEventSink, SharedEventSink},
     hooks::{CommandHook, HookEvent, HookPipeline},
-    mcp::{McpStdioClient, McpStdioConfig},
+    mcp::{
+        McpRuntime, McpTool, call_configured, capture_configured, check_configured,
+        compile_configured, configured_server, connect_configured, load_configured_artifacts,
+    },
     memory::MemoryPaths,
     model::{
         ModelModality, ModelProvider,
@@ -29,7 +32,10 @@ use fiasco::{
 
 mod cli;
 
-use cli::{AuthCommand, Cli, Command, InspectOutput, MemoryCommand, OutputFormat, SkillsCommand};
+use cli::{
+    AuthCommand, Cli, Command, InspectOutput, McpCommand, MemoryCommand, OutputFormat,
+    SkillsCommand,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -76,6 +82,7 @@ async fn main() -> Result<()> {
         Command::Skills {
             command: SkillsCommand::List,
         } => list_skills(&workspace),
+        Command::Mcp { command } => mcp_command(&workspace, &config, command).await,
     }
 }
 
@@ -172,23 +179,20 @@ async fn run_action(
         model_modalities.contains(&ModelModality::Image),
     )?;
 
+    let mcp_artifacts = load_configured_artifacts(workspace, &config)?;
     let mut mcp_clients = Vec::new();
     for (name, server) in &config.mcp {
-        let client = McpStdioClient::connect(McpStdioConfig {
-            name: name.clone(),
-            command: server.command.clone(),
-            args: server.args.clone(),
-            env: server
-                .env
-                .iter()
-                .map(|(name, value)| Ok((name.clone(), resolve_env_reference(value)?)))
-                .collect::<Result<_>>()?,
-            cwd: Some(workspace.to_path_buf()),
-        })
-        .await?;
-        client.register_tools(&mut tools).await?;
+        let client = connect_configured(workspace, name, server).await?;
         mcp_clients.push(client);
     }
+    let mcp_catalog = if mcp_clients.is_empty() {
+        String::new()
+    } else {
+        let runtime = Arc::new(McpRuntime::new(mcp_artifacts, mcp_clients.clone())?);
+        let catalog = runtime.prompt_index();
+        tools.register(Arc::new(McpTool::new(runtime)))?;
+        catalog
+    };
 
     let hooks = build_hooks(&config, workspace)?;
     let extra_events: SharedEventSink = match output {
@@ -200,6 +204,7 @@ async fn run_action(
         model: config.provider.model().to_owned(),
         workspace: workspace.to_path_buf(),
         skill_catalog: skills.prompt_index(),
+        mcp_catalog,
         tools,
         artifacts: ArtifactStore::new(ArtifactPolicy {
             inline_limit_bytes: config.artifacts.inline_bytes,
@@ -437,6 +442,46 @@ fn list_skills(workspace: &Path) -> Result<()> {
         serde_json::to_string_pretty(&skills.list().collect::<Vec<_>>())?
     );
     Ok(())
+}
+
+async fn mcp_command(workspace: &Path, config: &AppConfig, command: McpCommand) -> Result<()> {
+    match command {
+        McpCommand::Capture { name } => {
+            let server = configured_server(config, &name)?;
+            let (count, path) = capture_configured(workspace, &name, server).await?;
+            println!(
+                "captured {count} tool(s) from `{name}` into {}",
+                path.display()
+            );
+            Ok(())
+        }
+        McpCommand::Check { name, live } => {
+            let server = configured_server(config, &name)?;
+            let artifact = check_configured(workspace, &name, server, live).await?;
+            println!(
+                "MCP artifact `{name}` is valid: {} tool(s), source map {}",
+                artifact.tools().count(),
+                artifact.source_map.display()
+            );
+            Ok(())
+        }
+        McpCommand::Compile { command } => {
+            let compiled = compile_configured(workspace, config, &command)?;
+            println!("{}", serde_json::to_string_pretty(&compiled)?);
+            Ok(())
+        }
+        McpCommand::Call { command } => {
+            let output = call_configured(workspace, config, &command).await?;
+            let mut stdout = std::io::stdout().lock();
+            stdout.write_all(&output.content)?;
+            if !output.content.ends_with(b"\n") {
+                stdout.write_all(b"\n")?;
+            }
+            stdout.flush()?;
+            ensure!(!output.is_error, "MCP tool reported an error");
+            Ok(())
+        }
+    }
 }
 
 fn fiasco_home() -> Result<PathBuf> {

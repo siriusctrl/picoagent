@@ -131,3 +131,5 @@ Use these sections:
   discovery](0047-collapse-run-lifetime-and-handle-discovery.md)
 - [ADR 0048: Move orchestration graphs to an Agent
   Skill](0048-move-orchestration-graphs-to-a-skill.md)
+- [ADR 0049: Route progressive MCP artifacts through one command
+  tool](0049-progressive-mcp-artifacts.md)

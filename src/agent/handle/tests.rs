@@ -32,6 +32,7 @@ fn test_manager_with_events(
         model: "echo".to_owned(),
         workspace: workspace.path().to_path_buf(),
         skill_catalog: String::new(),
+        mcp_catalog: String::new(),
         tools: ToolRegistry::default(),
         artifacts: ArtifactStore::default(),
         store: store.clone(),

@@ -1,10 +1,14 @@
+mod artifact;
+mod command;
+mod configured;
+
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use rmcp::{
     Peer, RoleClient, ServiceExt,
-    model::{CallToolRequestParams, CallToolResult, JsonObject, Tool as RemoteTool},
+    model::{CallToolRequestParams, CallToolResult, ContentBlock, JsonObject, Tool as RemoteTool},
     service::RunningService,
     transport::TokioChildProcess,
 };
@@ -14,7 +18,14 @@ use tokio::sync::Mutex;
 
 use crate::{
     model::ToolSpec,
-    tools::{RawToolOutput, Tool, ToolContext, ToolRegistry},
+    tools::{RawToolOutput, Tool, ToolContext},
+};
+
+pub use artifact::{McpArtifact, write_catalog};
+pub use command::{CompiledMcpCall, McpArtifactRegistry};
+pub use configured::{
+    call_configured, capture_configured, check_configured, compile_configured, configured_server,
+    connect_configured, load_configured_artifacts,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,7 +40,7 @@ pub struct McpStdioConfig {
 }
 
 /// A live MCP stdio child client. It owns rmcp's running service so shutdown is
-/// explicit; tool adapters retain a clone of the lightweight peer handle.
+/// explicit while runtime and authoring calls share its lightweight peer.
 pub struct McpStdioClient {
     name: String,
     peer: Peer<RoleClient>,
@@ -89,22 +100,6 @@ impl McpStdioClient {
             .with_context(|| format!("MCP tool `{}` on server `{}` failed", name, self.name))
     }
 
-    pub async fn tool_adapters(self: &Arc<Self>) -> Result<Vec<Arc<dyn Tool>>> {
-        Ok(self
-            .list_tools()
-            .await?
-            .into_iter()
-            .map(|remote| Arc::new(McpToolAdapter::new(self.clone(), remote)) as Arc<dyn Tool>)
-            .collect())
-    }
-
-    pub async fn register_tools(self: &Arc<Self>, registry: &mut ToolRegistry) -> Result<()> {
-        for adapter in self.tool_adapters().await? {
-            registry.register(adapter)?;
-        }
-        Ok(())
-    }
-
     pub async fn shutdown(&self) -> Result<()> {
         let Some(mut service) = self.service.lock().await.take() else {
             return Ok(());
@@ -117,103 +112,172 @@ impl McpStdioClient {
     }
 }
 
-pub struct McpToolAdapter {
-    client: Arc<McpStdioClient>,
-    remote_name: String,
-    spec: ToolSpec,
+#[derive(Clone)]
+pub struct McpRuntime {
+    artifacts: McpArtifactRegistry,
+    clients: BTreeMap<String, Arc<McpStdioClient>>,
 }
 
-impl McpToolAdapter {
-    fn new(client: Arc<McpStdioClient>, remote: RemoteTool) -> Self {
-        let remote_name = remote.name.to_string();
-        let spec = adapter_spec(client.name(), &remote);
-        Self {
-            client,
-            remote_name,
-            spec,
+impl McpRuntime {
+    pub fn new(
+        artifacts: McpArtifactRegistry,
+        clients: impl IntoIterator<Item = Arc<McpStdioClient>>,
+    ) -> Result<Self> {
+        let mut by_name = BTreeMap::new();
+        for client in clients {
+            let name = client.name().to_owned();
+            if by_name.insert(name.clone(), client).is_some() {
+                bail!("MCP client `{name}` is already registered");
+            }
         }
+        for name in by_name.keys() {
+            if artifacts.get(name).is_none() {
+                bail!("MCP client `{name}` has no artifact");
+            }
+        }
+        Ok(Self {
+            artifacts,
+            clients: by_name,
+        })
     }
 
-    pub fn remote_name(&self) -> &str {
-        &self.remote_name
+    pub fn prompt_index(&self) -> String {
+        self.artifacts.prompt_index()
+    }
+
+    pub fn compile(&self, command: &str) -> Result<CompiledMcpCall> {
+        self.artifacts.compile(command)
+    }
+
+    pub async fn call(&self, command: &str) -> Result<RawToolOutput> {
+        let compiled = self.compile(command)?;
+        let client = self
+            .clients
+            .get(&compiled.source)
+            .with_context(|| format!("MCP source `{}` is not connected", compiled.source))?;
+        let result = client.call_tool(&compiled.tool, compiled.arguments).await?;
+        render_call_result(result)
+    }
+}
+
+pub struct McpTool {
+    runtime: Arc<McpRuntime>,
+}
+
+impl McpTool {
+    pub fn new(runtime: Arc<McpRuntime>) -> Self {
+        Self { runtime }
     }
 }
 
 #[async_trait]
-impl Tool for McpToolAdapter {
+impl Tool for McpTool {
     fn spec(&self) -> ToolSpec {
-        self.spec.clone()
+        crate::tools::embedded_tool_spec(include_str!("mcp/tool.yaml"), module_path!())
     }
 
     async fn execute(&self, _context: ToolContext, arguments: Value) -> Result<RawToolOutput> {
-        let result = self.client.call_tool(&self.remote_name, arguments).await?;
-        let is_error = result.is_error.unwrap_or(false);
-        Ok(RawToolOutput {
-            content: serde_json::to_vec_pretty(&result)?,
+        let command = arguments
+            .get("command")
+            .and_then(Value::as_str)
+            .context("`command` is required")?;
+        self.runtime.call(command).await
+    }
+}
+
+pub fn render_call_result(result: CallToolResult) -> Result<RawToolOutput> {
+    let is_error = result.is_error.unwrap_or(false);
+    let all_text = result
+        .content
+        .iter()
+        .all(|content| matches!(content, ContentBlock::Text(_)));
+    if all_text && !result.content.is_empty() {
+        let text = result
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        return Ok(RawToolOutput {
+            content: text.into_bytes(),
+            source_path: None,
+            media_type: "text/plain; charset=utf-8".to_owned(),
+            is_error,
+            attach_to_model: false,
+        });
+    }
+    if result.content.is_empty()
+        && let Some(structured) = &result.structured_content
+    {
+        return Ok(RawToolOutput {
+            content: serde_json::to_vec_pretty(structured)?,
             source_path: None,
             media_type: "application/json".to_owned(),
             is_error,
             attach_to_model: false,
-        })
+        });
     }
-}
-
-fn adapter_spec(server_name: &str, remote: &RemoteTool) -> ToolSpec {
-    ToolSpec {
-        name: format!(
-            "mcp__{}__{}",
-            tool_name_part(server_name),
-            tool_name_part(&remote.name)
-        ),
-        description: remote
-            .description
-            .as_deref()
-            .unwrap_or("Tool provided by an MCP server")
-            .to_owned(),
-        input_schema: Value::Object((*remote.input_schema).clone()),
-    }
-}
-
-fn tool_name_part(name: &str) -> String {
-    let value = name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if value.is_empty() {
-        "unnamed".to_owned()
-    } else {
-        value
-    }
+    Ok(RawToolOutput {
+        content: serde_json::to_vec_pretty(&result)?,
+        source_path: None,
+        media_type: "application/json".to_owned(),
+        is_error,
+        attach_to_model: false,
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use rmcp::model::ContentBlock;
     use serde_json::json;
 
     use super::*;
 
     #[test]
-    fn remote_tool_is_adapted_to_stable_local_spec() {
-        let remote: RemoteTool = serde_json::from_value(json!({
-            "name": "search/code",
-            "description": "Search code",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "query": { "type": "string" } },
-                "required": ["query"]
-            }
+    fn fixed_mcp_manifest_exposes_only_one_command_string() {
+        let runtime = Arc::new(
+            McpRuntime::new(
+                McpArtifactRegistry::default(),
+                Vec::<Arc<McpStdioClient>>::new(),
+            )
+            .unwrap(),
+        );
+        let spec = McpTool::new(runtime).spec();
+        assert_eq!(spec.name, "mcp");
+        assert_eq!(spec.input_schema["required"], json!(["command"]));
+        assert_eq!(spec.input_schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn text_results_are_returned_without_a_json_envelope() {
+        let result = CallToolResult::success(vec![
+            ContentBlock::text("first"),
+            ContentBlock::text("second"),
+        ]);
+        let output = render_call_result(result).unwrap();
+        assert_eq!(output.content, b"first\n\nsecond");
+        assert_eq!(output.media_type, "text/plain; charset=utf-8");
+        assert!(!output.is_error);
+    }
+
+    #[test]
+    fn structured_only_results_preserve_the_remote_value() {
+        let result: CallToolResult = serde_json::from_value(json!({
+            "content": [],
+            "structuredContent": {"count": 2},
+            "isError": true
         }))
         .unwrap();
-        let spec = adapter_spec("GitHub Cloud", &remote);
-        assert_eq!(spec.name, "mcp__GitHub_Cloud__search_code");
-        assert_eq!(spec.description, "Search code");
-        assert_eq!(spec.input_schema["required"], json!(["query"]));
+        let output = render_call_result(result).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output.content).unwrap(),
+            json!({"count": 2})
+        );
+        assert_eq!(output.media_type, "application/json");
+        assert!(output.is_error);
     }
 
     #[test]

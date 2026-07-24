@@ -13,6 +13,7 @@ pub(crate) fn build_runtime_reminder(
     workspace: &Path,
     model_modalities: &BTreeSet<ModelModality>,
     skill_catalog: &str,
+    mcp_catalog: &str,
     memory: Option<&MemoryPaths>,
     profile: RunProfile,
     remaining_delegation_depth: usize,
@@ -48,6 +49,13 @@ pub(crate) fn build_runtime_reminder(
         sections.push(format!(
             "<available-skills>\n{}\n</available-skills>",
             skill_catalog.trim()
+        ));
+    }
+
+    if !mcp_catalog.trim().is_empty() {
+        sections.push(format!(
+            "<available-mcp-sources>\n{}\n</available-mcp-sources>",
+            mcp_catalog.trim()
         ));
     }
 
@@ -130,6 +138,7 @@ mod tests {
             directory.path(),
             &BTreeSet::from([ModelModality::Text]),
             "- review: Review code",
+            "- github: Search repositories\n  source map: /mcp/github/MCP.md",
             Some(&memory),
             RunProfile::GeneralTask,
             0,
@@ -159,6 +168,9 @@ mod tests {
         assert!(reminder.contains("<project-instructions source=\"AGENTS.md\">"));
         assert!(reminder.contains("Run cargo test."));
         assert!(reminder.contains("<available-skills>\n- review: Review code"));
+        assert!(reminder.contains(
+            "<available-mcp-sources>\n- github: Search repositories\n  source map: /mcp/github/MCP.md"
+        ));
         assert!(reminder.contains("<memory>"));
         assert!(reminder.contains("ordinary Markdown roots hold durable knowledge"));
         assert!(reminder.contains("user: /fiasco-home/memory/user"));
@@ -200,6 +212,7 @@ mod tests {
             directory.path(),
             &BTreeSet::from([ModelModality::Text]),
             "",
+            "",
             None,
             RunProfile::Root,
             1,
@@ -214,6 +227,7 @@ mod tests {
         let reminder = build_runtime_reminder(
             directory.path(),
             &BTreeSet::from([ModelModality::Text]),
+            "",
             "",
             None,
             RunProfile::Root,

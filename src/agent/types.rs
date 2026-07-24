@@ -169,6 +169,7 @@ pub struct AgentRunnerConfig {
     pub model: String,
     pub workspace: PathBuf,
     pub skill_catalog: String,
+    pub mcp_catalog: String,
     pub tools: ToolRegistry,
     pub artifacts: ArtifactStore,
     pub store: RunDirStore,

@@ -21,8 +21,8 @@ cross-cutting invariants, verification, and handoff.
   access.
 - `prompts/agents.yaml`: typed stable agent instructions. Dynamic prompt
   assembly remains in `src/agent/context.rs`.
-- `src/config.rs`, `src/skills/`, `src/mcp.rs`, `src/hooks.rs`, `src/memory.rs`,
-  and `src/events.rs`: runtime configuration and integrations.
+- `src/config.rs`, `src/skills/`, `src/mcp.rs`, `src/mcp/`, `src/hooks.rs`,
+  `src/memory.rs`, and `src/events.rs`: runtime configuration and integrations.
 - `src/cli.rs`: command shape. `src/main.rs`: headless composition root. Runtime
   behavior does not belong in either file.
 - `tests/`: cross-module and end-to-end behavior.
@@ -36,8 +36,8 @@ See `docs/source-map.md` for the detailed ownership map.
 - Rust is the only implementation language for the harness. Root and child runs
   use one `AgentRunner`; a subagent is a child run, not a second loop or class.
 - Keep provider wire formats and authentication outside the agent loop. Keep one
-  deterministic, namespaced tool registry; MCP tools use the same `Tool`
-  contract and cannot silently replace built-ins.
+  deterministic, namespaced tool registry; the MCP command adapter uses the
+  same `Tool` contract and cannot silently replace built-ins.
 - Execute one assistant tool-call batch concurrently under one shared foreground
   window. Commit results in original call order. Promote only unfinished exact
   futures, without stopping or restarting them.

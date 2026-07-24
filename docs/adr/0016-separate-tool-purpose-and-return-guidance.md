@@ -4,6 +4,10 @@
 - Date: 2026-07-20
 - Refines: ADR 0015 (local manifest prose fields)
 
+ADR 0049 replaces per-remote-tool MCP descriptions with one fixed local `mcp`
+manifest plus progressive artifact documentation. The local prose-field
+decision here remains accepted.
+
 ## Context
 
 The first local `tool.yaml` format put all model-facing prose in one

@@ -202,6 +202,7 @@ mod tests {
             model: "test".to_owned(),
             workspace: workspace.to_owned(),
             skill_catalog: String::new(),
+            mcp_catalog: String::new(),
             tools: ToolRegistry::default(),
             artifacts: ArtifactStore::default(),
             store: store.clone(),

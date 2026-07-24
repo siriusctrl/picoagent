@@ -235,14 +235,17 @@ history schemas are included regardless of `compact_at_tokens`. Root
 and GeneralTask receive identical built-in schemas, including delegation and
 handle controls. Remaining delegation depth is runtime state; it appears in the
 initial reminder and a zero-depth `delegate` call fails before task creation.
-Optional web and MCP schemas depend on startup configuration. Memory adds
-reminder paths, not a schema. A compaction call reuses the same stable prefix.
+Optional web search and the single fixed MCP command schema depend on startup
+configuration. Remote MCP schemas remain in `catalog.json`; configured
+namespace, description, and source-map paths enter the runtime reminder.
+Memory adds reminder paths, not a schema. A compaction call reuses the same
+stable prefix.
 
 The first user message begins with a `<runtime-reminder>` text block containing
 the workspace snapshot: path, `AGENTS.md` (falling back to lowercase
-`agents.md`), sorted skill metadata, memory paths, and stable GeneralTask
-guidance for a child. The original user request follows after a blank line in
-the same ordinary Chat `content` string. YAML folds
+`agents.md`), sorted skill metadata, configured MCP source maps, memory paths,
+and stable GeneralTask guidance for a child. The original user request follows
+after a blank line in the same ordinary Chat `content` string. YAML folds
 source-only wrapping in built-in agent prompts; dynamic reminder inputs remain
 exact.
 

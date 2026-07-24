@@ -315,6 +315,22 @@ See [ADR 0019](adr/0019-group-related-tool-adapters.md),
 [ADR 0008](adr/0008-typed-agent-prompt-registry.md) for the packaging and
 ownership decisions.
 
+## Progressive MCP Artifacts
+
+Configured MCP servers expose one fixed `mcp` command schema. Their exact
+remote `tools/list` catalogs stay in `catalog.json`, while model-generated
+`MCP.md` files provide compact namespace metadata and capability-oriented
+source maps. Detailed references may aggregate commands that share objects,
+identifiers, or workflows; the runtime does not interpret that grouping.
+
+The model-facing adapter, authoring CLI, and installable `register-mcp` Skill
+all rely on the same Rust artifact loader and command compiler. Rejected:
+dynamic per-tool provider schemas, a second list/load knowledge API inside
+`mcp`, startup LLM summarization, artifact hashes, hot reload, and automatic
+catalog repair.
+
+See [ADR 0049](adr/0049-progressive-mcp-artifacts.md).
+
 ## External Scheduling
 
 Memory consolidation is a command. Cron, systemd, Kubernetes, or another job

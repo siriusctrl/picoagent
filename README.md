@@ -26,7 +26,7 @@ itself remains headless.
 - optional local context compaction recorded as ordinary messages, with
   read-only regex history retrieval
 - Agent Skills discovery with progressive `SKILL.md` loading
-- MCP stdio servers adapted into the same tool registry
+- progressively documented MCP stdio servers routed through one `mcp` command
 - command hooks for run and tool lifecycle events
 - concurrent direct-tool batches whose unfinished calls continue under
   process-local runtime handles
@@ -418,13 +418,16 @@ The launch tool surface is intentionally small:
 - `stop`: stop a tool job or the current activity of a reusable agent
 - `close`: cancel current agent activity if needed, then permanently close it
 - `web_search`: optional Brave-backed public web search
+- `mcp`: optional CLI-like access to configured MCP artifacts
 
 Root and GeneralTask receive the same built-in schemas, including `delegate`
 and every runtime-handle control. Remaining delegation depth is frozen in run
 state and shown in the runtime reminder. At zero, `delegate` returns a local
 tool error without creating a child; its schema does not disappear. Memory adds
-paths to the reminder, not a tool schema. `web_search` and MCP tools depend on
-startup configuration. The resulting schemas are sorted and frozen before the
+paths to the reminder, not a tool schema. `web_search` and the single `mcp`
+tool depend on startup configuration. Configured MCP artifacts contribute only
+their namespace, description, and source-map path to the runtime reminder, not
+their remote schemas. The resulting schemas are sorted and frozen before the
 run's first normal provider call.
 
 `write` requires every edit target to identify one non-overlapping region in
@@ -492,6 +495,60 @@ skill-directory path needed to resolve referenced files.
 ```bash
 fiasco skills list
 ```
+
+## MCP Artifacts
+
+Each configured MCP source has a model-generated namespace and progressive
+artifact containing `MCP.md`, an exact captured `catalog.json`, and optional
+capability references. Only the namespace, short description, and absolute
+`MCP.md` path enter the runtime reminder. The model reads that source map and
+the relevant reference before using the one fixed `mcp` tool:
+
+```text
+mcp("github search_code query='McpRuntime' language=rust limit=20")
+```
+
+The actual provider tool schema has one `command` string. Fiasco parses shell
+quoting, resolves the first two tokens as namespace and exact remote tool name,
+converts `name=value` arguments using the captured input schema, and calls the
+configured stdio server. A tool with one input property also accepts one
+positional value.
+
+Configure the transport separately from the artifact:
+
+```toml
+[mcp.github]
+artifact = ".agents/mcp/github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+
+[mcp.github.env]
+GITHUB_TOKEN = "${GITHUB_TOKEN}"
+```
+
+Authoring and validation use the same loader, compiler, client, and result
+renderer as the runtime:
+
+```bash
+fiasco mcp capture github
+fiasco mcp check github
+fiasco mcp check github --live
+fiasco mcp compile "github search_code query='McpRuntime'"
+fiasco mcp call "github search_code query='McpRuntime'"
+```
+
+Install the repository's `register-mcp` Skill to have an agent capture,
+document, explore, and validate an arbitrary configured stdio MCP:
+
+```bash
+npx skills add siriusctrl/fiasco \
+  --skill register-mcp \
+  --agent universal
+```
+
+The Skill organizes source maps around user-facing capabilities and encourages
+grouping commands that share objects, identifiers, or workflows. It keeps the
+raw per-tool catalog exact and outside model context.
 
 ## Multi-Agent Orchestration
 
@@ -583,7 +640,7 @@ CLI/job
      -> ModelProvider
      -> ToolRegistry
         -> local Tool adapters grouped where related
-        -> MCP Tool adapters
+        -> one namespaced MCP command adapter
         -> RuntimeHandleManager
            -> promoted direct Tool future
            -> delegated child AgentRunner
@@ -592,9 +649,10 @@ CLI/job
      -> EventSink
 ```
 
-Provider wire formats never enter the loop. MCP adapters use the same `Tool`
-contract as local adapters. Subagents use the same runner. Large results use the
-same artifact contract regardless of source.
+Provider wire formats never enter the loop. The MCP command adapter uses the
+same `Tool` contract as local adapters while its artifact registry routes into
+remote MCP clients. Subagents use the same runner. Large results use the same
+artifact contract regardless of source.
 
 Read [architecture.md](docs/architecture.md) and
 [design-choices.md](docs/design-choices.md) for the detailed boundaries and

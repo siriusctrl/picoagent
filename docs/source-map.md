@@ -59,7 +59,10 @@
   the model-facing adapter is in `src/tools/load_skill/`.
 - `skills/orchestrate-with-graphs/`: installable guidance for maintaining
   workspace YAML graphs as an orchestrator mental model with ordinary tools.
-- `src/mcp.rs`: rmcp stdio client and tool adapters.
+- `skills/register-mcp/`: installable workflow for capturing, documenting,
+  exploring, and validating progressive MCP artifacts.
+- `src/mcp.rs` and `src/mcp/`: rmcp stdio client lifecycle, MCP artifact
+  loading, command compilation, result rendering, and the fixed `mcp` adapter.
 - `src/hooks.rs`: deterministic command-hook pipeline.
 - `src/memory.rs`: user/project Markdown memory paths and reminder text.
 - `src/config.rs`: TOML configuration.

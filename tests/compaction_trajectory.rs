@@ -219,6 +219,7 @@ fn runner(
         model: "trajectory-model".to_owned(),
         workspace: workspace.to_owned(),
         skill_catalog: String::new(),
+        mcp_catalog: String::new(),
         tools,
         artifacts: ArtifactStore::new(ArtifactPolicy::default()),
         store: store.clone(),

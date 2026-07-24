@@ -12,7 +12,7 @@ job/CLI
      -> ModelProvider
      -> ToolRegistry
         -> local Tool adapters grouped where related
-        -> MCP Tool adapters
+        -> one namespaced MCP command adapter
         -> RuntimeHandleManager
            -> promoted direct Tool future
            -> delegated child AgentRunner
@@ -54,11 +54,11 @@ blocks; the agent loop does not assemble provider wire shapes.
 
 ### Tool registry
 
-Every model-callable action implements `Tool`. Local adapters and MCP adapters
-share the same registry. Memory uses the ordinary file tools. The registry
-caches each adapter's spec at registration, stays sorted, and is frozen before
-the first normal provider call so tool schema order and membership remain
-deterministic across requests.
+Every model-callable action implements `Tool`. Local adapters and the fixed MCP
+command adapter share the same registry. Memory uses the ordinary file tools.
+The registry caches each adapter's spec at registration, stays sorted, and is
+frozen before the first normal provider call so tool schema order and
+membership remain deterministic across requests.
 
 This registry is the capability router: it maps a model-returned tool name to
 one implementation and one schema. It does not decide what to do or create a
@@ -84,8 +84,8 @@ The loader rejects unknown manifest fields, empty or padded prose, and
 non-object input schemas. Domain engines remain separate: process-local
 execution coordination is owned by `RuntimeHandleManager`, skills by
 `SkillRegistry`, and trajectory retrieval by
-`TrajectoryReader`. MCP lifecycle and its server-provided dynamic adapter
-remain in `mcp.rs`.
+`TrajectoryReader`. MCP artifact loading, command compilation, client
+lifecycle, and the thin command adapter remain in `mcp.rs` and `src/mcp/`.
 
 `build_app_tools` assembles process-wide local capabilities. `RunToolAssembly`
 is the single path that adds run-scoped history, handle controls, and `delegate`
@@ -101,9 +101,40 @@ capability set. Each normal run registers `history_search` and
 `history_read` before its first call regardless of whether automatic compaction
 is configured, plus `delegate` and all handle controls. Remaining delegation
 depth is persisted, shown in the runtime reminder, and checked by `delegate`
-before child creation; zero returns a local error. Optional `web_search` and MCP
-tools depend on startup configuration. Memory paths do not add a tool schema.
+before child creation; zero returns a local error. Optional `web_search` and the
+single `mcp` tool depend on startup configuration. Memory paths do not add a
+tool schema.
 The selected schemas do not appear or disappear during one run.
+
+### MCP artifacts
+
+An MCP configuration entry binds a namespace to a stdio transport and an
+artifact directory. `MCP.md` supplies model-generated name and description
+metadata plus a capability-oriented source map. `catalog.json` is the exact
+captured `tools/list` array and remains outside model context. Detailed
+Markdown may group highly related commands around shared objects and workflows;
+the runtime never interprets that grouping.
+
+Startup loads every configured artifact and connects its server, then registers
+one fixed `mcp` tool with one command string. The initial runtime reminder lists
+only each namespace, description, and absolute source-map path. The model uses
+ordinary `read` calls for progressive documentation and invokes:
+
+```text
+<namespace> <remote-tool> [name=value ...]
+```
+
+The shared compiler applies shell quoting, resolves the captured exact remote
+tool name, and converts top-level values using its input schema. `mcp compile`,
+`mcp call`, and the model-facing adapter use this same implementation. Text MCP
+content returns directly without a harness JSON envelope; structured-only data
+returns as its JSON value, while rich non-text results retain the exact MCP
+result shape for artifact handling.
+
+`mcp capture` is the only writer of `catalog.json`. `mcp check --live` compares
+the artifact with the current server explicitly; normal startup does not
+refresh, hash, regenerate, or ask a model to repair artifacts. A changed
+artifact is simply observed by a later process.
 
 The provider config declares one capability set for the selected model rather
 than maintaining a model-name registry or probing endpoints. The stable system
@@ -340,8 +371,9 @@ also removes its instructions. Concrete run state and feature availability may
 still appear in dynamic reminders and results. The first user message's
 ordinary text `content` carries a
 `<runtime-reminder>` block with model/workspace state, the workspace
-`AGENTS.md` or lowercase fallback, sorted skill metadata, memory paths, and
-optional delegated instructions, followed by the original request. A skill body enters the
+`AGENTS.md` or lowercase fallback, sorted skill metadata, configured MCP
+source-map metadata, memory paths, and optional delegated instructions,
+followed by the original request. A skill body enters the
 conversation only after the model calls `load_skill`. That result omits the
 already-catalogued name and description, and includes the absolute skill
 directory so relative references remain resolvable. The `SKILL.md` entry path
@@ -353,6 +385,12 @@ guidance. It uses ordinary file tools to maintain workspace YAML under
 exists in the runtime. This keeps the mental model independently installable
 and ablatable. A future remote graph service may add an access capability
 without coupling graph semantics to agent execution.
+
+The repository also ships `skills/register-mcp/`. It has an agent capture the
+exact remote catalog, generate a compact namespace and capability-oriented
+source map, aggregate highly related commands into progressive references, and
+exercise the runtime's own check, compile, and call paths before accepting the
+artifact.
 
 ### Memory
 

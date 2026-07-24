@@ -41,8 +41,9 @@ JSON Schema. Examples explain shape only; Rust remains authoritative for
 semantic validation.
 
 These are compile-time assets, not runtime overrides or dynamically discovered
-plugins. External executable tools integrate through MCP and keep their
-server-provided dynamic schemas rather than using local manifests.
+plugins. External executable tools integrate through one fixed `mcp` manifest.
+Their exact server-provided catalogs stay in progressively documented MCP
+artifacts rather than entering the provider tool-schema prefix.
 
 `returns` is required even when one short sentence is sufficient. A manifest
 should explain its own behavior without assuming that a sibling tool is
@@ -54,9 +55,10 @@ or claim a formal output schema.
 
 Tool descriptions are sent through the provider's sorted tool-schema field.
 Core history, delegation, and handle-control schemas are present in every Root
-and GeneralTask run. Optional web or MCP capabilities are selected during the
-single run-assembly path. Memory uses ordinary file tools and therefore adds no
-schema. Remaining delegation depth is runtime state, not schema membership.
+and GeneralTask run. Optional web search and the single MCP command capability
+are selected during the run-assembly path. Configured MCP source-map metadata
+enters the dynamic reminder. Memory uses ordinary file tools and therefore adds
+no schema. Remaining delegation depth is runtime state, not schema membership.
 Compaction reuses that system/tool prefix and adds the `compaction_request`
 prompt as the final user message.
 Normal context after a successful checkpoint adds `compaction_resume` inside a

@@ -286,6 +286,7 @@ impl Default for WebSearchConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpServerConfig {
+    pub artifact: PathBuf,
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -611,6 +612,27 @@ mod tests {
                 "accepted unknown field in {source}"
             );
         }
+    }
+
+    #[test]
+    fn parses_mcp_transport_and_artifact_path() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [mcp.github]
+            artifact = ".agents/mcp/github"
+            command = "npx"
+            args = ["-y", "github-mcp"]
+
+            [mcp.github.env]
+            GITHUB_TOKEN = "${GITHUB_TOKEN}"
+            "#,
+        )
+        .unwrap();
+        let github = &config.mcp["github"];
+        assert_eq!(github.artifact, PathBuf::from(".agents/mcp/github"));
+        assert_eq!(github.command, "npx");
+        assert_eq!(github.args, ["-y", "github-mcp"]);
+        assert_eq!(github.env["GITHUB_TOKEN"], "${GITHUB_TOKEN}");
     }
 
     #[test]

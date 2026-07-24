@@ -136,6 +136,7 @@ async fn handle_finishing_during_compaction_is_delivered_without_a_stale_active_
         model: "test-model".to_owned(),
         workspace: workspace.path().to_owned(),
         skill_catalog: String::new(),
+        mcp_catalog: String::new(),
         tools,
         artifacts: ArtifactStore::default(),
         store: store.clone(),

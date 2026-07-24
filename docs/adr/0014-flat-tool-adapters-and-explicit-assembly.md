@@ -24,6 +24,10 @@ ADR 0038 later removes the durable `TaskManager` and replaces the task-control
 family with runtime-handle adapters under `src/tools/handle/`. Explicit
 assembly, leaf-owned manifests, and domain-engine separation remain accepted.
 
+ADR 0049 replaces the dynamic per-remote-tool MCP adapter with one fixed
+command adapter backed by progressive MCP artifacts. MCP lifecycle and
+domain-engine separation remain accepted.
+
 ## Context
 
 Model-facing tools had two ownership patterns. Base and history adapters lived

@@ -218,6 +218,7 @@ fn runner_with_compaction(
         model: "test-model".to_owned(),
         workspace: workspace.path().to_owned(),
         skill_catalog: String::new(),
+        mcp_catalog: String::new(),
         tools,
         artifacts: ArtifactStore::new(ArtifactPolicy::default()),
         store: store.clone(),

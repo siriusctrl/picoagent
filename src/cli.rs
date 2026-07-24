@@ -59,6 +59,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SkillsCommand,
     },
+    /// Capture, validate, compile, and call configured MCP sources.
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -95,4 +100,20 @@ pub(crate) enum ScopeArg {
 #[derive(Subcommand)]
 pub(crate) enum SkillsCommand {
     List,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum McpCommand {
+    /// Capture the server's exact tools/list result into its artifact.
+    Capture { name: String },
+    /// Load and validate an MCP artifact, optionally comparing it to the live server.
+    Check {
+        name: String,
+        #[arg(long)]
+        live: bool,
+    },
+    /// Compile one CLI-like MCP command without executing it.
+    Compile { command: String },
+    /// Compile and execute one CLI-like MCP command.
+    Call { command: String },
 }

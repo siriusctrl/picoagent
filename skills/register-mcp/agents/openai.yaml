@@ -1,0 +1,4 @@
+interface:
+  display_name: "Register MCP"
+  short_description: "Package and validate MCP servers for Fiasco"
+  default_prompt: "Use $register-mcp to package this MCP server as a validated Fiasco artifact."

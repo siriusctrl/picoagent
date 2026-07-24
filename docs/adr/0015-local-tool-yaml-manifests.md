@@ -19,6 +19,10 @@ ADR 0024 later removes agent depth as a built-in membership choice. Root and
 both GeneralTask profiles now expose the same complete local schemas; optional
 startup integrations can still add complete specs.
 
+ADR 0049 replaces server-provided dynamic MCP schemas in the provider prefix
+with one fixed local `mcp` manifest. Exact remote schemas now remain in
+artifact `catalog.json` files outside model context.
+
 ## Context
 
 ADR 0014 put every local model-facing adapter in one predictable directory,

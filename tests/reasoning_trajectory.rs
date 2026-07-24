@@ -56,6 +56,7 @@ async fn chat_reasoning_is_persisted_as_a_separate_trajectory_channel() {
         model: "reasoning-model".into(),
         workspace: workspace.path().to_path_buf(),
         skill_catalog: String::new(),
+        mcp_catalog: String::new(),
         tools: ToolRegistry::default(),
         artifacts: ArtifactStore::default(),
         store: store.clone(),

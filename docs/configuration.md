@@ -187,9 +187,10 @@ that registry at every depth. Runs persist only `root` or `general_task` as the
 role profile. Exact remaining delegation depth is frozen in run metadata as the
 sole delegation authority and appears in the runtime reminder; `delegate`
 returns a local error at zero. Compaction reuses the same schemas but never
-executes a returned tool call. Optional `web_search` and MCP schemas depend on
-startup configuration. Memory uses the ordinary file tools and adds no schema.
-None changes during the run.
+executes a returned tool call. Optional `web_search` and the single fixed `mcp`
+schema depend on startup configuration. Remote MCP schemas stay outside the
+provider prefix. Memory uses the ordinary file tools and adds no schema. None
+changes during the run.
 
 `history_search_max_matches` is a positive, per-query cap for newest-first
 regex matches over messages removed from the active context. It is not an
@@ -279,11 +280,12 @@ workspace search remains a `bash`/`rg` operation.
 
 ## MCP
 
-Each `[mcp.<name>]` entry starts one stdio child process for the duration of the
-job.
+Each `[mcp.<name>]` entry binds one model-generated namespace to a progressive
+artifact and starts one stdio child process for the duration of the job.
 
 ```toml
 [mcp.github]
+artifact = ".agents/mcp/github"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
 
@@ -293,6 +295,25 @@ GITHUB_TOKEN = "${GITHUB_TOKEN}"
 
 Values written as `$NAME` or `${NAME}` are resolved from the fiasco process
 environment. Other values are passed literally.
+
+Relative `artifact` paths resolve from the workspace. The directory must
+contain:
+
+- `MCP.md` with exactly `name` and `description` frontmatter, followed by a
+  model-authored capability source map;
+- `catalog.json` containing the exact JSON array captured from `tools/list`;
+- any detailed Markdown named by the source map, conventionally under
+  `references/`.
+
+The frontmatter name must match the configuration key. The runtime puts only
+that name, description, and the absolute `MCP.md` path into the initial
+reminder. It registers one fixed `mcp` schema rather than every remote schema.
+
+Use `fiasco mcp capture <name>` to write `catalog.json`,
+`fiasco mcp check <name> [--live]` to validate the artifact,
+`fiasco mcp compile "<command>"` to inspect routing and argument conversion,
+and `fiasco mcp call "<command>"` to exercise the runtime path without a model.
+The installable `register-mcp` Skill owns the model-guided authoring workflow.
 
 ## Hooks
 
