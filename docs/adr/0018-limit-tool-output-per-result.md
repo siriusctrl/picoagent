@@ -11,6 +11,10 @@ ordinary foreground tool results.
 ADR 0030 later applies this ADR's independent per-result policy to terminal
 background results as well.
 
+ADR 0046 later replaces immutable artifact metadata with a path-and-media-type
+reference to a mutable run-local attachment. The independent per-result
+preview policy here remains accepted.
+
 ## Context
 
 Fiasco originally combined a per-result inline threshold with a cumulative

@@ -492,7 +492,6 @@ mod tests {
             seq,
             created_at: Utc::now(),
             message: Message::new(role, vec![content]),
-            pending_input_id: None,
             compaction: None,
         }
     }
@@ -503,7 +502,6 @@ mod tests {
             seq,
             created_at: Utc::now(),
             message: Message::text(Role::Assistant, summary),
-            pending_input_id: None,
             compaction: Some(CompactionMessage::State {
                 state: CompactionState {
                     covered_through_message_ref: "m2".to_owned(),

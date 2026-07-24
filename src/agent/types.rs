@@ -78,8 +78,6 @@ pub struct RunRequest {
     pub(crate) name: String,
     pub(crate) prompt: String,
     pub(crate) parent_run_id: Option<String>,
-    pub(crate) depth: usize,
-    pub(crate) additional_instructions: Option<String>,
     pub(crate) profile: RunProfile,
     /// Frozen for durable runs. `None` is used only by a new root request,
     /// whose initial value comes from `RunnerOptions` before the run is stored.
@@ -89,8 +87,7 @@ pub struct RunRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunProfile {
     Root,
-    GeneralTaskDelegating,
-    GeneralTaskLeaf,
+    GeneralTask,
 }
 
 impl RunRequest {
@@ -99,8 +96,6 @@ impl RunRequest {
             name: "root".to_owned(),
             prompt: prompt.into(),
             parent_run_id: None,
-            depth: 0,
-            additional_instructions: None,
             profile: RunProfile::Root,
             remaining_delegation_depth: None,
         }
@@ -110,21 +105,13 @@ impl RunRequest {
         name: impl Into<String>,
         prompt: impl Into<String>,
         parent_run_id: String,
-        depth: usize,
-        additional_instructions: String,
         remaining_delegation_depth: usize,
     ) -> Self {
         Self {
             name: name.into(),
             prompt: prompt.into(),
             parent_run_id: Some(parent_run_id),
-            depth,
-            additional_instructions: Some(additional_instructions),
-            profile: if remaining_delegation_depth > 0 {
-                RunProfile::GeneralTaskDelegating
-            } else {
-                RunProfile::GeneralTaskLeaf
-            },
+            profile: RunProfile::GeneralTask,
             remaining_delegation_depth: Some(remaining_delegation_depth),
         }
     }
@@ -132,8 +119,7 @@ impl RunRequest {
     pub(crate) fn from_stored(record: &RunRecord) -> anyhow::Result<Self> {
         let profile = match record.profile.as_str() {
             "root" => RunProfile::Root,
-            "general_task_delegating" => RunProfile::GeneralTaskDelegating,
-            "general_task_leaf" => RunProfile::GeneralTaskLeaf,
+            "general_task" => RunProfile::GeneralTask,
             value => anyhow::bail!("unknown stored run profile `{value}`"),
         };
         match profile {
@@ -141,21 +127,15 @@ impl RunRequest {
                 record.parent_run_id.is_none(),
                 "stored root run has a parent"
             ),
-            RunProfile::GeneralTaskDelegating => anyhow::ensure!(
-                record.parent_run_id.is_some() && record.remaining_delegation_depth > 0,
-                "stored delegating GeneralTask has invalid parent or delegation depth"
-            ),
-            RunProfile::GeneralTaskLeaf => anyhow::ensure!(
-                record.parent_run_id.is_some() && record.remaining_delegation_depth == 0,
-                "stored leaf GeneralTask has invalid parent or delegation depth"
+            RunProfile::GeneralTask => anyhow::ensure!(
+                record.parent_run_id.is_some(),
+                "stored GeneralTask run has no parent"
             ),
         }
         Ok(Self {
             name: record.name.clone(),
             prompt: record.prompt.clone(),
             parent_run_id: record.parent_run_id.clone(),
-            depth: record.depth,
-            additional_instructions: record.additional_instructions.clone(),
             profile,
             remaining_delegation_depth: Some(record.remaining_delegation_depth),
         })
@@ -166,15 +146,14 @@ impl RunProfile {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Root => "root",
-            Self::GeneralTaskDelegating => "general_task_delegating",
-            Self::GeneralTaskLeaf => "general_task_leaf",
+            Self::GeneralTask => "general_task",
         }
     }
 
     pub(crate) fn runtime_role(self) -> &'static str {
         match self {
             Self::Root => "root",
-            Self::GeneralTaskDelegating | Self::GeneralTaskLeaf => "general_task",
+            Self::GeneralTask => "general_task",
         }
     }
 }

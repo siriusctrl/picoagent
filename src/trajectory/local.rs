@@ -72,7 +72,7 @@ pub(super) async fn search_messages(
             Some(found) => Some(found),
             None => match artifact_search.as_deref_mut() {
                 Some(artifacts) => {
-                    let artifact_refs = artifact_refs(record)?;
+                    let artifact_refs = artifact_refs(record);
                     artifacts
                         .find(&artifact_refs, pattern)
                         .await?
@@ -212,22 +212,11 @@ fn tool_pairs(messages: &[TrajectoryMessage]) -> Vec<ToolPair> {
     pairs
 }
 
-fn artifact_refs(record: &TrajectoryMessage) -> Result<Vec<&ArtifactRef>> {
+fn artifact_refs(record: &TrajectoryMessage) -> Vec<&ArtifactRef> {
     let mut artifacts = Vec::new();
     for content in &record.message.content {
         let artifact = match content {
-            MessageContent::ToolResult {
-                call_id, metadata, ..
-            } => {
-                if let Some(artifact) = &metadata.artifact {
-                    ensure!(
-                        artifact.call_id == *call_id,
-                        "result metadata artifact call id `{}` does not match `{call_id}`",
-                        artifact.call_id
-                    );
-                }
-                metadata.artifact.as_ref()
-            }
+            MessageContent::ToolResult { metadata, .. } => metadata.artifact.as_ref(),
             MessageContent::RuntimeHandle { metadata, .. } => metadata.artifact.as_ref(),
             _ => continue,
         };
@@ -235,7 +224,7 @@ fn artifact_refs(record: &TrajectoryMessage) -> Result<Vec<&ArtifactRef>> {
             artifacts.push(artifact);
         }
     }
-    Ok(artifacts)
+    artifacts
 }
 
 fn match_message(record: &TrajectoryMessage, pattern: &Regex) -> Option<HistoryMatch> {

@@ -153,7 +153,6 @@ async fn create_interrupted_run(store: &RunDirStore, workspace: &Path, run_id: &
         )
         .await
         .unwrap();
-    store.update_state(run_id, RunState::Running).await.unwrap();
     store
         .append_message(run_id, &Message::text(Role::User, "resume me"))
         .await
@@ -253,11 +252,6 @@ async fn resume_rejects_changed_model_modalities_before_calling_the_provider() {
         )
         .await
         .unwrap();
-    store
-        .update_state("resume-modalities", RunState::Running)
-        .await
-        .unwrap();
-
     let runner = resume_runner(
         workspace.path(),
         &store,
@@ -329,7 +323,7 @@ async fn public_resume_rejects_a_child_run_in_favor_of_parent_recovery() {
                 workspace.path().to_path_buf(),
                 Some("parent".to_owned()),
             )
-            .with_execution_context("general_task_leaf", 1, None, 0)
+            .with_execution_context("general_task", 0)
             .with_provider_resume_fingerprint(
                 ResumeProvider {
                     calls: Arc::new(AtomicUsize::new(0)),
@@ -388,7 +382,7 @@ impl ModelProvider for RuntimeRestartProvider {
                 bail!("reused child omitted the explicit new message");
             }
             if visible.iter().any(|text| text.contains("STALE INPUT")) {
-                bail!("reused child replayed stale pending input");
+                bail!("reused child replayed stale mailbox input");
             }
             if !request.messages.iter().any(|message| {
                 message.content.iter().any(|content| {
@@ -396,7 +390,7 @@ impl ModelProvider for RuntimeRestartProvider {
                         content,
                         MessageContent::RuntimeReminder { text }
                             if text.contains("previous fiasco process stopped")
-                                && text.contains("pending input were discarded")
+                                && text.contains("mailbox input were discarded")
                     )
                 })
             }) {
@@ -566,13 +560,9 @@ async fn restart_recovers_agent_threads_but_not_activity_or_tool_jobs() {
                 workspace.path().to_path_buf(),
                 None,
             )
-            .with_execution_context("root", 0, None, 1)
+            .with_execution_context("root", 1)
             .with_provider_resume_fingerprint(fingerprint.clone()),
         )
-        .await
-        .unwrap();
-    store
-        .update_state("restart-root", RunState::Running)
         .await
         .unwrap();
     store
@@ -615,12 +605,7 @@ async fn restart_recovers_agent_threads_but_not_activity_or_tool_jobs() {
                 workspace.path().to_path_buf(),
                 Some("restart-root".to_owned()),
             )
-            .with_execution_context(
-                "general_task_leaf",
-                1,
-                Some("child instructions".to_owned()),
-                0,
-            )
+            .with_execution_context("general_task", 0)
             .with_provider_resume_fingerprint(fingerprint),
         )
         .await
@@ -637,17 +622,6 @@ async fn restart_recovers_agent_threads_but_not_activity_or_tool_jobs() {
         .append_message("old-child", &Message::text(Role::Assistant, "old context"))
         .await
         .unwrap();
-    let stale_input = json!({
-        "id": "stale-input",
-        "created_at": chrono::Utc::now(),
-        "message": Message::text(Role::User, "STALE INPUT MUST NOT REPLAY"),
-    });
-    tokio::fs::write(
-        store.paths("old-child").pending_inputs,
-        format!("{}\n", serde_json::to_string(&stale_input).unwrap()),
-    )
-    .await
-    .unwrap();
     let unrelated = store.paths("unrelated-old");
     tokio::fs::create_dir_all(&unrelated.directory)
         .await
@@ -685,10 +659,6 @@ async fn restart_recovers_agent_threads_but_not_activity_or_tool_jobs() {
         store.load_run("old-child").await.unwrap().state,
         RunState::Open
     );
-    let pending = tokio::fs::read_to_string(store.paths("old-child").pending_inputs)
-        .await
-        .unwrap();
-    assert!(!pending.contains("STALE INPUT"));
 }
 
 #[tokio::test]
@@ -1279,18 +1249,18 @@ async fn wait_joins_a_background_tool_without_duplicate_result_injection() {
             _ => None,
         })
         .unwrap();
-    let (terminal_handle, artifact_call_id) = messages
+    let (terminal_handle, artifact_path) = messages
         .iter()
         .flat_map(|message| &message.content)
         .find_map(|content| match content {
             MessageContent::RuntimeHandle {
                 handle, metadata, ..
-            } => Some((handle.clone(), metadata.artifact.as_ref()?.call_id.clone())),
+            } => Some((handle.clone(), metadata.artifact.as_ref()?.path.clone())),
             _ => None,
         })
         .unwrap();
     assert_eq!(terminal_handle, acknowledgement_handle);
-    assert_eq!(artifact_call_id, "slow-call");
+    assert!(artifact_path.contains("slow-call"));
     let reloaded = RunDirStore::new(workspace.path())
         .load_messages(&result.run_id)
         .await
@@ -2316,8 +2286,5 @@ async fn model_requests_have_a_runtime_deadline() {
         .file_name()
         .to_string_lossy()
         .into_owned();
-    assert_eq!(
-        store.load_run(&run_id).await.unwrap().state,
-        RunState::Failed
-    );
+    assert_eq!(store.load_run(&run_id).await.unwrap().state, RunState::Open);
 }

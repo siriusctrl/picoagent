@@ -14,6 +14,10 @@ self-contained message record instead of projecting it to Chat plus layout
 metadata. The attachment ordering and provider projection decisions here remain
 accepted.
 
+ADR 0046 later replaces immutable image artifacts with mutable run-local
+attachments referenced by path and media type. Native image attachment ordering
+and provider projection remain accepted.
+
 ## Context
 
 The `read` tool could inspect bounded UTF-8 text but not show an image to the

@@ -14,7 +14,6 @@ pub(crate) fn build_runtime_reminder(
     model_modalities: &BTreeSet<ModelModality>,
     skill_catalog: &str,
     memory: Option<&MemoryPaths>,
-    additional_instructions: Option<&str>,
     profile: RunProfile,
     remaining_delegation_depth: usize,
 ) -> Result<String> {
@@ -56,10 +55,10 @@ pub(crate) fn build_runtime_reminder(
         ));
     }
 
-    if let Some(instructions) = additional_instructions.filter(|value| !value.trim().is_empty()) {
+    if profile == RunProfile::GeneralTask {
         sections.push(format!(
             "<task-instructions>\n{}\n</task-instructions>",
-            instructions.trim()
+            agent_prompts().general_task.trim()
         ));
     }
 
@@ -129,8 +128,7 @@ mod tests {
             &BTreeSet::from([ModelModality::Text]),
             "- review: Review code",
             Some(&memory),
-            Some(crate::prompts::agent_prompts().general_task.as_str()),
-            RunProfile::GeneralTaskLeaf,
+            RunProfile::GeneralTask,
             0,
         )
         .unwrap();

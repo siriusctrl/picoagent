@@ -59,9 +59,11 @@ See `docs/source-map.md` for the detailed ownership map.
   briefly show a prefix of the final tool turn. A torn physical line stays
   hidden; semantic tail repair belongs only to the next writer.
 - Preserve every large or binary tool result in full under the run. Apply inline
-  and preview limits independently per result, keep artifact identities
-  immutable and portable, and add asynchronous status envelopes only after
-  payload limiting. See `docs/artifacts.md`.
+  and preview limits independently per result. Treat its `ArtifactRef` as a
+  mutable run-local attachment path plus media type: later reads observe current
+  file contents, while the original message preview remains generation-time
+  evidence. Add asynchronous status envelopes only after payload limiting. See
+  `docs/artifacts.md`.
 - Keep prompt and tool-schema assembly deterministic and frozen per run. Root,
   child, and compaction requests use the same built-in schema set; compaction
   reuses the normal system prompt and never executes tool calls. Stable prose
@@ -70,8 +72,9 @@ See `docs/source-map.md` for the detailed ownership map.
 - Planning graphs are run-local files, not runtime state or a scheduler. Memory
   is user/project Markdown outside the live transcript, not a special execution
   subsystem. Both are manipulated through ordinary tools.
-- Fiasco owns newline-aware transcript sourcing and command routing; fmtview
-  owns terminal rendering, navigation, search, and event handling.
+- Fiasco owns run routing and inspect command selection; fmtview-core owns the
+  physical growing-file timeline, and fmtview owns rendering, navigation,
+  search, and event handling.
 - The launch runtime has no security sandbox or approval engine. Tools, hooks,
   and child processes inherit the fiasco process permissions; never imply
   otherwise.
@@ -95,7 +98,7 @@ See `docs/source-map.md` for the detailed ownership map.
 ## Contract References
 
 - Runtime, handles, and restart: `docs/runtime-model.md`,
-  `docs/architecture.md`, ADR 0034, and ADR 0038.
+  `docs/architecture.md`, ADR 0034, ADR 0038, and ADR 0047.
 - Messages, tail repair, and inspection: `docs/architecture.md`, ADR 0032,
   ADR 0037, and ADR 0044.
 - Artifact storage and result envelopes: `docs/artifacts.md`.
@@ -120,7 +123,7 @@ For provider changes, run the mock-server contract tests covering streamed text,
 fragmented tool arguments, error responses, and authentication refresh.
 
 For runtime or artifact changes, also run a headless echo smoke and inspect the
-run's `messages.jsonl`, `events.jsonl`, final output, and artifact metadata.
+run's `messages.jsonl`, `events.jsonl`, final output, and artifact paths/content.
 
 For prompt or tool-description asset changes, verify `cargo package --list`
 contains every referenced asset.

@@ -3,8 +3,8 @@
 - [Architecture](architecture.md): runtime flow and module boundaries.
 - [Runtime model](runtime-model.md): runs, messages, compaction, tools, and
   subagents.
-- [Artifacts](artifacts.md): large-output and history-result spill with
-  immutable metadata.
+- [Artifacts](artifacts.md): mutable run-local attachments, bounded previews,
+  and history-search boundaries.
 - [Memory](memory.md): user/project scopes and consolidation.
 - [Configuration](configuration.md): provider and runtime TOML.
 - [Entrypoints](entrypoints.md): headless CLI and future transport boundary.

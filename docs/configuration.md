@@ -183,13 +183,13 @@ path.
 
 Root and GeneralTask each assemble the same sorted built-in registry and freeze
 it before their first provider call. `delegate` and all handle controls remain in
-that registry at every depth. Delegating and leaf remain separate persisted
-profiles for recovery, but do not change schema membership. The exact remaining
-delegation depth is frozen in run metadata and shown in the runtime reminder;
-`delegate` returns a local error at zero. Compaction reuses the same schemas but
-never executes a returned tool call. Optional `web_search` and MCP schemas
-depend on startup configuration. Memory uses the ordinary file tools and adds
-no schema. None changes during the run.
+that registry at every depth. Runs persist only `root` or `general_task` as the
+role profile. Exact remaining delegation depth is frozen in run metadata as the
+sole delegation authority and appears in the runtime reminder; `delegate`
+returns a local error at zero. Compaction reuses the same schemas but never
+executes a returned tool call. Optional `web_search` and MCP schemas depend on
+startup configuration. Memory uses the ordinary file tools and adds no schema.
+None changes during the run.
 
 `history_search_max_matches` is a positive, per-query cap for newest-first
 regex matches over messages removed from the active context. It is not an

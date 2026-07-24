@@ -25,7 +25,7 @@ still need a provider-valid conversation before making another model request.
 - A terminating newline is the only durable visibility boundary. Every complete
   message line is immediately available to trajectory readers and inspectors.
 - Remove `_fiasco.checkpoint`, `index`, and `count`. Keep `_fiasco` only for
-  message-local pending-input and compaction classification.
+  message-local compaction classification.
 - Keep one writer and append an ordered assistant/result batch with one
   `write_all`, flush, and sync sequence. This is an ordering optimization, not a
   multi-record transaction guarantee.
@@ -52,6 +52,9 @@ still need a provider-valid conversation before making another model request.
 - A viewer can temporarily present an assistant call without all results. This
   is accepted because inspection is observational and refresh remains
   available.
+- ADR 0045 delegates the viewer's generic newline paging and refresh mechanics
+  to fmtview-core; strict message and trailing-turn validation remain on the
+  writer/resume path.
 - Resume has one semantic repair rule at the writer boundary. Complete tool
   turns, final assistants, ordinary user messages, and compacted states remain
   untouched.
@@ -82,3 +85,4 @@ still need a provider-valid conversation before making another model request.
 - [ADR 0037](0037-embed-fmtview-over-checkpoint-timeline.md)
 - [ADR 0038](0038-runtime-handles-and-explicit-restart.md)
 - [ADR 0043](0043-compact-message-and-checkpoint-payloads.md)
+- [ADR 0045](0045-delegate-transcript-paging-to-fmtview-core.md)

@@ -1,1 +1,1 @@
-The artifact preserves the complete output. Inspect text or images with `read`; continue text reads with the returned `line_offset` or `byte_offset`. Use `bash`/`rg` for targeted text search.
+This path names a mutable run-local attachment. Later reads or searches observe its current contents, which may differ from this generation-time preview. Inspect text or images with `read`; continue text reads with the returned `line_offset` or `byte_offset`. Use `bash`/`rg` for targeted text search.

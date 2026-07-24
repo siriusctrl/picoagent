@@ -9,29 +9,40 @@ use crate::{
 };
 
 use super::{AgentRunner, RunRequest, RunResult, lifecycle::RunMode};
-use crate::agent::{compaction::estimate_message_tokens, handle::HandleOutputNotice};
+use crate::agent::{
+    compaction::estimate_message_tokens,
+    handle::{AgentMailbox, HandleOutputNotice},
+};
 
-const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous fiasco process stopped. Any incomplete trailing tool turn was discarded; activities and asynchronous tool jobs from that process stopped and were not resumed. Pending input and undelivered results were also discarded. Existing agent threads keep their complete messages and remain available through list_handles, inspect, and an explicit send_message. Workspace or external side effects may already have occurred, so inspect current state before retrying operations.\n</runtime-reminder>";
+const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous fiasco process stopped. Any incomplete trailing tool turn was discarded; activities and asynchronous tool jobs from that process stopped and were not resumed. Mailbox input and undelivered results were also discarded. Existing agent threads keep their complete messages and remain available through list_handles, inspect, and an explicit send_message. Workspace or external side effects may already have occurred, so inspect current state before retrying operations.\n</runtime-reminder>";
 
 impl AgentRunner {
     pub async fn resume(self: &Arc<Self>, run_id: impl Into<String>) -> Result<RunResult> {
-        self.start_existing_run(run_id.into(), None, None).await
+        self.start_existing_run(run_id.into(), None, None, None)
+            .await
     }
 
     pub(crate) async fn run_child_activity(
         self: &Arc<Self>,
         run_id: String,
         expected_parent_run_id: &str,
+        mailbox: AgentMailbox,
         cleanup_done: tokio::sync::oneshot::Sender<()>,
     ) -> Result<RunResult> {
-        self.start_existing_run(run_id, Some(expected_parent_run_id), Some(cleanup_done))
-            .await
+        self.start_existing_run(
+            run_id,
+            Some(expected_parent_run_id),
+            Some(mailbox),
+            Some(cleanup_done),
+        )
+        .await
     }
 
     async fn start_existing_run(
         self: &Arc<Self>,
         run_id: String,
         expected_parent_run_id: Option<&str>,
+        mailbox: Option<AgentMailbox>,
         cleanup_done: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<RunResult> {
         let lease = self.store.acquire_run_lease(&run_id).await?;
@@ -48,10 +59,7 @@ impl AgentRunner {
             ),
         }
         ensure!(
-            !matches!(
-                record.state,
-                RunState::Completed | RunState::Cancelled | RunState::Closed
-            ),
+            !matches!(record.state, RunState::Completed | RunState::Closed),
             "run `{run_id}` is already {:?}",
             record.state
         );
@@ -88,7 +96,7 @@ impl AgentRunner {
             Some(_) => RunMode::ChildActivity,
             None => RunMode::RootRestart,
         };
-        self.run_with_mode(request, run_id, mode, lease.clone(), cleanup_done)
+        self.run_with_mode(request, run_id, mode, lease.clone(), mailbox, cleanup_done)
             .await
     }
 }

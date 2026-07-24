@@ -7,6 +7,10 @@
 - Refines: ADR 0013 (sequence-addressed refs)
 - Refines: ADR 0030 (background result persistence)
 
+ADR 0046 later replaces the separate artifact integrity contract and artifact
+sidecars with mutable run-local attachments referenced only by path and media
+type. The self-contained message decision here remains accepted.
+
 ## Context
 
 ADR 0005 optimized the transcript for direct OpenAI Chat familiarity. The

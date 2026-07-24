@@ -98,7 +98,6 @@ fn decoder_rejects_non_contiguous_refs_without_advancing() {
         )
         .unwrap();
     assert_eq!(record.trajectory.message_ref, "m1");
-    assert_eq!(decoder.next_seq(), 2);
 }
 
 #[test]

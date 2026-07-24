@@ -9,6 +9,10 @@ ADR 0039 supersedes ADR 0028's guidance placement. The shared system prompt is
 tool-agnostic; each capability owns its workflow guidance, while concrete role,
 delegation depth, and active handle state remain runtime-reminder data.
 
+ADR 0047 later collapses the two stored GeneralTask variants into one
+`general_task` profile. Exact remaining delegation depth remains the sole
+delegation authority, so the shared-schema decision here is unchanged.
+
 ## Context
 
 Root, delegating GeneralTask, and leaf GeneralTask were durable capability

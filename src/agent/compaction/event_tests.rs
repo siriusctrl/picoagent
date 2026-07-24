@@ -120,7 +120,6 @@ fn record(seq: u64, role: Role, text: String) -> TrajectoryMessage {
         seq,
         created_at: Utc::now(),
         message: Message::new(role, vec![MessageContent::Text { text }]),
-        pending_input_id: None,
         compaction: None,
     }
 }

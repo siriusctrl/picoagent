@@ -25,6 +25,10 @@ and exact recovery.
 ADR 0032 supersedes that physical layout with one self-contained message line.
 The append-only compaction and history-retrieval decisions here remain accepted.
 
+ADR 0046 replaces the exact-digest artifact check with a mutable run-local
+attachment contract. Structured message linkage, current-run containment, and
+bounded `rg` search remain accepted.
+
 ## Context
 
 Long tool-using runs need to reduce the messages sent on later model calls, but

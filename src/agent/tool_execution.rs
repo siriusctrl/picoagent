@@ -152,14 +152,16 @@ impl<'a> ToolExecutor<'a> {
         output: Option<&ToolOutput>,
         is_error: bool,
     ) -> Result<()> {
-        if let Some(artifact) = output.and_then(|output| output.artifact.as_ref()) {
+        if let Some((artifact, bytes)) =
+            output.and_then(|output| Some((output.artifact.as_ref()?, output.artifact_bytes()?)))
+        {
             self.events
                 .emit(&RuntimeEvent::new(
                     self.run_id,
                     RuntimeEventKind::ArtifactCreated {
                         call_id: call.id.clone(),
                         path: artifact.path.clone(),
-                        bytes: artifact.bytes,
+                        bytes,
                     },
                 ))
                 .await?;

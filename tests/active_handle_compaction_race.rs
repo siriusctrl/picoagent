@@ -114,7 +114,7 @@ impl ModelProvider for CompletingDuringCompactionProvider {
                 let handle = delegate_handle(&request)?;
                 Ok(tool_response(
                     "status-review",
-                    "status",
+                    "list_handles",
                     json!({"handles": [handle]}),
                 ))
             }

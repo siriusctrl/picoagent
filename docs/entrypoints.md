@@ -23,5 +23,6 @@ not create another model/tool loop.
 Inspect is dispatched after workspace resolution but before application config,
 provider, MCP, skill, hook, or model initialization. Reading a portable run
 therefore does not require usable provider credentials or configuration. The
-interactive path embeds fmtview through `fmtview::view`; Fiasco implements only
-the backend-neutral record timeline and command selection.
+interactive path embeds fmtview through `fmtview::view` and delegates physical
+newline paging and follow refresh to fmtview-core's generic file timeline.
+Fiasco adds only run routing, terminal-state mapping, and command selection.

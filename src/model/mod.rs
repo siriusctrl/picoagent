@@ -210,21 +210,9 @@ impl Message {
                 "assistant messages contain only text, tool calls, or provider items"
             ),
             Role::Tool => {
-                let [
-                    MessageContent::ToolResult {
-                        call_id, metadata, ..
-                    },
-                ] = self.content.as_slice()
-                else {
+                let [MessageContent::ToolResult { .. }] = self.content.as_slice() else {
                     bail!("tool messages require exactly one tool result");
                 };
-                if let Some(artifact) = &metadata.artifact {
-                    ensure!(
-                        artifact.call_id == *call_id,
-                        "result artifact call id `{}` does not match `{call_id}`",
-                        artifact.call_id
-                    );
-                }
             }
         }
         Ok(())

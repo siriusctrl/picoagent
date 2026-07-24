@@ -27,6 +27,8 @@ impl ListHandlesTool {
 #[serde(deny_unknown_fields)]
 struct ListHandlesArgs {
     #[serde(default)]
+    handles: Vec<String>,
+    #[serde(default)]
     include_closed: bool,
 }
 
@@ -40,7 +42,11 @@ impl Tool for ListHandlesTool {
         let args: ListHandlesArgs =
             serde_json::from_value(arguments).context("invalid list_handles arguments")?;
         Ok(RawToolOutput::text(serde_json::to_string(
-            &handle_snapshots(self.handles.list_handles(args.include_closed).await?),
+            &handle_snapshots(
+                self.handles
+                    .snapshots(&args.handles, args.include_closed)
+                    .await?,
+            ),
         )?))
     }
 }

@@ -6,7 +6,6 @@ use ulid::Ulid;
 use crate::{
     agent::runner::RunRequest,
     events::{RuntimeEvent, RuntimeEventKind},
-    prompts::agent_prompts,
     tools::{RawToolOutput, ToolContext},
 };
 
@@ -43,8 +42,6 @@ impl RuntimeHandleManager {
             name.clone(),
             prompt,
             self.parent_run_id.clone(),
-            self.parent_depth + 1,
-            agent_prompts().general_task.clone(),
             self.remaining_delegation_depth.saturating_sub(1),
         );
         self.runner.prepare_run(&child_request, &handle).await?;
@@ -136,12 +133,9 @@ impl RuntimeHandleManager {
         if record.state != HandleState::Idle || record.followups.is_empty() {
             return Ok(false);
         }
-        for input in &record.followups {
-            self.store
-                .enqueue_user_input_with_id(handle, input.id.clone(), input.message.clone())
-                .await?;
+        for input in std::mem::take(&mut record.followups) {
+            record.mailbox.queue(input).await;
         }
-        record.followups.clear();
         record.state = HandleState::Queued;
         record.generation = record.generation.saturating_add(1);
         let generation = record.generation;
@@ -186,13 +180,19 @@ impl RuntimeHandleManager {
                     return;
                 }
             };
-            let Some(name) = manager.begin_agent_activity(&handle, generation).await else {
+            let Some((name, mailbox)) = manager.begin_agent_activity(&handle, generation).await
+            else {
                 return;
             };
             manager.emit_agent_started(&handle, &name).await;
             let outcome = manager
                 .runner
-                .run_child_activity(handle.clone(), &manager.parent_run_id, cleanup_done)
+                .run_child_activity(
+                    handle.clone(),
+                    &manager.parent_run_id,
+                    mailbox,
+                    cleanup_done,
+                )
                 .await;
             drop(permit);
             match outcome {
@@ -205,7 +205,9 @@ impl RuntimeHandleManager {
                     let raw = RawToolOutput::text(result.final_output);
                     match manager.artifacts.persist_output(&context, raw).await {
                         Ok(output) => {
-                            if let Some(artifact) = &output.artifact {
+                            if let Some((artifact, bytes)) =
+                                output.artifact.as_ref().zip(output.artifact_bytes())
+                            {
                                 let _ = manager
                                     .events
                                     .emit(&RuntimeEvent::new(
@@ -213,7 +215,7 @@ impl RuntimeHandleManager {
                                         RuntimeEventKind::ArtifactCreated {
                                             call_id: context.call_id,
                                             path: artifact.path.clone(),
-                                            bytes: artifact.bytes,
+                                            bytes,
                                         },
                                     ))
                                     .await;
@@ -252,7 +254,11 @@ impl RuntimeHandleManager {
         let _ = start.send(());
     }
 
-    async fn begin_agent_activity(&self, handle: &str, generation: u64) -> Option<String> {
+    async fn begin_agent_activity(
+        &self,
+        handle: &str,
+        generation: u64,
+    ) -> Option<(String, super::AgentMailbox)> {
         let mut records = self.records.lock().await;
         let record = records.get_mut(handle)?;
         if record.kind != HandleKind::Agent
@@ -261,11 +267,13 @@ impl RuntimeHandleManager {
         {
             return None;
         }
+        record.mailbox.open().await;
         record.state = HandleState::Running;
         let name = record.name.clone();
+        let mailbox = record.mailbox.clone();
         drop(records);
         self.signal_activity();
-        Some(name)
+        Some((name, mailbox))
     }
 
     async fn emit_agent_started(&self, handle: &str, name: &str) {

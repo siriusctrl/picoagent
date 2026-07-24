@@ -8,6 +8,13 @@
 ADR 0044 keeps the fmtview ownership boundary but replaces checkpoint-aware
 visibility with individual newline-complete messages.
 
+ADR 0045 later delegates the remaining generic physical-file paging and refresh
+implementation to fmtview-core. Fiasco retains only run routing and terminal
+boundary mapping on the interactive path.
+
+ADR 0047 later reduces durable run lifetime to `open | completed | closed`.
+Only completed and closed runs map the viewer's live boundary to terminal.
+
 ## Context
 
 Operators need to inspect both completed and actively growing run transcripts.

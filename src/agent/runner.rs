@@ -11,7 +11,7 @@ use crate::{
     memory::MemoryPaths,
     model::{Message, MessageContent, ModelProvider, ModelRequest, Role},
     prompts::agent_prompts,
-    storage::{RunDirStore, RunLease, RunState},
+    storage::{RunDirStore, RunLease},
     tools::{RunToolAssembly, ToolRegistry},
     trajectory::LocalTrajectoryReader,
 };
@@ -22,7 +22,9 @@ use super::{
         estimate_request_input_tokens, maybe_compact,
     },
     context::{append_active_handle_reminder, build_runtime_reminder},
-    handle::{PendingHandleBoundary, RuntimeHandleManager, RuntimeHandleManagerConfig},
+    handle::{
+        AgentMailbox, PendingHandleBoundary, RuntimeHandleManager, RuntimeHandleManagerConfig,
+    },
     tool_execution::DirectToolRuntime,
 };
 
@@ -48,6 +50,11 @@ pub struct AgentRunner {
     extra_events: SharedEventSink,
     options: RunnerOptions,
     model_slots: Arc<tokio::sync::Semaphore>,
+}
+
+struct RunInvocation {
+    mode: RunMode,
+    mailbox: Option<AgentMailbox>,
 }
 
 impl AgentRunner {
@@ -80,16 +87,14 @@ impl AgentRunner {
         request: RunRequest,
         run_id: String,
         events: SharedEventSink,
-        mode: RunMode,
+        invocation: RunInvocation,
         cancellation_lease: RunLease,
         cleanup_done: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<RunResult> {
+        let RunInvocation { mode, mailbox } = invocation;
         let plan = self.plan(&request);
         let model = plan.model.clone();
         let max_output_tokens = plan.max_output_tokens;
-        if request.parent_run_id.is_none() {
-            self.store.update_state(&run_id, RunState::Running).await?;
-        }
         let (mut trajectory, needs_initial_message) = match mode {
             RunMode::New => {
                 events
@@ -103,7 +108,7 @@ impl AgentRunner {
                 self.hooks
                     .run(
                         HookEvent::RunStart,
-                        json!({ "run_id": run_id, "prompt": request.prompt, "depth": request.depth }),
+                        json!({ "run_id": run_id, "prompt": request.prompt }),
                         &self.workspace,
                     )
                     .await?;
@@ -131,7 +136,6 @@ impl AgentRunner {
                 &plan.modalities,
                 &self.skill_catalog,
                 self.memory.as_ref(),
-                request.additional_instructions.as_deref(),
                 request.profile,
                 plan.remaining_delegation_depth,
             )?;
@@ -166,7 +170,6 @@ impl AgentRunner {
             store: self.store.clone(),
             workspace: self.workspace.clone(),
             parent_run_id: run_id.clone(),
-            parent_depth: request.depth,
             remaining_delegation_depth: plan.remaining_delegation_depth,
             events: events.clone(),
             max_parallel_subagents: self.options.max_parallel_subagents,
@@ -183,7 +186,6 @@ impl AgentRunner {
             .verify_tool_schema(&run_id, &tool_schema_sha256)
             .await?;
         if mode == RunMode::RootRestart {
-            self.store.clear_pending_inputs(&run_id).await?;
             append_restart_reminder(&self.store, &run_id, &mut trajectory).await?;
         }
         let mut handle_guard = handles.cancellation_guard(cancellation_lease, cleanup_done);
@@ -204,9 +206,11 @@ impl AgentRunner {
                     record.compaction.is_none() && record.message.role == Role::Assistant
                 })
                 .count();
-            if mode == RunMode::ChildActivity {
-                self.store
-                    .append_pending_inputs(&run_id, &mut trajectory)
+            if mode == RunMode::ChildActivity
+                && let Some(mailbox) = &mailbox
+            {
+                mailbox
+                    .append_messages(&self.store, &run_id, &mut trajectory)
                     .await?;
             }
 
@@ -222,10 +226,14 @@ impl AgentRunner {
                 let added =
                     append_handle_results(&self.store, &run_id, &mut trajectory, &ready).await?;
                 context_tokens = context_tokens.saturating_add(added);
-                let steered = self
-                    .store
-                    .append_pending_inputs(&run_id, &mut trajectory)
-                    .await?;
+                let steered = match &mailbox {
+                    Some(mailbox) => {
+                        mailbox
+                            .append_messages(&self.store, &run_id, &mut trajectory)
+                            .await?
+                    }
+                    None => Vec::new(),
+                };
                 context_tokens = steered.iter().fold(context_tokens, |total, record| {
                     total.saturating_add(estimate_message_tokens(&record.message))
                 });
@@ -316,10 +324,14 @@ impl AgentRunner {
                         .append_message(&run_id, &assistant_message)
                         .await?;
                     trajectory.push(assistant_record);
-                    let steered = self
-                        .store
-                        .append_pending_inputs(&run_id, &mut trajectory)
-                        .await?;
+                    let steered = match &mailbox {
+                        Some(mailbox) => {
+                            mailbox
+                                .finish_boundary(&self.store, &run_id, &mut trajectory)
+                                .await?
+                        }
+                        None => Vec::new(),
+                    };
                     if !steered.is_empty() {
                         context_tokens = steered.iter().fold(context_tokens, |total, record| {
                             total.saturating_add(estimate_message_tokens(&record.message))
@@ -345,19 +357,6 @@ impl AgentRunner {
                             continue;
                         }
                         PendingHandleBoundary::None => {}
-                    }
-                    let input_lock = self.store.pending_input_lock();
-                    let _input_guard = input_lock.lock().await;
-                    let steered = self
-                        .store
-                        .append_pending_inputs_locked(&run_id, &mut trajectory)
-                        .await?;
-                    if !steered.is_empty() {
-                        context_tokens = steered.iter().fold(context_tokens, |total, record| {
-                            total.saturating_add(estimate_message_tokens(&record.message))
-                        });
-                        step = step.saturating_add(1);
-                        continue;
                     }
                     self.finish_success(&run_id, &final_text, events.clone())
                         .await?;

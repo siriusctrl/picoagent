@@ -16,7 +16,6 @@ use crate::{
     model::ModelModality,
 };
 
-mod input;
 mod message_log;
 #[cfg(test)]
 mod tests;
@@ -25,18 +24,15 @@ mod trajectory;
 pub use message_log::TranscriptTimeline;
 
 pub const MESSAGE_FORMAT: &str = "fiasco-message";
-const RUN_RECORD_VERSION: u32 = 14;
+const RUN_RECORD_VERSION: u32 = 15;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
-    Queued,
-    Running,
-    /// A reusable delegated agent thread remains open for more activity.
+    /// The run remains available for its first or a later activity.
     Open,
+    /// A root run returned its final result.
     Completed,
-    Failed,
-    Cancelled,
     /// A reusable delegated agent was explicitly closed.
     Closed,
 }
@@ -52,11 +48,9 @@ pub struct RunRecord {
     pub prompt: String,
     /// Stable agent capability profile used to rebuild the same run on resume.
     pub profile: String,
-    pub depth: usize,
     /// Delegation capacity frozen when this run is created. The delegate
     /// schema remains present at zero; execution then returns a local error.
     pub remaining_delegation_depth: usize,
-    pub additional_instructions: Option<String>,
     pub tool_schema_sha256: String,
     pub provider: String,
     /// Non-secret identity of provider settings that affect wire compatibility.
@@ -91,12 +85,10 @@ impl RunRecord {
             id: id.into(),
             name: name.into(),
             parent_run_id,
-            state: RunState::Queued,
+            state: RunState::Open,
             prompt: prompt.into(),
             profile: "root".to_owned(),
-            depth: 0,
             remaining_delegation_depth: 0,
-            additional_instructions: None,
             tool_schema_sha256: String::new(),
             provider: provider.into(),
             provider_resume_fingerprint: String::new(),
@@ -112,13 +104,9 @@ impl RunRecord {
     pub fn with_execution_context(
         mut self,
         profile: impl Into<String>,
-        depth: usize,
-        additional_instructions: Option<String>,
         remaining_delegation_depth: usize,
     ) -> Self {
         self.profile = profile.into();
-        self.depth = depth;
-        self.additional_instructions = additional_instructions;
         self.remaining_delegation_depth = remaining_delegation_depth;
         self
     }
@@ -154,7 +142,6 @@ pub struct RunPaths {
     pub execution_lock: PathBuf,
     pub metadata: PathBuf,
     pub messages: PathBuf,
-    pub pending_inputs: PathBuf,
     pub events: PathBuf,
     pub final_output: PathBuf,
     pub artifacts: PathBuf,
@@ -164,7 +151,6 @@ pub struct RunPaths {
 pub struct RunDirStore {
     workspace: PathBuf,
     write_lock: Arc<Mutex<HashMap<String, MessageCursor>>>,
-    input_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,7 +163,6 @@ impl RunDirStore {
         Self {
             workspace: workspace.into(),
             write_lock: Arc::new(Mutex::new(HashMap::new())),
-            input_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -195,7 +180,6 @@ impl RunDirStore {
             execution_lock: directory.join(".run.lock"),
             metadata: directory.join("run.json"),
             messages: directory.join("messages.jsonl"),
-            pending_inputs: directory.join("pending_inputs.jsonl"),
             events: directory.join("events.jsonl"),
             final_output: directory.join("final.md"),
             artifacts: directory.join("artifacts"),
@@ -373,11 +357,9 @@ pub(super) fn validate_loaded_run(run: &RunRecord) -> Result<()> {
 fn validate_run_parentage(run: &RunRecord) -> Result<()> {
     match (run.profile.as_str(), run.parent_run_id.as_ref()) {
         ("root", None) => Ok(()),
-        ("general_task_delegating" | "general_task_leaf", Some(_)) => Ok(()),
+        ("general_task", Some(_)) => Ok(()),
         ("root", Some(_)) => bail!("root run cannot have a parent"),
-        ("general_task_delegating" | "general_task_leaf", None) => {
-            bail!("GeneralTask run must have a parent")
-        }
+        ("general_task", None) => bail!("GeneralTask run must have a parent"),
         (profile, _) => bail!("unknown run profile `{profile}`"),
     }
 }

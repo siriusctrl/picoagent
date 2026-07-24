@@ -6,12 +6,13 @@ use ulid::Ulid;
 
 use crate::model::ModelModality;
 use crate::{
+    agent::handle::AgentMailbox,
     events::{CompositeEventSink, RuntimeEvent, RuntimeEventKind, SharedEventSink},
     hooks::HookEvent,
     storage::{RunLease, RunRecord, RunState},
 };
 
-use super::{AgentRunner, RunRequest, RunResult};
+use super::{AgentRunner, RunInvocation, RunRequest, RunResult};
 use crate::agent::types::RunProfile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,14 +44,14 @@ impl AgentRunner {
         self.prepare_run(&request, &run_id).await?;
 
         let lease = self.store.acquire_run_lease(&run_id).await?;
-        self.run_with_mode(request, run_id, RunMode::New, lease.clone(), None)
+        self.run_with_mode(request, run_id, RunMode::New, lease.clone(), None, None)
             .await
     }
 
-    /// Persist a queued run before its owner advertises the new agent handle.
+    /// Persist an open run before its owner advertises the new agent handle.
     pub(crate) async fn prepare_run(&self, request: &RunRequest, run_id: &str) -> Result<()> {
         let plan = self.plan(request);
-        let mut record = RunRecord::new(
+        let record = RunRecord::new(
             run_id,
             &request.name,
             &request.prompt,
@@ -59,17 +60,9 @@ impl AgentRunner {
             self.workspace.clone(),
             request.parent_run_id.clone(),
         )
-        .with_execution_context(
-            request.profile.as_str(),
-            request.depth,
-            request.additional_instructions.clone(),
-            plan.remaining_delegation_depth,
-        )
+        .with_execution_context(request.profile.as_str(), plan.remaining_delegation_depth)
         .with_model_modalities(plan.modalities.clone())
         .with_provider_resume_fingerprint(self.provider.resume_fingerprint());
-        if request.parent_run_id.is_some() {
-            record.state = RunState::Open;
-        }
         self.store.create_run(&record).await?;
         Ok(())
     }
@@ -80,6 +73,7 @@ impl AgentRunner {
         run_id: String,
         mode: RunMode,
         cancellation_lease: RunLease,
+        mailbox: Option<AgentMailbox>,
         cleanup_done: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<RunResult> {
         let is_child = request.parent_run_id.is_some();
@@ -92,15 +86,12 @@ impl AgentRunner {
                 request,
                 run_id.clone(),
                 events.clone(),
-                mode,
+                RunInvocation { mode, mailbox },
                 cancellation_lease,
                 cleanup_done,
             )
             .await;
         if let Err(error) = &outcome {
-            if !is_child {
-                let _ = self.store.update_state(&run_id, RunState::Failed).await;
-            }
             let kind = if is_child {
                 RuntimeEventKind::RunActivityFailed {
                     error: format!("{error:#}"),
@@ -118,7 +109,7 @@ impl AgentRunner {
     pub(super) fn plan(&self, request: &RunRequest) -> RunPlan {
         let (profile_model, max_output_tokens) = match request.profile {
             RunProfile::Root => (self.model.clone(), self.options.max_output_tokens),
-            RunProfile::GeneralTaskDelegating | RunProfile::GeneralTaskLeaf => (
+            RunProfile::GeneralTask => (
                 self.options
                     .general_task
                     .model

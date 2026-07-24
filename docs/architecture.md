@@ -112,9 +112,8 @@ accepted resolution is invalid until its direct dependencies are resolved.
 Since one assistant tool-call batch is concurrent, dependent `write`,
 `graph_list`, and `delegate` stages execute in separate turns.
 
-Root and the persisted delegating/leaf GeneralTask profiles have one identical
-built-in capability set. Both GeneralTask profiles appear to the model as the
-common GeneralTask role. Each normal run registers `history_search` and
+The persisted Root and GeneralTask profiles have one identical built-in
+capability set. Each normal run registers `history_search` and
 `history_read` before its first call regardless of whether automatic compaction
 is configured, plus `delegate` and all handle controls. Remaining delegation
 depth is persisted, shown in the runtime reminder, and checked by `delegate`
@@ -148,8 +147,7 @@ runtime-handle results, and opaque provider continuation items therefore need
 no second representation or reconstruction layout. Compatible Chat reasoning
 uses the sibling field because that is the exact replayable payload shape;
 Responses reasoning remains an ordered opaque item whose provider is already
-fixed by the run. Optional
-pending-input idempotency and compaction state live under `_fiasco` on the same
+fixed by the run. Optional compaction state lives under `_fiasco` on the same
 record. The one-based sequence is derived from the required `m<N>` ref and line
 position rather than stored again.
 
@@ -192,34 +190,30 @@ performs the separate trailing tool-call/result check.
 
 ```text
 inspect command
-  -> TranscriptTimeline (Fiasco storage/newlines/run state)
-     -> fmtview::view::RecordTimeline
-        -> fmtview (tail loading/search/navigation/render/terminal lifecycle)
+  -> TranscriptTimeline (Fiasco run routing/terminal state)
+     -> fmtview-core::FileRecordTimeline (newlines/tail paging/follow refresh)
+        -> fmtview (search/navigation/render/terminal lifecycle)
 ```
 
 The command is selected before application config and provider composition.
 Summary and exact NDJSON paths therefore need only the run directory, and the
 interactive path constructs no provider, MCP client, hooks, tools, or runner.
-Fiasco depends on the released `fmtview` facade and does not depend directly on
-`fmtview-core` or own ratatui/crossterm behavior.
+Fiasco uses the released `fmtview` facade for embedding and the same-version
+`fmtview-core` `FileRecordTimeline` for the physical growing-file source. It
+does not own ratatui/crossterm behavior.
 
-The timeline opens at the last complete line by scanning backward from EOF. It
-loads individual older and newer messages in sequence and may therefore display
-a prefix of a tool batch. One large message may exceed a requested byte budget
-when it is the first record in a batch. Prefix probes are bounded. The initial
-tail path does not index or validate every earlier message, so a large history
-can show its first screen without a forward scan.
+The generic file timeline opens at the last complete line without indexing the
+whole history and loads individual older and newer records within bounded
+budgets. It hides a torn physical tail and owns refresh/reset behavior for a
+growing or replaced file. The Fiasco adapter does not parse message refs,
+validate provider conversation semantics, or maintain a second physical-file
+state machine. Those checks remain on the writer/resume trajectory path. An
+inspector encountering an unusual concurrent rewrite may be reopened;
+inspection is observational and is not a recovery authority.
 
-Follow refresh retains a line decoder, torn-line buffer, and scanned suffix
-cursor. An unchanged large torn line therefore costs only bounded
-head/middle/tail probes per refresh. Rewriting that suffix rebuilds the tracker
-from the unchanged visible boundary without changing the epoch. Reads from a
-concurrently shrinking or rewritten suffix are retried from a clean working
-tracker and published only after one coherent file observation. Truncating a
-visible prefix, replacing the file identity, or changing bounded prefix probes
-starts a new epoch so fmtview discards old record identities.
-Queued, running, and idle runs report a live boundary; completed, failed,
-cancelled, and closed runs report a terminal boundary.
+Open runs report a live boundary; completed and closed runs report a terminal
+boundary. Process-local activity status and failure events do not alter this
+durable lifetime.
 
 Interactive snapshot and follow modes are TTY-only. Redirected stdout defaults
 to exact committed NDJSON, preserving every raw record byte and LF without
@@ -232,14 +226,17 @@ after a complete record has synced. Multiple independent writers for one run
 are outside the storage contract; the execution lease prevents that state in
 the runtime.
 
-The persisted run state is intentionally coarse; a failed or process-abandoned
-run may re-enter `running` through the explicit resume command:
+The persisted run lifetime is intentionally coarse:
 
 ```text
-queued -> running -> completed
-                  `-> failed
-failed/running -> running  # explicit resume, if not already owned
+new root/child -> open
+open root      -> completed  # successful final result
+open child     -> closed     # explicit close
 ```
+
+The execution lease identifies an active writer. Lifecycle events record
+activity and root failures without turning them into another durable state.
+An open root can be resumed explicitly when it is not already leased.
 
 The loop injects newly completed runtime-handle results, optionally compacts an
 old completed-message prefix, and requests model output. A final assistant
@@ -273,15 +270,17 @@ and continues from there. If the final assistant requested tools and its
 ordered result sequence is incomplete, the assistant and existing result prefix
 are discarded. A compaction request without a following state remains inert.
 The root receives a warning about possible workspace or external side effects;
-the call is never automatically replayed. Root restart also clears pending input
-and reports that the prior process and its asynchronous work stopped.
+the call is never automatically replayed. Root restart reports that the prior
+process, its mailbox input, and its asynchronous work stopped.
 
 ### Artifact storage
 
 Large foreground tool outputs are never discarded and do not enter the live
-context in full. The store writes the complete bytes, records immutable
-metadata, and gives the model a bounded beginning/end preview and a relative
-path it can inspect in pages. Terminal background output uses the same policy:
+context in full. The store writes the complete bytes and gives the model a
+bounded beginning/end preview plus a relative run-local attachment path. The
+path and media type are persisted with the result; later reads observe the
+file's current contents without rewriting the generation-time preview.
+Terminal background output uses the same policy:
 small UTF-8 output stays inline and larger or binary output keeps the bounded
 artifact envelope. Each result is limited independently; earlier output and
 compaction do not change later representation. See
@@ -330,10 +329,11 @@ access.
 
 For linked local artifacts, the query reads the structured `ArtifactRef` from
 the completed message content. It does not parse the
-model-facing preview prose or guess from a call id. The reader verifies the
-artifact with a bounded-memory stream and invokes `rg` with bounded output. It
-stops after the requested newest matches plus one, avoiding whole-artifact heap
-loads and unnecessary older scans.
+model-facing preview prose or guess from a call id. The reader canonicalizes
+the path, requires it to remain a regular file inside the current run's artifact
+directory, reads its current filesystem length, and invokes `rg` with bounded
+output. It stops after the requested newest matches plus one, avoiding
+whole-artifact heap loads and unnecessary older scans.
 
 The launch local message source still materializes one run's trajectory JSONL
 per history query. Artifact contents remain streamed and bounded. If run sizes
@@ -375,10 +375,11 @@ command. See [memory.md](memory.md).
 ### Agent orchestration
 
 A subagent is a child invocation of the same `AgentRunner`. It has its own run
-directory and transcript, a `parent_run_id`, and a depth. The launch runtime runs
-children in-process, shares the parent workspace and base tools, and caps depth
-at one. “Shared workspace” means parent and child operate on the same working
-project files; it is not a special second workspace abstraction. Child
+directory and transcript, a `parent_run_id`, and exact remaining delegation
+depth. The launch runtime runs children in-process, shares the parent workspace
+and base tools, and decrements that remaining capacity for each child.
+“Shared workspace” means parent and child operate on the same working project
+files; it is not a special second workspace abstraction. Child
 transcripts stay out of the parent context; only bounded, sequenced activity
 results and artifact references return to the parent.
 
@@ -394,10 +395,11 @@ message correlated by that handle.
 
 `delegate` starts a reusable GeneralTask agent immediately and returns its
 child run id as the handle. `list_handles` discovers durable direct children
-and overlays current-process tool jobs and activity state. `status` inspects
-selected handles, while `wait` uses wait-any semantics: it returns when any
-selected handle has a result or status change, or when its bounded interval
-expires. `inspect`, `send_message`, and `close` operate only on agents. Inspect
+and overlays current-process tool jobs and activity state. With named handles
+it returns their current snapshots; `include_closed` extends all-handle
+discovery. `wait` uses wait-any semantics: it returns when any selected handle
+has a result or status change, or when its bounded interval expires. `inspect`,
+`send_message`, and `close` operate only on agents. Inspect
 projects a bounded page of the child's durable messages. Send queues a normal
 user message with an explicit mode: `steer` makes it available after the
 current complete tool batch, while `followup` waits for the current activity
@@ -412,14 +414,13 @@ task-specific context. The parent conversation, compaction state, and artifact
 references are not copied. A child uses the configured GeneralTask model and
 resumes solely from its own run messages through the same `AgentRunner` path.
 
-There is no durable parent-side handle index or activity record. On root
-restart, tool jobs, followups, active work, pending parent input, and
+There is no durable parent-side handle index, activity record, or pending-input
+log. On root restart, tool jobs, followups, active work, mailbox input, and
 undelivered output from the previous process are discarded. The root receives
 an unconditional crash reminder and decides what to retry. `list_handles`
 finds child runs whose `parent_run_id` matches the current run without launching
-them. The first explicit `send_message` to an old open child clears stale child
-pending input, adds a child crash reminder, and starts a fresh activity from
-that child's complete transcript.
+them. The first explicit `send_message` to an old open child adds a child crash
+reminder and starts a fresh activity from that child's complete transcript.
 
 This recovery path assumes the runtime supervisor, cgroup, or container killed
 the previous fiasco process and all locally managed descendants before
@@ -437,19 +438,21 @@ prompt and one sorted, frozen tool-schema set. The history schemas are included
 from the first call; automatic compaction never mutates this prefix.
 Feature-specific workflow stays with the corresponding schema instead of the
 shared system prose. Project instructions, skill metadata, memory paths, and
-delegated instructions form a deterministic runtime reminder at the start of
-each run. That persisted reminder is frozen for the run. Optional startup
-schemas are selected before the run starts. Agent role and remaining delegation
-depth change only the initial runtime-reminder tail. Current-process
-active-handle state is a non-durable synthetic reminder in normal requests,
-while a compaction request changes only the message tail.
+stable GeneralTask guidance form a deterministic runtime reminder at the start
+of each run. The delegated task text follows as ordinary user content; the
+persisted initial message freezes both. Optional startup schemas are selected
+before the run starts. Agent role and remaining delegation depth change only
+the initial runtime-reminder tail. Current-process active-handle state is a
+non-durable synthetic reminder in normal requests, while a compaction request
+changes only the message tail.
 
 The durable trajectory remains append-only; before a normal model call, an
 optional assistant compacted-state message can replace its older active prefix
-while retaining the exact recent suffix. Large outputs become immutable
-artifacts with bounded previews. These choices bound request growth while
-keeping raw evidence inspectable and making provider KV-cache reuse possible
-without making cache behavior part of the core API.
+while retaining the exact recent suffix. Large outputs become mutable run-local
+attachments with bounded generation-time previews. These choices bound request
+growth while keeping current attachment evidence inspectable and making
+provider KV-cache reuse possible without making cache behavior part of the core
+API.
 
 ### Hooks
 

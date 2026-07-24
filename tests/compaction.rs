@@ -255,7 +255,7 @@ async fn estimated_context_window_applies_before_the_first_normal_request() {
     let run = only_run_id(&workspace).await;
     assert_eq!(
         store.load_run(&run).await.unwrap().state,
-        fiasco::storage::RunState::Failed
+        fiasco::storage::RunState::Open
     );
 }
 

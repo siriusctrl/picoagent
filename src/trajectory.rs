@@ -69,9 +69,6 @@ pub struct TrajectoryMessage {
     pub seq: u64,
     pub created_at: DateTime<Utc>,
     pub message: Message,
-    /// Durable idempotency key for a queued steering input, when applicable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pending_input_id: Option<String>,
     /// Local context-management metadata stored under `_fiasco` on this message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<CompactionMessage>,

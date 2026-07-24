@@ -22,7 +22,7 @@ itself remains headless.
   `read` supports bounded UTF-8 text and image attachments for vision-capable
   configured models
 - exact-first, atomic multi-edit writes with CRLF/BOM preservation
-- versioned artifact spill for large tool results with bounded head/tail previews
+- run-local artifact spill for large tool results with bounded head/tail previews
 - optional local context compaction recorded as ordinary messages, with
   read-only regex history retrieval
 - Agent Skills discovery with progressive `SKILL.md` loading
@@ -73,7 +73,6 @@ Runtime output is stored beneath the current project:
 .fiasco/runs/<run-id>/
   run.json
   messages.jsonl
-  pending_inputs.jsonl # created when a running child is steered
   events.jsonl
   final.md
   artifacts/
@@ -112,13 +111,12 @@ Every complete newline is visible to inspectors, including a possible prefix of
 the final assistant/tool exchange. Before resume, Fiasco matches the trailing
 assistant's tool calls against ordered results and discards that exchange if
 any result is missing. It then appends a user/runtime reminder that the process
-stopped and workspace or external side effects may already have occurred. It does not
-restore ordinary asynchronous tool jobs, active child work, pending input, or
-undelivered results. Existing child threads keep their complete transcripts and
-remain discoverable through `list_handles`; an explicit `send_message` clears
-that child's stale pending input, adds a crash reminder, and starts a new
-activity. Resume the parent run rather than invoking `fiasco resume` on a child
-id directly.
+stopped and workspace or external side effects may already have occurred. It
+does not restore ordinary asynchronous tool jobs, active child work,
+process-local input, or undelivered results. Existing child threads keep their
+complete transcripts and remain discoverable through `list_handles`; an
+explicit `send_message` adds a crash reminder and starts a new activity. Resume
+the parent run rather than invoking `fiasco resume` on a child id directly.
 
 Before resume, the process supervisor, cgroup, or container must have killed
 the previous fiasco process and all locally managed descendants. Remote
@@ -147,8 +145,8 @@ request.
 short `ref` (`m1`, `m2`, ...), `created_at`, `role`, and typed `content` blocks.
 Those blocks are the exact provider-neutral messages replayed by the runner, so
 tool failures, artifact refs, images, reasoning, and opaque provider
-continuation items need no sidecar or reconstruction layout. Optional steering
-and compaction classification live under `_fiasco` on the same line. The
+continuation items need no sidecar or reconstruction layout. Optional
+compaction classification lives under `_fiasco` on the same line. The
 sequence is derived from `ref` and the line position rather than duplicated.
 
 The single process holding the run execution lease is the only writer; any
@@ -160,12 +158,10 @@ trailing tool exchange before resuming appends. `run.json` declares
 freezes the stored profile plus remaining delegation depth. Compaction never
 rewrites or deletes committed trajectory records.
 
-The interactive inspector delegates terminal lifecycle, JSON/chat rendering,
-search, navigation, wrap, and follow state to the released `fmtview` embedding
-facade. Fiasco owns only run lookup and a newline-aware `RecordTimeline`;
-the inspector never introduces ratatui/crossterm rendering or event-loop logic
-into the runtime. Tail discovery scans backward from EOF, older loads move by
-physical message lines, and refresh continues from the last complete newline.
+The interactive inspector delegates the physical growing-file timeline to
+fmtview-core and terminal lifecycle, JSON/chat rendering, search, navigation,
+wrap, and follow state to fmtview. Fiasco owns run lookup and terminal-state
+mapping; it does not duplicate newline paging or ratatui/crossterm behavior.
 
 Stable agent instructions are folded scalar values in the typed, compile-time
 `prompts/agents.yaml` registry. Every local model-facing tool adapter has a
@@ -439,13 +435,14 @@ Small results are returned inline. Large results are written in full under the
 current run and replaced in model context with:
 
 - beginning and ending previews
-- byte length and media type
-- SHA-256 digest
-- stable project-relative path
+- generation-time byte counts and media type
+- a project-relative run-local attachment path
 
 The model can inspect the complete output with bounded `read` calls or search it
-with `bash` plus `rg`. Every tool result is limited independently; a previous
-large result never suppresses a later small result. See
+with `bash` plus `rg`. The path names a mutable attachment: later inspection
+observes its current contents, while the original preview remains unchanged.
+Every tool result is limited independently; a previous large result never
+suppresses a later small result. See
 [artifacts.md](docs/artifacts.md).
 
 ## Tools And Background Work
@@ -463,8 +460,7 @@ The launch tool surface is intentionally small:
 - `history_read`: a bounded message window around a returned history ref
 - `load_skill`: progressive loading of a catalogued skill's full instructions
 - `delegate`: asynchronously start a reusable GeneralTask agent
-- `list_handles`: list current-process tool jobs and durable child agents
-- `status`: inspect selected runtime handles
+- `list_handles`: discover all visible handles or inspect selected handles
 - `wait`: wait until any selected handle changes or one interval expires
 - `inspect`: read a bounded window of a child agent's messages
 - `send_message`: send `steer` input now or queue `followup` input for later
@@ -473,12 +469,12 @@ The launch tool surface is intentionally small:
 - `web_search`: optional Brave-backed public web search
 
 Root and GeneralTask receive the same built-in schemas, including `delegate`
-and every runtime-handle control. Remaining delegation depth is frozen in run state and
-shown in the runtime reminder. At zero, `delegate` returns a local tool error
-without creating a child; its schema does not disappear. Memory adds paths to
-the reminder, not a tool schema. `web_search` and MCP tools depend on startup
-configuration. The resulting schemas are sorted and frozen before the run's
-first normal provider call.
+and every runtime-handle control. Remaining delegation depth is frozen in run
+state and shown in the runtime reminder. At zero, `delegate` returns a local
+tool error without creating a child; its schema does not disappear. Memory adds
+paths to the reminder, not a tool schema. `web_search` and MCP tools depend on
+startup configuration. The resulting schemas are sorted and frozen before the
+run's first normal provider call.
 
 `write` requires every edit target to identify one non-overlapping region in
 the original file. It tries exact matching first, then a conservative whole-line
@@ -510,9 +506,9 @@ The handle-control calls are intentionally small:
 
 ```text
 delegate({"name":"inspect_tests","prompt":"inspect the failing tests and report the cause"})
-status({"handles":[]})
 wait({"handles":["01J..."]})
 list_handles({"include_closed":false})
+list_handles({"handles":["01J..."]})
 inspect({"handle":"01J...","limit":6,"before_seq":42})
 send_message({"handle":"01J...","message":"check the failing test first","mode":"steer"})
 send_message({"handle":"01J...","message":"then compare the alternatives","mode":"followup"})
@@ -521,10 +517,12 @@ close({"handle":"01J..."})
 ```
 
 `wait` returns as soon as any selected handle has a result or status change,
-while its snapshot may still show other selected handles running. An empty
-`handles` list means all visible handles. `list_handles` returns all child
-agents owned by the current run plus current-process tool jobs, including idle
-reusable agents and optionally closed ones.
+while its snapshot may still show other selected handles running. An omitted
+or empty `handles` list means all visible handles. `list_handles`
+returns all child agents owned by the current run plus current-process tool
+jobs, including idle reusable agents and optionally closed ones. When handles
+are named, it returns their current snapshots; `include_closed` affects
+discovery rather than named lookup.
 `before_seq` is exclusive and optional; inspect returns `next_before_seq` when
 older messages exist.
 
@@ -588,16 +586,17 @@ transcripts remain in their own run directories. There is no parent-side
 persistent coordination record or recovery state machine. On restart,
 `list_handles` discovers direct child runs by parent id and presents every open
 thread as idle without launching it. The first explicit `send_message` reuses
-the child's complete transcript after discarding stale pending input and adding
-a crash reminder. Closed children stay closed. Tool jobs and undelivered
-activity outputs from the previous process are gone; the parent crash reminder
-leaves any retry decision to the model.
+the child's complete transcript after adding a crash reminder. Closed children
+stay closed. Tool jobs and undelivered activity outputs from the previous
+process are gone; the parent crash reminder leaves any retry decision to the
+model.
 
 The parent can inspect a child's latest messages (six by default), page
-backward by sequence, and queue steering while it runs. Steering is stored as
-an ordinary user message after the child's current assistant response and full
-tool-call batch, immediately before its next model request. It does not
-interrupt or discard in-flight tools.
+backward by sequence, and queue steering while it runs. Steering stays in the
+process-local mailbox until it is appended as an ordinary user message after
+the child's current assistant response and full tool-call batch, immediately
+before its next model request. It does not interrupt or discard in-flight
+tools.
 
 ## Long-Term Memory
 

@@ -5,15 +5,13 @@ use serde_json::{Value, json};
 
 use crate::{
     events::{RuntimeEvent, RuntimeEventKind},
-    model::openai_chat::project_chat_message,
+    model::{Message, MessageContent, Role, openai_chat::project_chat_message},
     storage::RunState,
 };
 
-use super::{
-    HandleKind, HandleRecord, HandleSnapshot, HandleState, PendingAgentInput, RuntimeHandleManager,
-};
+use super::{HandleKind, HandleRecord, HandleSnapshot, HandleState, RuntimeHandleManager};
 
-const AGENT_RESTART_REMINDER: &str = "The previous fiasco process stopped. This agent thread's incomplete trailing tool turn, prior activity, and pending input were discarded, but workspace or external side effects may already have occurred. Inspect current state before repeating operations.";
+const AGENT_RESTART_REMINDER: &str = "The previous fiasco process stopped. This agent thread's incomplete trailing tool turn, prior activity, and mailbox input were discarded, but workspace or external side effects may already have occurred. Inspect current state before repeating operations.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendMode {
@@ -31,7 +29,18 @@ impl SendMode {
 }
 
 impl RuntimeHandleManager {
-    pub async fn list_handles(&self, include_closed: bool) -> Result<Vec<HandleSnapshot>> {
+    pub async fn snapshots(
+        &self,
+        handles: &[String],
+        include_closed: bool,
+    ) -> Result<Vec<HandleSnapshot>> {
+        if !handles.is_empty() {
+            let mut snapshots = Vec::with_capacity(handles.len());
+            for handle in handles {
+                snapshots.push(self.snapshot_for_handle(handle).await?);
+            }
+            return Ok(snapshots);
+        }
         let mut snapshots = self
             .store
             .list_child_runs(&self.parent_run_id)
@@ -64,20 +73,9 @@ impl RuntimeHandleManager {
         Ok(snapshots.into_values().collect())
     }
 
-    pub async fn status(&self, handles: &[String]) -> Result<Vec<HandleSnapshot>> {
-        if handles.is_empty() {
-            return self.list_handles(false).await;
-        }
-        let mut snapshots = Vec::with_capacity(handles.len());
-        for handle in handles {
-            snapshots.push(self.snapshot_for_handle(handle).await?);
-        }
-        Ok(snapshots)
-    }
-
     pub async fn wait(&self, handles: &[String]) -> Result<Vec<HandleSnapshot>> {
         let mut activity = self.activity.subscribe();
-        let initial = self.status(handles).await?;
+        let initial = self.snapshots(handles, false).await?;
         if initial.is_empty()
             || initial.iter().any(|snapshot| !snapshot.status.is_active())
             || self.has_ready_output(handles).await
@@ -96,9 +94,9 @@ impl RuntimeHandleManager {
                     .await
                     .is_err()
             {
-                return self.status(handles).await;
+                return self.snapshots(handles, false).await;
             }
-            let current = self.status(handles).await?;
+            let current = self.snapshots(handles, false).await?;
             if current.is_empty()
                 || current.iter().any(|snapshot| !snapshot.status.is_active())
                 || self.has_ready_output(handles).await
@@ -174,23 +172,34 @@ impl RuntimeHandleManager {
             "agent handle `{handle}` is closed"
         );
         let accepted_as = match (record.state, mode) {
-            (HandleState::Queued | HandleState::Running, SendMode::Steer) => {
-                self.store
-                    .enqueue_user_input_with_id(handle, input_id.clone(), message)
-                    .await?;
+            (HandleState::Queued, SendMode::Steer) => {
+                record
+                    .mailbox
+                    .queue(Message::text(Role::User, message))
+                    .await;
                 "steered"
             }
+            (HandleState::Running, SendMode::Steer) => {
+                let message = Message::text(Role::User, message);
+                if record.mailbox.send(message.clone()).await {
+                    "steered"
+                } else {
+                    record.followups.push(message);
+                    "queued_followup"
+                }
+            }
             (HandleState::Queued | HandleState::Running, SendMode::Followup) => {
-                record.followups.push(PendingAgentInput {
-                    id: input_id.clone(),
-                    message,
-                });
+                record.followups.push(Message::text(Role::User, message));
                 "queued_followup"
             }
             (HandleState::Idle, _) => {
-                self.store
-                    .enqueue_user_input_with_id(handle, input_id.clone(), message)
-                    .await?;
+                for followup in std::mem::take(&mut record.followups) {
+                    record.mailbox.queue(followup).await;
+                }
+                record
+                    .mailbox
+                    .queue(Message::text(Role::User, message))
+                    .await;
                 record.state = HandleState::Queued;
                 record.generation = record.generation.saturating_add(1);
                 launch_generation = Some(record.generation);
@@ -203,7 +212,8 @@ impl RuntimeHandleManager {
         };
         let name = record.name.clone();
         let status = record.state;
-        self.events
+        if let Err(error) = self
+            .events
             .emit(&RuntimeEvent::new(
                 &self.parent_run_id,
                 RuntimeEventKind::AgentMessageQueued {
@@ -212,7 +222,14 @@ impl RuntimeHandleManager {
                     mode: mode.as_str().to_owned(),
                 },
             ))
-            .await?;
+            .await
+        {
+            tracing::warn!(
+                handle,
+                error = %format!("{error:#}"),
+                "record accepted agent message event"
+            );
+        }
         if let Some(generation) = launch_generation {
             self.launch_agent_activity(handle.to_owned(), generation);
         }
@@ -228,6 +245,7 @@ impl RuntimeHandleManager {
     }
 
     pub async fn stop(&self, handle: &str) -> Result<HandleSnapshot> {
+        let _control_guard = self.destructive_control_lock.lock().await;
         let kind = self
             .records
             .lock()
@@ -254,7 +272,7 @@ impl RuntimeHandleManager {
     }
 
     pub async fn close(&self, handle: &str) -> Result<HandleSnapshot> {
-        let _close_guard = self.close_lock.lock().await;
+        let _control_guard = self.destructive_control_lock.lock().await;
         let child = self.load_child_run(handle).await?;
         if child.state == RunState::Closed {
             return Ok(HandleSnapshot {
@@ -278,6 +296,7 @@ impl RuntimeHandleManager {
             let active_generation = record.state.is_active().then_some(record.generation);
             record.state = HandleState::Closed;
             record.followups.clear();
+            record.mailbox.clear().await;
             (record.snapshot(handle), active_generation)
         };
         self.signal_activity();
@@ -287,7 +306,6 @@ impl RuntimeHandleManager {
             tracked.abort();
             tracked.wait().await;
         }
-        self.store.clear_pending_inputs(handle).await?;
         self.store.update_state(handle, RunState::Closed).await?;
         self.events
             .emit(&RuntimeEvent::new(
@@ -314,17 +332,18 @@ impl RuntimeHandleManager {
             child.state != RunState::Closed,
             "agent handle `{handle}` is closed"
         );
-        self.store.clear_pending_inputs(handle).await?;
-        self.store
-            .enqueue_runtime_input_with_id(
-                handle,
-                format!("restart-{}", ulid::Ulid::new()),
-                AGENT_RESTART_REMINDER.to_owned(),
-            )
-            .await?;
-        records
+        let record = records
             .entry(handle.to_owned())
             .or_insert_with(|| HandleRecord::agent(child.name));
+        record
+            .mailbox
+            .queue(Message::new(
+                Role::User,
+                vec![MessageContent::RuntimeReminder {
+                    text: AGENT_RESTART_REMINDER.to_owned(),
+                }],
+            ))
+            .await;
         drop(records);
         self.signal_activity();
         Ok(())

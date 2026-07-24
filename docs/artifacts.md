@@ -1,134 +1,124 @@
 # Artifact Contract
 
 Tool output is part of the execution record, even when it is too large for the
-model context. Fiasco therefore separates the complete artifact from the
-bounded model-facing envelope.
+model context. Fiasco therefore stores the complete output as a run-local
+attachment and keeps only a bounded envelope in the originating message.
 
-## Location
+## Location And Reference
 
 ```text
 .fiasco/runs/<run-id>/artifacts/
-  <tool-call-id>-<sha256-prefix>.<extension>
-  <tool-call-id>-<sha256-prefix>.artifact.json
+  <tool-call-id>-<ulid>.<extension>
 ```
 
-Persisted references are relative to the workspace. Run directories can be
-uploaded as a unit by a cloud worker.
+Each spill creates a new file without overwriting an existing attachment. The
+tool call id is sanitized for readability; the ULID provides run-local
+uniqueness without making the filename depend on the content.
 
-## Identity And Metadata
+The persisted `ArtifactRef` contains only:
 
-Artifact ids are immutable within a run. Metadata includes:
+- `path`: workspace-relative when the workspace contains the attachment
+- `media_type`: the media type recorded when the attachment was created
 
-- format version
-- artifact id
-- run id and tool call id
-- relative content path
-- media type
-- byte length
-- SHA-256 digest
+There is no metadata sidecar, content digest, artifact id, embedded run id or
+call id, or recorded file length in the reference.
 
-Changing the content while retaining the same id and hash metadata is invalid.
-Each artifact ref names the run that owns its bytes. History lookup verifies
-that ownership, directory containment, byte length, artifact id, and SHA-256
-before reading the file.
+## Mutable Attachment Semantics
+
+An `ArtifactRef` names a current run-local attachment, not an immutable content
+identity. Ordinary workspace operations may update the file after the tool
+result is committed. A later `read` or history search observes the file's
+current bytes and current filesystem length.
+
+The originating message remains a historical record. Its preview, media type,
+and total/head/tail/omitted byte counts describe the output at generation time
+and are not rewritten when the attachment changes. Consumers that need the
+original bytes must preserve them separately; the artifact contract does not
+provide content-addressed history.
+
+Before history search follows a reference, the local reader:
+
+1. canonicalizes the current run's artifact directory and referenced path;
+2. requires the referenced path to remain inside that directory; and
+3. requires the current target to be a regular file.
+
+These are path and file-type boundaries, not content-integrity checks. A
+reference into another run, a symlink that escapes the current run directory,
+or a directory masquerading as an artifact is rejected.
 
 ## Model-Facing Envelope
 
-Small UTF-8 foreground results remain inline. When a result exceeds `inline_bytes`, the
-complete bytes are written to the artifact store and the model receives a
-compact `[Tool output]` envelope with:
+Small UTF-8 foreground results remain inline. When a result exceeds
+`inline_bytes`, the complete bytes are written to the current run and the model
+receives a compact `[Tool output]` envelope with:
 
 - whether the tool result is an error
-- whether any source bytes were actually truncated from the preview
-- total, preview-head, preview-tail, and omitted byte counts
+- whether any source bytes were omitted from the preview
+- generation-time total, preview-head, preview-tail, and omitted byte counts
 - an optional preview limitation when content cannot be previewed safely
-- media type
-- SHA-256 digest
-- stable relative path
-- instructions to use `read` with its returned `line_offset` or `byte_offset`,
-  or `bash` with `rg`
+- media type and relative attachment path
+- instructions to use bounded `read`, or `bash` with `rg`
 
-An artifact may have `truncated: false` when its configured preview contains
-all source bytes; artifact-backed and truncated are separate properties.
+An artifact may have `truncated: false` when its configured preview contains all
+source bytes; artifact-backed and truncated are separate properties.
 
 The normal textual preview retains both the beginning and ending because
 compiler and command failures commonly appear at the end of command output.
-The byte counts directly describe what the model received: head bytes come from
-the start, tail bytes from the end, and `omitted` is everything not shown. This
-avoids storing separate strategy and omitted-region fields that can be derived
-from the counts.
-
 Binary and non-UTF-8 data is never decoded into a lossy inline string. Its
 envelope reports zero preview bytes and
-`preview_limitation: binary_or_non_utf8`, with metadata and a path only.
+`preview_limitation: binary_or_non_utf8`, with media type and path only.
 
-An image returned by `read` follows the same artifact contract and is also sent
-to the model as a native image attachment. The immediate tool result retains
-the artifact path and digest; after every result from that assistant tool-call
-batch has been emitted in original call order, fiasco appends one user
-message containing the images and a runtime reminder that lists their source
-call ids in attachment order. This preserves provider tool-call/result pairing
-even when several tools ran concurrently. OpenAI Chat uses `image_url` data
-URLs, OpenAI Responses uses `input_image`, and Anthropic uses base64 image
+An image returned by `read` follows the same attachment contract and is also
+sent to the model as a native image attachment. After every result from that
+assistant tool-call batch has been emitted in original call order, fiasco
+appends one user message containing the images and a runtime reminder that
+lists their source call ids in attachment order. OpenAI Chat uses `image_url`
+data URLs, OpenAI Responses uses `input_image`, and Anthropic uses base64 image
 sources. JPG, PNG, and WebP pass through; GIF first frames and BMP files are
 normalized to PNG for a consistent provider surface.
 
 Artifact-reference overhead and ordinary conversation text still count toward
-the provider context, so deployments should set provider token limits
-appropriate to the model. Successful and failed foreground results share this
+the provider context. Successful and failed foreground results share this
 per-result policy; a large error is an artifact-backed bounded result rather
 than an unbounded exception string in the next model request.
 
-### Asynchronous delivery
+### Asynchronous Delivery
 
-Promoted-tool results and reusable-agent activity results use
-the same independent result policy as foreground tools. Small UTF-8 output
-stays inline. Large, binary, and non-UTF-8 output is preserved as an artifact
-and the delivered body contains the ordinary
-bounded `[Tool output]` envelope with its path, digest, byte counts, read
-instruction, and any safe head/tail preview. The parent receives one batched
-runtime message per ready set.
+Promoted-tool results and reusable-agent activity results use the same
+independent result policy as foreground tools. Small UTF-8 output stays inline.
+Large, binary, and non-UTF-8 output is preserved as an attachment and the
+delivered body contains the ordinary bounded `[Tool output]` envelope.
 
 Payload limiting happens before fiasco adds the `<runtime_handle>` status
-wrapper. The wrapper, artifact metadata, and inspection instruction are never
-part of the preview budget. The typed message keeps the exact inline payload;
-provider projections XML-escape it, so runtime-like tags cannot escape its
-block.
-
-If an image read exceeds the foreground window and receives a runtime handle,
-its binary result remains artifact-backed. Reading that artifact again attaches
-the image on demand.
+wrapper. The wrapper, result metadata, and inspection instruction are never
+part of the preview budget. If an image read exceeds the foreground window and
+receives a runtime handle, its binary result remains artifact-backed. Reading
+that attachment again attaches its current image bytes on demand.
 
 A status-less runtime-handle notice is only a running acknowledgement and has
 no result artifact. An activity-result notice includes `status` and keeps its
-result metadata in the same runtime-handle content block. Artifact-backed results
-carry their exact path and `ArtifactRef`; small inline results have no artifact.
+`ArtifactRef` in the same runtime-handle content block.
 
-### History-query boundaries
+### History-Query Boundaries
 
-History tools use this same envelope when their returned JSON or JSONL is too
-large. For `history_search`, that artifact contains the complete result after
+History tools use the same envelope when their returned JSON or JSONL is too
+large. For `history_search`, that attachment contains the complete result after
 applying `history_search_max_matches`; it does not contain older matches omitted
 by the query cap. A `truncated: true` search result therefore means “refine the
-regex,” while an artifact preview means “use bounded `read` on the referenced
-complete bounded result.” Neither history tool uses a cursor.
+regex,” while an artifact preview means “inspect this complete bounded result.”
 
 Full-text history search reads the exact `ArtifactRef` stored with each
-foreground or asynchronous result in `messages.jsonl`. History retrieval does not
-parse the model-facing preview envelope. A foreground `ToolResult` is correlated by
-its provider `tool_call_id`. After promotion, the running acknowledgement still
-occupies that provider tool-result slot, while a later asynchronous output is
-correlated by runtime handle. The local reader follows the exact
-`ArtifactRef` paired with that message, streams the referenced candidate
-through SHA-256 verification, then performs its bounded `rg` search. Artifact
-matches return the exact path as well as the owning message ref, so a batched
-message with several handle results is not ambiguous. Reused call ids do not
-create ambiguity, and same-length content mutation is rejected.
+foreground or asynchronous result in `messages.jsonl`; it does not parse the
+model-facing preview or guess from a call id. It validates the path boundary,
+reads current filesystem metadata, and streams the current candidate through
+bounded `rg` search. Artifact matches return the exact path and owning message
+ref. Reused call ids remain unambiguous because each result carries its own
+path, while later content mutation is intentionally visible.
 
 ## Lifecycle
 
 Artifacts belong to a run, not to long-term memory. Memory extraction may cite
-or summarize selected artifacts, but raw tool output is not automatically
+or summarize selected attachments, but raw tool output is not automatically
 promoted into user or project memory.
 
 Fiasco does not delete run artifacts automatically in the launch release.

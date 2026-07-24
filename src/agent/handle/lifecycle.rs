@@ -4,6 +4,7 @@ use anyhow::Result;
 
 use crate::{
     events::{RuntimeEvent, RuntimeEventKind},
+    model::{Message, MessageContent, Role},
     storage::RunLease,
     tools::{RawToolOutput, ToolContext},
 };
@@ -173,6 +174,11 @@ impl RuntimeHandleManager {
             return;
         }
         let name = record.name.clone();
+        if status == HandleState::Failed {
+            record.mailbox.clear().await;
+        } else {
+            record.mailbox.seal().await;
+        }
         record.state = HandleState::Idle;
         record.outputs.push_back(output);
         drop(records);
@@ -291,14 +297,17 @@ impl RuntimeHandleManager {
         if !record.state.is_active() || record.generation != generation {
             return Ok((record.snapshot(handle), false));
         }
-        self.store
-            .enqueue_runtime_input_with_id(
-                handle,
-                format!("stopped-{}", ulid::Ulid::new()),
-                "The parent stopped the previous agent activity. Its incomplete trailing tool turn was discarded, but tool side effects may still have occurred. Inspect state before continuing."
-                    .to_owned(),
-            )
-            .await?;
+        record.mailbox.seal().await;
+        record
+            .mailbox
+            .queue(Message::new(
+                Role::User,
+                vec![MessageContent::RuntimeReminder {
+                    text: "The parent stopped the previous agent activity. Its incomplete trailing tool turn was discarded, but tool side effects may still have occurred. Inspect state before continuing."
+                        .to_owned(),
+                }],
+            ))
+            .await;
         record.state = HandleState::Idle;
         record.outputs.push_back(HandleOutput {
             status: HandleState::Cancelled,

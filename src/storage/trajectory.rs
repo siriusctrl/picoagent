@@ -24,7 +24,6 @@ impl RunDirStore {
                 .cloned()
                 .map(|message| ClassifiedMessage {
                     message,
-                    pending_input_id: None,
                     compaction: None,
                     created_at,
                 })
@@ -40,37 +39,6 @@ impl RunDirStore {
     ) -> Result<TrajectoryMessage> {
         let mut records = self
             .append_messages(run_id, std::slice::from_ref(message))
-            .await?;
-        Ok(records.pop().expect("singleton append returned no message"))
-    }
-
-    pub(crate) async fn append_pending_input_message(
-        &self,
-        run_id: &str,
-        message: &Message,
-        pending_input_id: String,
-    ) -> Result<TrajectoryMessage> {
-        self.append_classified_message(run_id, message, Some(pending_input_id), None)
-            .await
-    }
-
-    async fn append_classified_message(
-        &self,
-        run_id: &str,
-        message: &Message,
-        pending_input_id: Option<String>,
-        compaction: Option<CompactionMessage>,
-    ) -> Result<TrajectoryMessage> {
-        let mut records = self
-            .append_classified_messages(
-                run_id,
-                vec![ClassifiedMessage {
-                    message: message.clone(),
-                    pending_input_id,
-                    compaction,
-                    created_at: Utc::now(),
-                }],
-            )
             .await?;
         Ok(records.pop().expect("singleton append returned no message"))
     }
@@ -111,7 +79,6 @@ impl RunDirStore {
                     seq,
                     created_at: message.created_at,
                     message: message.message,
-                    pending_input_id: message.pending_input_id,
                     compaction: message.compaction,
                 }
             })
@@ -136,13 +103,11 @@ impl RunDirStore {
                 vec![
                     ClassifiedMessage {
                         message: request.clone(),
-                        pending_input_id: None,
                         compaction: Some(CompactionMessage::Request),
                         created_at,
                     },
                     ClassifiedMessage {
                         message: state_message.clone(),
-                        pending_input_id: None,
                         compaction: Some(CompactionMessage::State { state }),
                         created_at,
                     },
@@ -223,7 +188,6 @@ impl RunDirStore {
 
 struct ClassifiedMessage {
     message: Message,
-    pending_input_id: Option<String>,
     compaction: Option<CompactionMessage>,
     created_at: DateTime<Utc>,
 }

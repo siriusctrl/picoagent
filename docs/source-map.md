@@ -13,7 +13,6 @@
 - `src/agent/handle/coordination.rs`: wait-any, active snapshots, and output delivery.
 - `src/agent/handle/execution.rs`: promoted-tool and child-activity execution.
 - `src/agent/handle/lifecycle.rs`: activity completion, cancellation, and events.
-- `src/storage/input.rs`: durable pending user input used by non-interrupting child steering.
 - `src/agent/context.rs`: deterministic prompt framing and dynamic reminder assembly.
 - `src/prompts.rs`: typed access to the embedded agent prompt registry.
 - `prompts/agents.yaml`: folded agent instructions for every fixed profile.
@@ -35,14 +34,14 @@
   `src/tools/history/mod.rs` registers the complete family.
 - `src/tools/graph/{init,list}/`: run-local YAML planning-graph initialization
   and validation; `src/tools/graph/model.rs` owns the file contract.
-- `src/tools/handle/{close,inspect,list,send,status,stop,wait}/`: runtime-handle controls;
+- `src/tools/handle/{close,inspect,list,send,stop,wait}/`: runtime-handle controls;
   `src/tools/handle/mod.rs` registers the complete family and owns their shared
   result projection.
 - Every leaf manifest contains its complete provider-visible name, purpose,
   return guidance, and input schema; directory paths never derive names.
 - `src/trajectory.rs` and `src/trajectory/`: provider-neutral history reader
   contracts plus local message/artifact search.
-- `src/artifact.rs`: versioned artifact envelope and spill.
+- `src/artifact.rs`: run-local attachment references, envelopes, and spill.
 - `src/artifact/preview.rs`: bounded UTF-8-safe file and byte previews.
 - `src/artifact/model-instruction.md`: compact model guidance for inspecting a
   spilled result.
@@ -53,9 +52,9 @@
 - `src/storage/message_log/decoder.rs`: synchronous line validation plus the
   forward async reader; it preserves exact raw lines and byte offsets while
   hiding only a torn final record.
-- `src/storage/message_log/transcript.rs`: tail-first, bidirectional fmtview
-  timeline over complete message lines, incremental follow refresh, reset
-  detection, and exact NDJSON streaming.
+- `src/storage/message_log/transcript.rs`: thin run-routing and terminal-state
+  adapter over fmtview-core's growing-file timeline, plus exact complete-line
+  NDJSON streaming.
 - `src/storage/trajectory.rs`: classified append-only messages and
   compacted-history loading.
 - `src/skills/mod.rs`: Agent Skills metadata discovery and body/path loading;
@@ -67,4 +66,5 @@
 - `src/events.rs`: runtime event contract and sinks.
 - `src/cli.rs`: CLI command schema.
 - `src/main.rs`: command composition root; inspect dispatch occurs before
-  provider/runtime initialization and embeds only the public fmtview facade.
+  provider/runtime initialization and embeds fmtview over its generic file
+  timeline.

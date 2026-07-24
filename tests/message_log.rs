@@ -8,18 +8,11 @@ use fiasco::{
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-fn result_metadata(call_id: &str) -> ResultMetadata {
+fn result_metadata(_call_id: &str) -> ResultMetadata {
     ResultMetadata {
         artifact: Some(ArtifactRef {
-            version: 1,
-            artifact_id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                .to_owned(),
-            run_id: "run-1".to_owned(),
-            call_id: call_id.to_owned(),
             path: ".fiasco/runs/run-1/artifacts/result.txt".to_owned(),
             media_type: "text/plain; charset=utf-8".to_owned(),
-            bytes: 100,
-            sha256: "a".repeat(64),
         }),
     }
 }
@@ -126,8 +119,11 @@ async fn messages_are_self_contained_model_readable_records() {
     assert_eq!(lines[2]["content"][0]["type"], "tool_result");
     assert_eq!(lines[2]["content"][0]["is_error"], true);
     assert_eq!(
-        lines[2]["content"][0]["metadata"]["artifact"]["call_id"],
-        "call_1"
+        lines[2]["content"][0]["metadata"]["artifact"],
+        json!({
+            "path": ".fiasco/runs/run-1/artifacts/result.txt",
+            "media_type": "text/plain; charset=utf-8"
+        })
     );
     assert!(lines.iter().all(|line| line.get("seq").is_none()));
     assert!(lines.iter().all(|line| line.get("_fiasco").is_none()));

@@ -16,6 +16,11 @@ accepted.
 ADR 0034 removes recovery-time reconstruction of a missing start notice. A
 start notice and its assistant turn now belong to one complete checkpoint.
 
+ADR 0046 later replaces artifact sidecars and immutable integrity fields with
+mutable run-local attachments referenced only by path and media type. Sidecar
+and integrity wording below is historical; the notice and result-presentation
+decisions remain as refined by ADR 0030.
+
 ## Context
 
 Delegated children and automatically promoted tools shared durable task state,

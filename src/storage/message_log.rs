@@ -43,14 +43,12 @@ struct StoredMessage {
 #[serde(deny_unknown_fields)]
 struct LocalState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pending_input_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     compaction: Option<CompactionMessage>,
 }
 
 impl LocalState {
     fn is_empty(&self) -> bool {
-        self.pending_input_id.is_none() && self.compaction.is_none()
+        self.compaction.is_none()
     }
 }
 
@@ -94,7 +92,6 @@ pub(super) async fn append_messages(path: &Path, records: &[TrajectoryMessage]) 
             created_at: record.created_at,
             message: record.message.clone(),
             local: LocalState {
-                pending_input_id: record.pending_input_id.clone(),
                 compaction: record.compaction.clone(),
             },
         };
@@ -259,7 +256,6 @@ fn trajectory_record(stored: StoredMessage, expected_seq: u64) -> Result<Traject
         seq,
         created_at: stored.created_at,
         message: stored.message,
-        pending_input_id: stored.local.pending_input_id,
         compaction: stored.local.compaction,
     })
 }

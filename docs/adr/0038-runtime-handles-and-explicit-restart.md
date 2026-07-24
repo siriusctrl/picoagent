@@ -14,6 +14,15 @@ ADR 0044 later replaces complete-checkpoint loading with newline-visible
 messages and minimal trailing tool-turn repair. The explicit crash notice and
 non-reconstruction policy here remain accepted.
 
+The current implementation also makes child input entirely process-local until
+it is appended to `messages.jsonl`. This removes the pending-input log and its
+message-local idempotency metadata without changing the explicit-restart policy.
+
+ADR 0047 later collapses durable run state to `open | completed | closed` and
+folds selected-handle inspection into `list_handles`. Activity failures remain
+events, and the separate `status` tool is removed without a compatibility
+alias.
+
 ## Context
 
 Delegated agents and long-running ordinary tools need the same small control
@@ -46,13 +55,13 @@ could not be resumed exactly once.
   durable thread.
 - Make `wait` wait for any selected handle to produce a result or change state.
   An empty handle list means all visible handles.
-- On root restart, load only complete checkpoints, clear pending root input,
-  and unconditionally tell the model that the prior process and all of its
+- On root restart, repair the message tail and unconditionally tell the model
+  that the prior process, its mailbox input, and all of its
   asynchronous activity stopped. Do not reconstruct, relaunch, or synthesize
   terminal results for old tool jobs or child activities.
 - Keep old open child threads discoverable but inert. The first explicit
-  `send_message` clears that child's stale pending input, adds a child crash
-  reminder, and starts a new activity from its complete transcript.
+  `send_message` adds a child crash reminder and starts a new activity from its
+  complete transcript.
 - Keep the parent run as the only public resume entrypoint.
 
 ## Consequences

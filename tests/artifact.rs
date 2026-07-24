@@ -1,5 +1,5 @@
 use fiasco::{
-    artifact::{ArtifactPolicy, ArtifactRef, ArtifactStore},
+    artifact::{ArtifactPolicy, ArtifactStore},
     tools::{RawToolOutput, ToolContext},
 };
 use tempfile::tempdir;
@@ -133,7 +133,7 @@ async fn image_results_are_artifacts_with_model_attachments() {
 }
 
 #[tokio::test]
-async fn spills_large_results_with_versioned_sidecar_and_head_tail_preview() {
+async fn spills_large_results_with_a_run_local_attachment_and_head_tail_preview() {
     let workspace = tempdir().unwrap();
     let store = ArtifactStore::new(ArtifactPolicy {
         inline_limit_bytes: 20,
@@ -155,15 +155,14 @@ async fn spills_large_results_with_versioned_sidecar_and_head_tail_preview() {
     assert!(model_content.contains("media_type: text/plain"));
     assert!(model_content.contains("preview_head=8; preview_tail=8"));
     assert!(model_content.contains("preview_limitation: none"));
+    assert!(model_content.contains("mutable run-local attachment"));
+    assert!(model_content.contains("searches observe its current contents"));
+    assert!(model_content.contains("generation-time preview"));
     assert!(model_content.contains("returned `line_offset` or `byte_offset`"));
     assert!(model_content.contains("`bash`/`rg`"));
+    assert!(!model_content.contains("sha256:"));
 
     let artifact = output.artifact.unwrap();
-    assert_eq!(artifact.version, 1);
-    assert_eq!(artifact.run_id, "run-1");
-    assert_eq!(artifact.call_id, "call/1");
-    assert_eq!(artifact.bytes, content.len() as u64);
-    assert_eq!(artifact.artifact_id, format!("sha256:{}", artifact.sha256));
     assert!(
         artifact
             .path
@@ -175,17 +174,45 @@ async fn spills_large_results_with_versioned_sidecar_and_head_tail_preview() {
         .await
         .unwrap();
     assert_eq!(stored, content);
-    let sidecar = workspace
-        .path()
-        .join(artifact.path.strip_suffix(".txt").unwrap().to_owned() + ".artifact.json");
-    let reference: ArtifactRef =
-        serde_json::from_slice(&tokio::fs::read(sidecar).await.unwrap()).unwrap();
-    assert_eq!(reference, artifact);
+    let artifact_directory = workspace.path().join(".fiasco/runs/run-1/artifacts");
+    let entries = std::fs::read_dir(artifact_directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0], workspace.path().join(&artifact.path));
 
     let preview_info = serde_json::to_value(output.preview_info.unwrap()).unwrap();
     assert!(preview_info.get("strategy").is_none());
     assert!(preview_info.get("omitted_region").is_none());
     assert!(preview_info.get("reason").is_none());
+}
+
+#[tokio::test]
+async fn artifact_reference_remains_valid_after_the_attachment_changes() {
+    let workspace = tempdir().unwrap();
+    let store = ArtifactStore::new(ArtifactPolicy {
+        inline_limit_bytes: 1,
+        preview_head_bytes: 4,
+        preview_tail_bytes: 4,
+    });
+    let output = store
+        .persist_output(&context(workspace.path()), RawToolOutput::text("original"))
+        .await
+        .unwrap();
+    let artifact = output.artifact.unwrap();
+
+    tokio::fs::write(workspace.path().join(&artifact.path), "updated attachment")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tokio::fs::read_to_string(workspace.path().join(&artifact.path))
+            .await
+            .unwrap(),
+        "updated attachment"
+    );
+    assert_eq!(artifact.media_type, "text/plain; charset=utf-8");
 }
 
 #[tokio::test]

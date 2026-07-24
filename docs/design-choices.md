@@ -14,8 +14,9 @@ when an actual external consumer or distribution requirement exists.
 
 ## One Rust Runner
 
-Main tasks and subagents use one `AgentRunner`. Child runs differ only by parent
-id, depth, task instructions, and their own persisted run directory.
+Main tasks and subagents use one `AgentRunner`. Child runs differ only by
+parent id, remaining delegation capacity, task instructions in their initial
+message, and their own persisted run directory.
 
 Rejected: a separate orchestrator agent type or child-specific model loop. That
 would duplicate tool, provider, streaming, and persistence behavior.
@@ -58,7 +59,7 @@ live event sinks carry transient deltas for interactive consumers.
 Within a run, completed messages use the short ref `m<N>`, where `N` is the
 durable one-based sequence. This gives history tools an explicit age/order
 signal without exposing a separate sequence field or asking the model to parse
-opaque ULIDs. Steering input ids remain separate recovery metadata.
+opaque ULIDs.
 
 See [ADR 0001](adr/0001-durable-messages-transient-stream-deltas.md) for the
 decision context and rejected alternatives.
@@ -76,12 +77,12 @@ inert. Resume injects one user/runtime warning about possible side effects
 instead of synthesizing tool errors or replaying the discarded turn.
 
 Restart does not reconstruct process-local handle state. Tool jobs, active child
-work, pending input, and undelivered output are discarded; the root receives an
+work, mailbox input, and undelivered output are discarded; the root receives an
 unconditional crash notice and decides what to retry. Direct child runs remain
 discoverable as durable open threads. Their first explicit `send_message`
-clears stale pending input, adds a child crash reminder, and starts a new
-activity from the remaining context. This assumes a supervisor has killed the old
-local process tree before resume. See
+adds a child crash reminder and starts a new activity from the remaining
+context. This assumes a supervisor has killed the old local process tree before
+resume. See
 [ADR 0044](adr/0044-newline-visible-messages-and-tail-repair.md) and
 [ADR 0038](adr/0038-runtime-handles-and-explicit-restart.md).
 
@@ -170,11 +171,14 @@ blindly retrying transport errors, and persisting partial assistant text. See
 ## Artifact-First Tool Output
 
 Large results are preserved in full but represented in model context by a small
-versioned envelope. This was chosen over destructive truncation and over placing
-unbounded stdout in every subsequent model request. Each result is limited
-independently; fiasco does not retain a cumulative preview budget across a
-run because compaction can free context and later small results should remain
-directly readable. See [ADR 0018](adr/0018-limit-tool-output-per-result.md).
+envelope. Its path and media type identify a mutable attachment in the current
+run; later reads observe current file contents while the message keeps its
+generation-time preview. This was chosen over destructive truncation and over
+placing unbounded stdout in every subsequent model request. Each result is
+limited independently; fiasco does not retain a cumulative preview budget
+across a run because compaction can free context and later small results should
+remain directly readable. See [ADR 0018](adr/0018-limit-tool-output-per-result.md)
+and [ADR 0046](adr/0046-run-local-mutable-artifacts.md).
 
 ## Markdown Memory
 
@@ -193,15 +197,16 @@ and making raw transcripts or artifacts equivalent to curated memory. See
 Direct calls from one assistant message start concurrently under one shared
 foreground window. Results remain in original call order; only unfinished exact
 futures receive process-local `j_<ulid>` handles. `delegate` starts a reusable
-GeneralTask whose handle is its durable child run id. `list_handles`, `status`,
-wait-any `wait`, `inspect`, mode-required `send_message`, `stop`, and `close`
-form one small control surface. `close` also cancels and joins active agent work
-before making the durable lifetime closed. Only agent identity, name,
-transcript, and open/closed lifetime survive a process restart; activity
-coordination does not. Agent loops have no arbitrary model-step cap, and
-asynchronous work has no hard execution deadline. See
+GeneralTask whose handle is its durable child run id. `list_handles` handles
+both discovery and named snapshots; wait-any `wait`, `inspect`, mode-required
+`send_message`, `stop`, and `close` complete the control surface. `close` also
+cancels and joins active agent work before making the durable lifetime closed.
+Only agent identity, name, transcript, profile, remaining delegation capacity,
+and open/closed lifetime survive a process restart; activity coordination does
+not. Agent loops have no arbitrary model-step cap, and asynchronous work has no
+hard execution deadline. See
 [ADR 0038](adr/0038-runtime-handles-and-explicit-restart.md) and
-[ADR 0041](adr/0041-close-active-agent-threads.md).
+[ADR 0047](adr/0047-collapse-run-lifetime-and-handle-discovery.md).
 
 ## File-backed Planning Topology
 
@@ -265,10 +270,11 @@ interleaving under concurrent completion. See
 
 The built-in system prompt contains only product identity and tool-agnostic
 operating rules. Workspace `AGENTS.md`, skill metadata, memory paths, and
-delegated-task instructions are snapshotted into a synthetic runtime reminder
-at the start of each run. Tool descriptions and feature workflows remain in
-sorted tool schemas rather than being duplicated in the system prompt. Core
-history schemas are present from the first normal call.
+stable GeneralTask guidance are snapshotted into a synthetic runtime reminder
+at the start of each run. The delegated task text follows in the same initial
+user message as ordinary content. Tool descriptions and feature workflows
+remain in sorted tool schemas rather than being duplicated in the system
+prompt. Core history schemas are present from the first normal call.
 Root and GeneralTask use the same built-in schema set and freeze it for the run;
 compaction reuses the same system and schemas. Remaining delegation depth is
 persisted runtime state and never changes schema membership. Optional startup

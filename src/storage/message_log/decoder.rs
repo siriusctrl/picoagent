@@ -40,10 +40,6 @@ impl LineDecoder {
         }
     }
 
-    pub(crate) fn next_seq(&self) -> u64 {
-        self.next_seq
-    }
-
     pub(crate) fn visible_end(&self) -> u64 {
         self.next_line_offset
     }

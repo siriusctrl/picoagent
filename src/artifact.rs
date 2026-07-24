@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use ulid::Ulid;
 
 use crate::{
     model::ImageAttachment,
@@ -37,20 +37,13 @@ impl Default for ArtifactPolicy {
     }
 }
 
-/// A stable reference to the complete result of one tool call.
+/// A run-local attachment that may be updated after the originating result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactRef {
-    pub version: u32,
-    /// Immutable content identity. Equal bytes produce the same artifact id.
-    pub artifact_id: String,
-    pub run_id: String,
-    pub call_id: String,
     /// Workspace-relative when the workspace contains the artifact.
     pub path: String,
     pub media_type: String,
-    pub bytes: u64,
-    pub sha256: String,
 }
 
 /// Local execution metadata for one completed result. It is persisted in the
@@ -86,6 +79,16 @@ impl ToolOutput {
         }
     }
 
+    pub(crate) fn artifact_bytes(&self) -> Option<u64> {
+        self.artifact.as_ref()?;
+        let info = self.preview_info.as_ref()?;
+        Some(
+            info.shown_head_bytes
+                .saturating_add(info.shown_tail_bytes)
+                .saturating_add(info.omitted_bytes),
+        )
+    }
+
     /// Text sent back to the model. The complete artifact stays out of context.
     pub fn model_content(&self) -> String {
         let Some(artifact) = &self.artifact else {
@@ -104,18 +107,21 @@ impl ToolOutput {
             .limitation
             .map(PreviewLimitation::as_str)
             .unwrap_or("none");
+        let total_bytes = info
+            .shown_head_bytes
+            .saturating_add(info.shown_tail_bytes)
+            .saturating_add(info.omitted_bytes);
         format!(
-            "[Tool output]\nis_error: {}\ntruncated: {}\nbytes: total={}; preview_head={}; preview_tail={}; omitted={}\npreview_limitation: {}\nartifact: {}\nmedia_type: {}\nsha256: {}\ninstruction: {}{}",
+            "[Tool output]\nis_error: {}\ntruncated: {}\nbytes: total={}; preview_head={}; preview_tail={}; omitted={}\npreview_limitation: {}\nartifact: {}\nmedia_type: {}\ninstruction: {}{}",
             self.is_error,
             self.truncated,
-            artifact.bytes,
+            total_bytes,
             info.shown_head_bytes,
             info.shown_tail_bytes,
             info.omitted_bytes,
             limitation,
             artifact.path,
             artifact.media_type,
-            artifact.sha256,
             MODEL_INSPECTION_INSTRUCTION.trim(),
             preview,
         )
@@ -174,46 +180,24 @@ impl ArtifactStore {
             });
         }
 
-        let extension = extension_for_media_type(&output.media_type);
-        let sha256 = format!("{:x}", Sha256::digest(&output.content));
-        let content_suffix = &sha256[..12];
-        let stable_name = format!("{}-{content_suffix}", safe_component(&context.call_id));
-        let file_name = format!("{stable_name}.{extension}");
-        let directory = context
-            .workspace
-            .join(".fiasco")
-            .join("runs")
-            .join(safe_component(&context.run_id))
-            .join("artifacts");
+        let directory = artifact_directory(context);
         tokio::fs::create_dir_all(&directory)
             .await
             .with_context(|| format!("create artifact directory {}", directory.display()))?;
 
-        let absolute_path = directory.join(file_name);
-        tokio::fs::write(&absolute_path, &output.content)
+        let absolute_path = directory.join(artifact_file_name(context, &output.media_type));
+        let mut file = tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&absolute_path)
+            .await
+            .with_context(|| format!("create artifact {}", absolute_path.display()))?;
+        file.write_all(&output.content)
             .await
             .with_context(|| format!("write artifact {}", absolute_path.display()))?;
+        file.flush().await?;
 
-        let relative_path = absolute_path
-            .strip_prefix(&context.workspace)
-            .unwrap_or(&absolute_path)
-            .to_string_lossy()
-            .into_owned();
-        let artifact = ArtifactRef {
-            version: 1,
-            artifact_id: format!("sha256:{sha256}"),
-            run_id: context.run_id.clone(),
-            call_id: context.call_id.clone(),
-            path: relative_path,
-            media_type: output.media_type,
-            bytes: output.content.len() as u64,
-            sha256,
-        };
-        let sidecar_path = directory.join(format!("{stable_name}.artifact.json"));
-        let sidecar = serde_json::to_vec_pretty(&artifact).context("serialize artifact sidecar")?;
-        tokio::fs::write(&sidecar_path, sidecar)
-            .await
-            .with_context(|| format!("write artifact sidecar {}", sidecar_path.display()))?;
+        let artifact = artifact_ref(context, &output.media_type, &absolute_path);
 
         let (preview, preview_info) = if textual {
             textual_preview(
@@ -242,28 +226,27 @@ impl ArtifactStore {
         source_path: PathBuf,
         bytes: u64,
     ) -> Result<ToolOutput> {
-        let sha256 = hash_file(&source_path).await?;
-        let stable_name = format!("{}-{}", safe_component(&context.call_id), &sha256[..12]);
         let directory = artifact_directory(context);
         tokio::fs::create_dir_all(&directory).await?;
-        let absolute_path = directory.join(format!(
-            "{stable_name}.{}",
-            extension_for_media_type(&output.media_type)
-        ));
-        if tokio::fs::try_exists(&absolute_path).await? {
-            tokio::fs::remove_file(&source_path).await?;
-        } else {
-            match tokio::fs::rename(&source_path, &absolute_path).await {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
-                    tokio::fs::copy(&source_path, &absolute_path).await?;
-                    tokio::fs::remove_file(&source_path).await?;
-                }
-                Err(error) => return Err(error.into()),
+        let absolute_path = directory.join(artifact_file_name(context, &output.media_type));
+        match tokio::fs::hard_link(&source_path, &absolute_path).await {
+            Ok(()) => {
+                tokio::fs::remove_file(&source_path).await?;
             }
+            Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+                let mut destination = tokio::fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&absolute_path)
+                    .await?;
+                let mut source = tokio::fs::File::open(&source_path).await?;
+                tokio::io::copy(&mut source, &mut destination).await?;
+                destination.flush().await?;
+                tokio::fs::remove_file(&source_path).await?;
+            }
+            Err(error) => return Err(error.into()),
         }
-        let artifact = artifact_ref(context, &output.media_type, bytes, sha256, &absolute_path);
-        write_sidecar(&directory, &stable_name, &artifact).await?;
+        let artifact = artifact_ref(context, &output.media_type, &absolute_path);
         let (preview, preview_info) = if is_textual(&output.media_type) {
             file_preview(
                 &absolute_path,
@@ -346,47 +329,26 @@ fn artifact_directory(context: &ToolContext) -> PathBuf {
         .join("artifacts")
 }
 
+fn artifact_file_name(context: &ToolContext, media_type: &str) -> String {
+    format!(
+        "{}-{}.{}",
+        safe_component(&context.call_id),
+        Ulid::new(),
+        extension_for_media_type(media_type)
+    )
+}
+
 fn artifact_ref(
     context: &ToolContext,
     media_type: &str,
-    bytes: u64,
-    sha256: String,
-    absolute_path: &Path,
+    absolute_path: &std::path::Path,
 ) -> ArtifactRef {
     ArtifactRef {
-        version: 1,
-        artifact_id: format!("sha256:{sha256}"),
-        run_id: context.run_id.clone(),
-        call_id: context.call_id.clone(),
         path: absolute_path
             .strip_prefix(&context.workspace)
             .unwrap_or(absolute_path)
             .to_string_lossy()
             .into_owned(),
         media_type: media_type.to_owned(),
-        bytes,
-        sha256,
     }
-}
-
-async fn write_sidecar(directory: &Path, stable_name: &str, artifact: &ArtifactRef) -> Result<()> {
-    let sidecar_path = directory.join(format!("{stable_name}.artifact.json"));
-    let sidecar = serde_json::to_vec_pretty(artifact).context("serialize artifact sidecar")?;
-    tokio::fs::write(&sidecar_path, sidecar)
-        .await
-        .with_context(|| format!("write artifact sidecar {}", sidecar_path.display()))
-}
-
-async fn hash_file(path: &Path) -> Result<String> {
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut digest = Sha256::new();
-    let mut buffer = vec![0_u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer).await?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-    }
-    Ok(format!("{:x}", digest.finalize()))
 }

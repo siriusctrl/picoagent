@@ -123,3 +123,9 @@ Use these sections:
   payloads](0043-compact-message-and-checkpoint-payloads.md)
 - [ADR 0044: Expose complete lines and repair only the resume
   tail](0044-newline-visible-messages-and-tail-repair.md)
+- [ADR 0045: Delegate transcript paging to
+  fmtview-core](0045-delegate-transcript-paging-to-fmtview-core.md)
+- [ADR 0046: Treat artifacts as run-local mutable
+  attachments](0046-run-local-mutable-artifacts.md)
+- [ADR 0047: Collapse durable run lifetime and handle
+  discovery](0047-collapse-run-lifetime-and-handle-discovery.md)

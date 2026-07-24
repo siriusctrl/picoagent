@@ -3,14 +3,15 @@
 `agents.yaml` is the typed registry for stable agent-level prose. Every prompt
 is a folded `>-` scalar, so YAML removes source-only line wrapping and strips
 the final newline before Rust sees the value. `src/prompts.rs` parses the
-embedded file once, rejects unknown or empty fields, and exposes the three named
+embedded file once, rejects unknown or empty fields, and exposes the named
 prompts directly.
 
 Runtime assembly, precedence, dynamic values, argument validation, and
 execution contracts remain in Rust. Project `AGENTS.md`, model modalities,
 runtime role, remaining delegation depth, skill metadata, memory paths, and
-delegated instructions are dynamic inputs and are not copied into this
-registry. The stable system prompt defines only tool-agnostic behavior:
+the delegated task text are dynamic inputs. Stable GeneralTask guidance lives
+in this registry and Rust inserts it into the child's initial runtime reminder.
+The stable system prompt defines only tool-agnostic behavior:
 user-intent boundaries, evidence, schema authority, concurrent-call semantics,
 instruction precedence, process permissions, and final reporting. Tool names
 and feature workflows do not belong in that prefix, so removing a tool schema
@@ -63,4 +64,5 @@ prompt as the final user message.
 Normal context after a successful checkpoint adds `compaction_resume` inside a
 synthetic user runtime reminder immediately after the exact assistant state.
 Every local manifest is static. Startup integrations may add complete external
-or optional specs, but agent depth never changes built-in membership.
+or optional specs, but remaining delegation depth never changes built-in
+membership.

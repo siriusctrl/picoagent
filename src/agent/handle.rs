@@ -12,6 +12,7 @@ use tokio::sync::{Mutex, Semaphore, watch};
 use crate::{
     artifact::{ArtifactStore, ResultMetadata},
     events::SharedEventSink,
+    model::Message,
     storage::{RunDirStore, RunState},
 };
 
@@ -21,10 +22,12 @@ mod control;
 mod coordination;
 mod execution;
 mod lifecycle;
+mod mailbox;
 #[cfg(test)]
 mod tests;
 
 pub use control::SendMode;
+pub(crate) use mailbox::AgentMailbox;
 
 pub struct RuntimeHandleManager {
     runner: Arc<AgentRunner>,
@@ -32,11 +35,10 @@ pub struct RuntimeHandleManager {
     store: RunDirStore,
     workspace: PathBuf,
     parent_run_id: String,
-    parent_depth: usize,
     remaining_delegation_depth: usize,
     events: SharedEventSink,
     records: Mutex<BTreeMap<String, HandleRecord>>,
-    close_lock: Mutex<()>,
+    destructive_control_lock: Mutex<()>,
     executions: StdMutex<BTreeMap<String, TrackedExecution>>,
     activity: watch::Sender<u64>,
     subagent_slots: Arc<Semaphore>,
@@ -49,7 +51,6 @@ pub struct RuntimeHandleManagerConfig {
     pub store: RunDirStore,
     pub workspace: PathBuf,
     pub parent_run_id: String,
-    pub parent_depth: usize,
     pub remaining_delegation_depth: usize,
     pub events: SharedEventSink,
     pub max_parallel_subagents: usize,
@@ -137,7 +138,8 @@ struct HandleRecord {
     state: HandleState,
     generation: u64,
     outputs: VecDeque<HandleOutput>,
-    followups: Vec<PendingAgentInput>,
+    mailbox: AgentMailbox,
+    followups: Vec<Message>,
 }
 
 impl HandleRecord {
@@ -148,6 +150,7 @@ impl HandleRecord {
             state: HandleState::Idle,
             generation: 0,
             outputs: VecDeque::new(),
+            mailbox: AgentMailbox::default(),
             followups: Vec::new(),
         }
     }
@@ -159,6 +162,7 @@ impl HandleRecord {
             state: HandleState::Running,
             generation: 0,
             outputs: VecDeque::new(),
+            mailbox: AgentMailbox::default(),
             followups: Vec::new(),
         }
     }
@@ -171,11 +175,6 @@ impl HandleRecord {
             status: self.state,
         }
     }
-}
-
-struct PendingAgentInput {
-    id: String,
-    message: String,
 }
 
 struct TrackedExecution {
@@ -206,11 +205,10 @@ impl RuntimeHandleManager {
             store: config.store,
             workspace: config.workspace,
             parent_run_id: config.parent_run_id,
-            parent_depth: config.parent_depth,
             remaining_delegation_depth: config.remaining_delegation_depth,
             events: config.events,
             records: Mutex::new(BTreeMap::new()),
-            close_lock: Mutex::new(()),
+            destructive_control_lock: Mutex::new(()),
             executions: StdMutex::new(BTreeMap::new()),
             activity,
             subagent_slots: Arc::new(Semaphore::new(config.max_parallel_subagents.max(1))),
@@ -266,10 +264,7 @@ impl RuntimeHandleManager {
             "agent handle `{handle}` does not belong to this run"
         );
         anyhow::ensure!(
-            matches!(
-                child.profile.as_str(),
-                "general_task_delegating" | "general_task_leaf"
-            ),
+            child.profile == "general_task",
             "runtime handle `{handle}` is not an agent"
         );
         Ok(child)

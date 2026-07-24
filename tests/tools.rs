@@ -5,8 +5,6 @@ use fiasco::{
     tools::{BashTool, ReadTool, Tool, ToolContext, WebSearchTool, WriteTool, build_app_tools},
 };
 use serde_json::json;
-#[cfg(target_os = "linux")]
-use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -208,13 +206,10 @@ async fn large_graph_listing_uses_the_normal_artifact_contract() {
         .unwrap();
     let listing: serde_json::Value = serde_json::from_str(&stored).unwrap();
     assert_eq!(listing["wip"].as_array().unwrap().len(), 400);
-    let sidecar = workspace
-        .path()
-        .join(artifact_path.with_extension("artifact.json"));
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&tokio::fs::read(sidecar).await.unwrap()).unwrap();
-    assert_eq!(metadata["path"], artifact.path);
-    assert_eq!(metadata["sha256"], artifact.sha256);
+    let entries = std::fs::read_dir(workspace.path().join(".fiasco/runs/run-1/artifacts"))
+        .unwrap()
+        .count();
+    assert_eq!(entries, 1);
 }
 
 #[tokio::test]
@@ -672,7 +667,6 @@ async fn bash_large_combined_output_uses_the_artifact_contract() {
     assert!(output.preview.ends_with('x'));
     assert!(output.preview.contains("bytes omitted"));
     let artifact = output.artifact.unwrap();
-    assert!(artifact.bytes >= 40_000);
     let stored = tokio::fs::read(workspace.path().join(artifact.path))
         .await
         .unwrap();
@@ -682,7 +676,7 @@ async fn bash_large_combined_output_uses_the_artifact_contract() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn bash_artifact_is_immutable_after_an_escaped_descendant_writes() {
+async fn escaped_bash_descendant_does_not_keep_writing_the_attachment() {
     let workspace = tempdir().unwrap();
     let context = context(workspace.path(), "bash-escaped-writer");
     let raw = BashTool
@@ -704,16 +698,10 @@ async fn bash_artifact_is_immutable_after_an_escaped_descendant_writes() {
     let path = workspace.path().join(&artifact.path);
     let initial = tokio::fs::read(&path).await.unwrap();
     assert!(initial.ends_with(b"Command exited with code 7"));
-    assert_eq!(initial.len() as u64, artifact.bytes);
-    assert_eq!(format!("{:x}", Sha256::digest(&initial)), artifact.sha256);
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     let after_descendant = tokio::fs::read(path).await.unwrap();
     assert_eq!(after_descendant, initial);
-    assert_eq!(
-        format!("{:x}", Sha256::digest(&after_descendant)),
-        artifact.sha256
-    );
 }
 
 #[cfg(unix)]

@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use chrono::DateTime;
 use regex::Regex;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tempfile::tempdir;
+use ulid::Ulid;
 
 use crate::{
     artifact::{ArtifactRef, ResultMetadata},
@@ -57,7 +57,6 @@ fn record(seq: u64, role: Role, content: Vec<MessageContent>) -> TrajectoryMessa
         seq,
         created_at: DateTime::from_timestamp(seq as i64, 0).unwrap(),
         message: Message::new(role, content),
-        pending_input_id: None,
         compaction: None,
     }
 }
@@ -99,31 +98,17 @@ async fn write_artifact(
     call_id: &str,
     content: &str,
 ) -> ArtifactRef {
-    let sha256 = format!("{:x}", Sha256::digest(content.as_bytes()));
-    let stable_name = format!("{call_id}-{}", &sha256[..12]);
+    let stable_name = format!("{call_id}-{}", Ulid::new());
     let artifact_directory = workspace.join(format!(".fiasco/runs/{run_id}/artifacts"));
     tokio::fs::create_dir_all(&artifact_directory)
         .await
         .unwrap();
     let artifact_path = artifact_directory.join(format!("{stable_name}.txt"));
     tokio::fs::write(&artifact_path, content).await.unwrap();
-    let artifact = ArtifactRef {
-        version: 1,
-        artifact_id: format!("sha256:{sha256}"),
-        run_id: run_id.to_owned(),
-        call_id: call_id.to_owned(),
+    ArtifactRef {
         path: format!(".fiasco/runs/{run_id}/artifacts/{stable_name}.txt"),
         media_type: "text/plain; charset=utf-8".to_owned(),
-        bytes: content.len() as u64,
-        sha256,
-    };
-    tokio::fs::write(
-        artifact_directory.join(format!("{stable_name}.artifact.json")),
-        serde_json::to_vec(&artifact).unwrap(),
-    )
-    .await
-    .unwrap();
-    artifact
+    }
 }
 
 fn artifact_metadata(artifact: &ArtifactRef) -> ResultMetadata {
@@ -778,7 +763,7 @@ async fn plain_result_does_not_claim_a_reused_call_ids_only_artifact() {
 }
 
 #[tokio::test]
-async fn same_length_artifact_tampering_fails_integrity_check() {
+async fn history_search_reads_the_current_mutated_artifact_content() {
     let workspace = tempdir().unwrap();
     let artifact = write_artifact(workspace.path(), "run", "call-1", "trusted-content").await;
     assert_eq!("trusted-content".len(), "changed-content".len());
@@ -797,14 +782,84 @@ async fn same_length_artifact_tampering_fails_integrity_check() {
     )]);
     let reader = reader_with_artifacts(source, workspace.path());
 
-    let error = reader
+    let result = reader
         .search(HistorySearchRequest {
             run_id: "run".to_owned(),
             pattern: Regex::new("changed-content").unwrap(),
             max_matches: 10,
         })
         .await
+        .unwrap();
+
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].message_ref, "m1");
+    assert_eq!(result.matches[0].match_source, HistoryMatchSource::Artifact);
+    assert!(result.matches[0].snippet.contains("changed-content"));
+}
+
+#[tokio::test]
+async fn history_search_rejects_an_artifact_outside_the_current_run() {
+    let workspace = tempdir().unwrap();
+    let current_artifact =
+        write_artifact(workspace.path(), "run", "current-call", "current content").await;
+    let other_artifact =
+        write_artifact(workspace.path(), "other", "other-call", "escaped needle").await;
+    let source = StaticSource(vec![record(
+        1,
+        Role::Tool,
+        vec![MessageContent::ToolResult {
+            call_id: "other-call".to_owned(),
+            content: "bounded preview".to_owned(),
+            is_error: false,
+            metadata: artifact_metadata(&other_artifact),
+        }],
+    )]);
+    let reader = reader_with_artifacts(source, workspace.path());
+
+    let error = reader
+        .search(HistorySearchRequest {
+            run_id: "run".to_owned(),
+            pattern: Regex::new("escaped needle").unwrap(),
+            max_matches: 10,
+        })
+        .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("artifact content hash changed"));
+    assert!(error.to_string().contains("escapes current run directory"));
+    assert!(workspace.path().join(current_artifact.path).is_file());
+}
+
+#[tokio::test]
+async fn history_search_rejects_a_non_file_artifact() {
+    let workspace = tempdir().unwrap();
+    let artifact_directory = workspace.path().join(".fiasco/runs/run/artifacts");
+    tokio::fs::create_dir_all(artifact_directory.join("not-a-file"))
+        .await
+        .unwrap();
+    let artifact = ArtifactRef {
+        path: ".fiasco/runs/run/artifacts/not-a-file".to_owned(),
+        media_type: "text/plain".to_owned(),
+    };
+    let source = StaticSource(vec![record(
+        1,
+        Role::Tool,
+        vec![MessageContent::ToolResult {
+            call_id: "call-1".to_owned(),
+            content: "bounded preview".to_owned(),
+            is_error: false,
+            metadata: artifact_metadata(&artifact),
+        }],
+    )]);
+    let reader = reader_with_artifacts(source, workspace.path());
+
+    let error = reader
+        .search(HistorySearchRequest {
+            run_id: "run".to_owned(),
+            pattern: Regex::new("needle").unwrap(),
+            max_matches: 10,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("artifact is not a regular file"));
 }

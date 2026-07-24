@@ -2,13 +2,15 @@
 
 ## Run
 
-A run is one task executed by `AgentRunner`. Root runs use queued, running,
-completed, or failed. Reusable child runs additionally use idle between
-activities and closed after explicit lifetime termination. `fiasco resume
-<run-id>` continues a non-completed root run after repairing its message tail.
-The implementation does not resume inside a provider stream or shell command.
-One per-run execution lease prevents two processes from advancing the same
-trajectory concurrently. Resume also requires the same non-secret provider
+A run is one task executed by `AgentRunner`. Its durable lifetime is `open`,
+`completed`, or `closed`: new roots and children are open, root success marks
+completed, and explicit child closure marks closed. Active execution belongs
+to the process-local handle state and filesystem lease; activity failures are
+events and leave the run open for an explicit retry. `fiasco resume <run-id>`
+continues an open root after repairing its message tail. The implementation
+does not resume inside a provider stream or shell command. One per-run
+execution lease prevents two processes from advancing the same trajectory
+concurrently. Resume also requires the same non-secret provider
 fingerprint: endpoint and wire protocol, plus provider-specific continuation
 settings such as reasoning effort or Anthropic version. Credentials are never
 part of that fingerprint. The run separately records its configured model
@@ -23,8 +25,7 @@ directly represent runtime reminders, text, images, tool calls and results,
 opaque provider continuation items, and background-task notices. Compatible
 Chat reasoning is the optional assistant sibling `reasoning_content`. Tool
 errors and `ArtifactRef` values remain attached to their result blocks.
-Optional pending-input idempotency and compaction state use `_fiasco` on the
-same line.
+Optional compaction state uses `_fiasco` on the same line.
 
 This self-contained representation is not a provider wire format. OpenAI Chat,
 OpenAI Responses, and Anthropic adapters project it independently. Keeping the
@@ -130,9 +131,10 @@ loading the file, creating an artifact, or attaching content.
 
 `delegate` starts a reusable general-task agent asynchronously. Its runtime
 handle is the child run id. Children share the workspace, provider, and base
-tools. The persisted delegating/leaf profile and exact remaining delegation
-depth protect resume semantics; both profiles expose the same built-in schemas.
-The default maximum depth of one gives the initial child zero remaining depth.
+tools. The persisted `root` or `general_task` profile selects the model role.
+Exact remaining delegation depth is the sole durable delegation authority, and
+both profiles expose the same built-in schemas. The default maximum depth of
+one gives the initial child zero remaining depth.
 
 `delegate` accepts a non-empty display name and a self-contained prompt. Every child is
 isolated: it starts with its own runtime reminder and delegated task, without
@@ -148,16 +150,17 @@ queues a normal user message after the current complete assistant/tool batch;
 tool batch, and an idle agent starts immediately in either mode. Activity
 completion leaves the agent `idle`. `stop` interrupts only current activity;
 `close` rejects new input, cancels and joins active work when necessary, clears
-queued input, and then permanently closes the agent. `list_handles`, `status`,
-and wait-any `wait` expose both delegated agents and current-process tool jobs.
+queued input, and then permanently closes the agent. `list_handles` discovers
+all visible handles or inspects named handles; wait-any `wait` observes both
+delegated agents and current-process tool jobs.
 
-There is no durable parent-side handle record. On root restart, active child
-work, tool jobs, queued followups, pending input, and undelivered output from
-the prior process are discarded. The root receives an unconditional crash
-reminder. `list_handles` discovers direct child runs by parent id without
-launching them. The first explicit `send_message` to an old open child clears
-stale pending input, adds a child crash reminder, and starts a new activity from
-the child's complete transcript. A closed child stays closed.
+There is no durable parent-side handle record or pending-input log. On root
+restart, active child work, tool jobs, queued followups, mailbox input, and
+undelivered output from the prior process are discarded. The root receives an
+unconditional crash reminder. `list_handles` discovers direct child runs by
+parent id without launching them. The first explicit `send_message` to an old
+open child adds a child crash reminder and starts a new activity from the
+child's complete transcript. A closed child stays closed.
 
 A status-less `<runtime_handle>` tool result means only that work is running.
 At a later model boundary, ready activity outputs are grouped in one
@@ -237,9 +240,10 @@ reminder paths, not a schema. A compaction call reuses the same stable prefix.
 
 The first user message begins with a `<runtime-reminder>` text block containing
 the workspace snapshot: path, `AGENTS.md`, sorted skill metadata, memory paths,
-and optional delegated instructions. The original user request follows after a
-blank line in the same ordinary Chat `content` string. YAML folds source-only
-wrapping in built-in agent prompts; dynamic reminder inputs remain exact.
+and stable GeneralTask guidance for a child. The original user request follows
+after a blank line in the same ordinary Chat `content` string. YAML folds
+source-only wrapping in built-in agent prompts; dynamic reminder inputs remain
+exact.
 
 Tool output, background results, and later complete messages append at the
 durable conversation tail. Files or configuration changed during a run are
@@ -249,6 +253,7 @@ only in the projected provider context; the stored compaction instruction is
 not replayed in normal requests. A synthetic runtime reminder immediately after
 the state only identifies it as continuation context rather than a final answer
 or another compaction request. The history tool manifests own their retrieval
-guidance. Large results remain behind stable artifact references.
+guidance. Large results remain behind run-local attachment references; later
+inspection observes the current file contents.
 These choices reduce context growth and improve the opportunity for provider-side
 prefix-cache reuse without coupling the loop to one cache API.

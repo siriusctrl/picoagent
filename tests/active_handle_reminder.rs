@@ -100,7 +100,7 @@ impl ModelProvider for CompactedTaskProvider {
                 *self.child_handle.lock().unwrap() = Some(handle.clone());
                 Ok(tool_response(
                     "status-review",
-                    "status",
+                    "list_handles",
                     json!({"handles": [handle]}),
                     1_000,
                 ))
